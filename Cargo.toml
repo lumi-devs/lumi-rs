@@ -1,0 +1,126 @@
+[package]
+name = "lumi"
+description = "Lumi — scalable Discord bot: sharded gateway, worker tier, RPC/dashboard API"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+repository = "https://github.com/lumi-devs/lumi"
+publish = false
+
+[dependencies]
+# --- Discord ---------------------------------------------------------------
+# serenity must come from the `next` branch: only there do Components V2
+# builders (CreateComponent/CreateContainer/MessageFlags::IS_COMPONENTS_V2)
+# exist. poise's `serenity-next` branch depends on the same git source, so
+# cargo unifies both to one serenity.
+serenity = { git = "https://github.com/serenity-rs/serenity", branch = "next", default-features = false, features = [
+    "builder",
+    "cache",
+    "chrono",
+    "collector",
+    "framework",
+    "gateway",
+    "http",
+    "model",
+    "rustls_backend",
+    "utils",
+] }
+poise = { git = "https://github.com/serenity-rs/poise", branch = "serenity-next" }
+
+# --- async -----------------------------------------------------------------
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync", "fs", "net"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# --- storage ---------------------------------------------------------------
+# SeaORM 2.0. Entities are the schema source of truth; the baseline migration
+# syncs tables from the entity registry. No hand-written SQL.
+sea-orm = { version = "2.0", default-features = false, features = [
+    "macros",
+    "with-chrono",
+    "with-json",
+    "with-uuid",
+    "runtime-tokio-rustls",
+    "sqlx-postgres",
+    "schema-sync",
+    "entity-registry",
+] }
+sea-orm-migration = { version = "2.0", default-features = false, features = [
+    "runtime-tokio-rustls",
+    "sqlx-postgres",
+    "with-chrono",
+    "with-json",
+    "with-uuid",
+] }
+redis = { version = "0.28", features = ["tokio-comp", "connection-manager", "streams"] }
+moka = { version = "0.12", features = ["future"] }
+
+# --- web / rpc -------------------------------------------------------------
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+tower = "0.5"
+tower-http = { version = "0.6", default-features = false, features = ["trace"] }
+# axum-only: skip tonic/h2 pulled by the default features.
+tower_governor = { version = "0.8", default-features = false, features = ["axum"] }
+governor = "0.10"
+
+# --- background jobs -------------------------------------------------------
+apalis = "1"
+apalis-redis = "1"
+
+# --- scripting (addons) ----------------------------------------------------
+rhai = { version = "1", features = ["sync", "serde"] }
+
+# --- serde / errors / utils ------------------------------------------------
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+dotenvy = "0.15"
+anyhow = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6"
+once_cell = "1"
+
+# --- observability ---------------------------------------------------------
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+unused = { level = "deny", priority = -1 }
+dead_code = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "warn"
+# style-only allows kept to keep the signal clean
+use_self = "allow"
+return_self_not_must_use = "allow"
+multiple_crate_versions = "allow"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+too_many_lines = "allow"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
