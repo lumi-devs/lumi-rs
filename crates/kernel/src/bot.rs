@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use lumi_kernel::Services;
+use crate::Services;
 
 /// Client data: shared services, reachable from any command via `ctx.data()`.
 pub type Data = Arc<Services>;
