@@ -14,7 +14,9 @@ pub async fn build(cfg: lumi::Config) -> Result<serenity::Client> {
 
     let cache = Arc::new(lumi::cache::Cache::connect(&cfg.redis_url).await?);
     let permits = Arc::new(lumi::permits::PermitResolver::load(&db).await?);
-    let registry = lumi::module::ModuleRegistry::new();
+    let mut registry = lumi::module::ModuleRegistry::new();
+    registry.register(Box::new(lumi::modules::afk::AfkModule));
+    registry.register(Box::new(lumi::modules::logging::LoggingModule));
 
     let services = Arc::new(lumi::Services {
         cfg,

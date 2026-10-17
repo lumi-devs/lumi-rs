@@ -32,6 +32,113 @@ impl serenity::EventHandler for Events {
                     tracing::warn!(%error, "afk message handler failed");
                 }
             }
+            serenity::FullEvent::MessageDelete {
+                channel_id,
+                deleted_message_id,
+                guild_id,
+                ..
+            } => {
+                let services = ctx.data::<crate::client::Data>();
+                if let Err(error) = lumi::modules::logging::events::on_message_delete(
+                    ctx,
+                    &services,
+                    *channel_id,
+                    *deleted_message_id,
+                    *guild_id,
+                )
+                .await
+                {
+                    tracing::warn!(%error, "logging message delete failed");
+                }
+            }
+            serenity::FullEvent::MessageUpdate {
+                old_if_available,
+                event,
+                ..
+            } => {
+                let services = ctx.data::<crate::client::Data>();
+                if let Err(error) = lumi::modules::logging::events::on_message_update(
+                    ctx,
+                    &services,
+                    old_if_available.clone(),
+                    event.clone(),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "logging message update failed");
+                }
+            }
+            serenity::FullEvent::GuildMemberAddition { new_member, .. } => {
+                let services = ctx.data::<crate::client::Data>();
+                if let Err(error) =
+                    lumi::modules::logging::events::on_member_add(ctx, &services, new_member).await
+                {
+                    tracing::warn!(%error, "logging member add failed");
+                }
+            }
+            serenity::FullEvent::GuildMemberRemoval {
+                guild_id, user, ..
+            } => {
+                let services = ctx.data::<crate::client::Data>();
+                if let Err(error) = lumi::modules::logging::events::on_member_remove(
+                    ctx, &services, *guild_id, user,
+                )
+                .await
+                {
+                    tracing::warn!(%error, "logging member remove failed");
+                }
+            }
+            serenity::FullEvent::GuildMemberUpdate {
+                old_if_available,
+                event,
+                ..
+            } => {
+                let services = ctx.data::<crate::client::Data>();
+                if let Err(error) = lumi::modules::logging::events::on_member_update(
+                    ctx,
+                    &services,
+                    old_if_available.clone(),
+                    event.clone(),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "logging member update failed");
+                }
+            }
+            serenity::FullEvent::GuildBanAddition {
+                guild_id,
+                banned_user,
+                ..
+            } => {
+                let services = ctx.data::<crate::client::Data>();
+                if let Err(error) = lumi::modules::logging::events::on_ban_add(
+                    ctx,
+                    &services,
+                    *guild_id,
+                    banned_user,
+                )
+                .await
+                {
+                    tracing::warn!(%error, "logging ban add failed");
+                }
+            }
+            serenity::FullEvent::GuildBanRemoval {
+                guild_id,
+                unbanned_user,
+                ..
+            } => {
+                let services = ctx.data::<crate::client::Data>();
+                if let Err(error) = lumi::modules::logging::events::on_ban_remove(
+                    ctx,
+                    &services,
+                    *guild_id,
+                    unbanned_user,
+                )
+                .await
+                {
+                    tracing::warn!(%error, "logging ban remove failed");
+                }
+            }
             _ => {}
         }
     }
