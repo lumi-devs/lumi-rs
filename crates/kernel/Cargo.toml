@@ -8,6 +8,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+lumi-db     = { workspace = true }
 tokio       = { workspace = true }
 futures     = { workspace = true }
 async-trait = { workspace = true }
@@ -21,3 +22,11 @@ once_cell   = { workspace = true }
 arc-swap    = { workspace = true }
 governor    = { workspace = true }
 moka        = { workspace = true }
+redis       = { workspace = true }
+sea-orm     = { workspace = true }
+apalis      = { workspace = true }
+apalis-redis = { workspace = true }
+poise       = { workspace = true }
+figment     = { workspace = true }
+humantime   = { workspace = true }
+croner      = { workspace = true }

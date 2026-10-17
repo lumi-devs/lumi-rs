@@ -26,3 +26,6 @@ tracing-subscriber = { workspace = true }
 anyhow       = { workspace = true }
 dotenvy      = { workspace = true }
 clap         = { version = "4", features = ["derive"] }
+sysinfo      = { workspace = true }
+mimalloc     = { workspace = true }
+console-subscriber = { workspace = true, optional = true }
