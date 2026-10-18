@@ -14,6 +14,8 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
     let mut registry = lumi_kernel::ModuleRegistry::new();
     registry.register(Box::new(lumi_modules::afk::AfkModule));
     registry.register(Box::new(lumi_modules::logging::LoggingModule));
+    registry.register(Box::new(lumi_modules::moderation::ModerationModule));
+    registry.register(Box::new(lumi_modules::utility::UtilityModule));
 
     let services: Data = Arc::new(lumi_kernel::Services {
         cfg,
