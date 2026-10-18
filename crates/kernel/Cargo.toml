@@ -31,3 +31,4 @@ serenity    = { workspace = true }
 figment     = { workspace = true }
 humantime   = { workspace = true }
 croner      = { workspace = true }
+chrono      = { workspace = true }
