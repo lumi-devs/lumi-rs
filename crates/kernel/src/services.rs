@@ -4,6 +4,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::cache::Cache;
 use crate::config::Config;
+use crate::filter::ContentFilter;
 use crate::module::ModuleRegistry;
 use crate::permits::PermitResolver;
 
@@ -15,4 +16,5 @@ pub struct Services {
     pub cache: Arc<Cache>,
     pub permits: Arc<PermitResolver>,
     pub registry: ModuleRegistry,
+    pub filter: Arc<ContentFilter>,
 }

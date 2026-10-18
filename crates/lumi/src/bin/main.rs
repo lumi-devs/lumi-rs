@@ -39,12 +39,14 @@ async fn main() -> Result<()> {
             let cache = std::sync::Arc::new(lumi_kernel::Cache::connect(&cfg.redis_url).await?);
             let permits = std::sync::Arc::new(lumi_kernel::PermitResolver::load(&db).await?);
             let registry = lumi_kernel::ModuleRegistry::new();
+            let filter = std::sync::Arc::new(lumi_kernel::ContentFilter::default());
             let services = std::sync::Arc::new(lumi_kernel::Services {
                 cfg: cfg.clone(),
                 db,
                 cache,
                 permits,
                 registry,
+                filter,
             });
             lumi_api::serve(addr, cfg.rpc_token, services).await?;
         }

@@ -17,12 +17,15 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
     registry.register(Box::new(lumi_modules::moderation::ModerationModule));
     registry.register(Box::new(lumi_modules::utility::UtilityModule));
 
+    let filter = Arc::new(lumi_kernel::ContentFilter::default());
+
     let services: Data = Arc::new(lumi_kernel::Services {
         cfg,
         db,
         cache: Arc::clone(&cache),
         permits,
         registry,
+        filter,
     });
 
     tokio::spawn(async move { cache.spawn_invalidation().await });
