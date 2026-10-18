@@ -22,5 +22,6 @@ pub fn all() -> Vec<Command> {
     commands.extend(lumi_modules::tempvc::commands::commands());
     commands.extend(lumi_modules::utility::commands::commands());
     commands.extend(lumi_modules::economy::commands::commands());
+    commands.extend(lumi_modules::leveling::commands::commands());
     commands
 }
