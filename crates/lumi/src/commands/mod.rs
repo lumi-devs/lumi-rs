@@ -11,6 +11,7 @@ pub fn all() -> Vec<Command> {
     commands.extend(security::commands());
     commands.extend(lumi_modules::afk::commands());
     commands.extend(lumi_modules::moderation::commands::commands());
+    commands.extend(lumi_modules::tempvc::commands::commands());
     commands.extend(lumi_modules::utility::commands::commands());
     commands
 }

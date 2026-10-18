@@ -1,0 +1,31 @@
+//! Dynamic Temporary Voice Channels module.
+
+pub mod commands;
+pub mod store;
+pub mod views;
+
+pub use commands::commands;
+
+use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
+
+#[derive(Debug)]
+pub struct TempVcModule;
+
+impl Module for TempVcModule {
+    fn name(&self) -> &'static str {
+        "tempvc"
+    }
+
+    fn metadata(&self) -> ModuleMeta {
+        ModuleMeta {
+            display_name: "Temporary Voice Channels".to_string(),
+            emoji: "🔊".to_string(),
+            description: "Automatically create and manage dynamic temporary voice channels.".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        }
+    }
+
+    fn config_schema(&self) -> Vec<ConfigField> {
+        vec![]
+    }
+}

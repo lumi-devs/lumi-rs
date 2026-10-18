@@ -15,6 +15,7 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
     registry.register(Box::new(lumi_modules::afk::AfkModule));
     registry.register(Box::new(lumi_modules::logging::LoggingModule));
     registry.register(Box::new(lumi_modules::moderation::ModerationModule));
+    registry.register(Box::new(lumi_modules::tempvc::TempVcModule));
     registry.register(Box::new(lumi_modules::utility::UtilityModule));
 
     let security = Arc::new(lumi_kernel::SecurityManager::new(db.clone()));
