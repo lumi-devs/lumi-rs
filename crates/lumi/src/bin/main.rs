@@ -41,6 +41,10 @@ async fn main() -> Result<()> {
             let registry = lumi_kernel::ModuleRegistry::new();
             let security = std::sync::Arc::new(lumi_kernel::SecurityManager::new(db.clone()));
             let filter = std::sync::Arc::new(lumi_kernel::ContentFilter::default());
+            let downloader = std::sync::Arc::new(lumi_kernel::Downloader::new(
+                db.clone(),
+                std::path::PathBuf::from(&cfg.custom_dir),
+            ));
             let services = std::sync::Arc::new(lumi_kernel::Services {
                 cfg: cfg.clone(),
                 db,
@@ -49,6 +53,7 @@ async fn main() -> Result<()> {
                 registry,
                 security,
                 filter,
+                downloader,
             });
             lumi_api::serve(addr, cfg.rpc_token, services).await?;
         }

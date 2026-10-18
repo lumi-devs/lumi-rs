@@ -4,6 +4,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::cache::Cache;
 use crate::config::Config;
+use crate::downloader::Downloader;
 use crate::filter::ContentFilter;
 use crate::module::ModuleRegistry;
 use crate::permits::PermitResolver;
@@ -19,4 +20,5 @@ pub struct Services {
     pub registry: ModuleRegistry,
     pub security: Arc<SecurityManager>,
     pub filter: Arc<ContentFilter>,
+    pub downloader: Arc<Downloader>,
 }

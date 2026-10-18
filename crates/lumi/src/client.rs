@@ -22,6 +22,10 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
 
     let security = Arc::new(lumi_kernel::SecurityManager::new(db.clone()));
     let filter = Arc::new(lumi_kernel::ContentFilter::default());
+    let downloader = Arc::new(lumi_kernel::Downloader::new(
+        db.clone(),
+        std::path::PathBuf::from(&cfg.custom_dir),
+    ));
 
     let services: Data = Arc::new(lumi_kernel::Services {
         cfg,
@@ -31,6 +35,7 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
         registry,
         security,
         filter,
+        downloader,
     });
 
     tokio::spawn(async move { cache.spawn_invalidation().await });
