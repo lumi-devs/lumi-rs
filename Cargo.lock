@@ -2287,6 +2287,7 @@ dependencies = [
 name = "lumi-kernel"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "apalis",
  "apalis-redis",
@@ -2304,6 +2305,7 @@ dependencies = [
  "once_cell",
  "poise",
  "redis 0.28.2",
+ "regex",
  "sea-orm",
  "serde",
  "serde_json",

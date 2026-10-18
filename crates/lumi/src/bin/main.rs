@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
             let permits = std::sync::Arc::new(lumi_kernel::PermitResolver::load(&db).await?);
             let registry = lumi_kernel::ModuleRegistry::new();
             let security = std::sync::Arc::new(lumi_kernel::SecurityManager::new(db.clone()));
+            let filter = std::sync::Arc::new(lumi_kernel::ContentFilter::default());
             let services = std::sync::Arc::new(lumi_kernel::Services {
                 cfg: cfg.clone(),
                 db,
@@ -47,6 +48,7 @@ async fn main() -> Result<()> {
                 permits,
                 registry,
                 security,
+                filter,
             });
             lumi_api::serve(addr, cfg.rpc_token, services).await?;
         }
