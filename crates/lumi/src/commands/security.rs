@@ -8,16 +8,16 @@ use lumi_ui::{Card, CardKind};
 #[poise::command(
     slash_command,
     guild_only,
-    subcommands("start", "revert", "status"),
+    subcommands("on", "off", "status"),
     default_member_permissions = "ADMINISTRATOR"
 )]
 pub async fn panic(ctx: Context<'_>) -> Result<(), Error> {
-    start(ctx).await
+    status(ctx).await
 }
 
-/// Activate panic mode: pause invites and lock down text channels.
-#[poise::command(slash_command, rename = "start", guild_only, default_member_permissions = "ADMINISTRATOR")]
-pub async fn start(ctx: Context<'_>) -> Result<(), Error> {
+/// Activate panic mode: pause server invites and lock down text channels.
+#[poise::command(slash_command, rename = "on", guild_only, default_member_permissions = "ADMINISTRATOR")]
+pub async fn on(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
     let actor_id = ctx.author().id;
@@ -44,82 +44,74 @@ pub async fn start(ctx: Context<'_>) -> Result<(), Error> {
 
     for (channel_id, channel) in channels {
         if channel.is_text_based() && !channel.is_thread() {
-            let everyone_role = guild_id.everyone_role();
             let overwrite = PermissionOverwrite {
                 allow: Permissions::empty(),
-                deny: Permissions::SEND_MESSAGES,
-                kind: PermissionOverwriteType::Role(everyone_role),
+                deny: Permissions::SEND_MESSAGES | Permissions::ADD_REACTIONS,
+                kind: PermissionOverwriteType::Role(guild_id.everyone_role()),
             };
-            if channel.create_permission(ctx.http(), overwrite).await.is_ok() {
+            if channel_id.create_permission(ctx.http(), overwrite).await.is_ok() {
                 locked.push(channel_id.to_string());
             }
         }
     }
 
-    let status = sec
-        .activate_panic(&guild_id.to_string(), &actor_id.to_string(), true, locked.clone())
+    sec.activate_panic(&guild_id.to_string(), &actor_id.to_string(), true, locked.clone())
         .await?;
 
     let lines = vec![
-        "**Status**: 🚨 Active".to_string(),
-        format!("**Triggered by**: <@{actor_id}>"),
-        format!("**Invites Paused**: {}", if status.invites_paused { "Yes" } else { "No" }),
-        format!("**Channels Locked**: {}", locked.len()),
+        format!("Triggered by <@{}>.", actor_id),
+        format!("**Locked Channels**: `{}`", locked.len()),
+        "Server invites are paused. Only administrators may send messages.".to_string(),
+        "Use `/panic off` when the threat has been resolved.".to_string(),
     ];
-
     let card = Card::lines("🚨 Panic Lockdown Activated", lines).kind(CardKind::Error);
+
     ctx.send(card.into_reply().reply()).await?;
     Ok(())
 }
 
-/// Revert panic mode: restore channel permissions and unpause invites.
-#[poise::command(slash_command, rename = "revert", guild_only, default_member_permissions = "ADMINISTRATOR")]
-pub async fn revert(ctx: Context<'_>) -> Result<(), Error> {
+/// Deactivate panic mode: restore channel permissions and resume normal activity.
+#[poise::command(slash_command, rename = "off", guild_only, default_member_permissions = "ADMINISTRATOR")]
+pub async fn off(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
     let sec = &ctx.data().security;
 
     let prior_status = sec.deactivate_panic(&guild_id.to_string()).await?;
+
     let Some(prior) = prior_status else {
         let card = Card::new(
             "Panic Mode Inactive",
             "Panic mode is not currently active on this server.",
         )
-        .kind(CardKind::Info);
+        .kind(CardKind::Warning);
         ctx.send(card.into_reply().reply()).await?;
         return Ok(());
     };
 
-    let mut restored_count = 0;
-    for ch_id_str in prior.locked_channels {
-        if let Ok(ch_id) = ch_id_str.parse::<u64>() {
-            let channel_id = ChannelId::new(ch_id);
-            let everyone_role = guild_id.everyone_role();
-            if channel_id
-                .delete_permission(ctx.http(), PermissionOverwriteType::Role(everyone_role))
+    let mut restored = 0;
+    for ch_str in &prior.locked_channels {
+        if let Ok(ch_num) = ch_str.parse::<u64>() {
+            let ch_id = ChannelId::new(ch_num);
+            if ch_id
+                .delete_permission(ctx.http(), PermissionOverwriteType::Role(guild_id.everyone_role()))
                 .await
                 .is_ok()
             {
-                restored_count += 1;
+                restored += 1;
             }
         }
     }
 
     let lines = vec![
-        "**Status**: ✅ Restored".to_string(),
-        format!("**Channels Restored**: {restored_count}"),
-        "**Invites**: Resumed".to_string(),
+        "Normal server operations have been restored.".to_string(),
+        format!("**Restored Channels**: `{restored}`"),
+        "Members can now send messages and chat freely.".to_string(),
     ];
+    let card = Card::lines("🟢 Panic Mode Deactivated", lines).kind(CardKind::Success);
 
-    let card = Card::lines("Panic Mode Reverted", lines).kind(CardKind::Success);
     ctx.send(card.into_reply().reply()).await?;
     Ok(())
-}
-
-/// Revert panic mode via alias.
-#[poise::command(slash_command, guild_only, default_member_permissions = "ADMINISTRATOR")]
-pub async fn unpanic(ctx: Context<'_>) -> Result<(), Error> {
-    revert(ctx).await
 }
 
 /// Check current panic lockdown status.
@@ -130,6 +122,7 @@ pub async fn status(ctx: Context<'_>) -> Result<(), Error> {
     let sec = &ctx.data().security;
 
     let current = sec.get_panic_status(&guild_id.to_string()).await?;
+
     let card = if let Some(st) = current {
         let started_str = st
             .started_at
@@ -148,6 +141,7 @@ pub async fn status(ctx: Context<'_>) -> Result<(), Error> {
         let lines = vec![
             "**Status**: 🟢 Normal".to_string(),
             "**Lockdown**: Inactive".to_string(),
+            "All channels and features operating normally.".to_string(),
         ];
         Card::lines("Panic Status", lines).kind(CardKind::Success)
     };
@@ -157,5 +151,5 @@ pub async fn status(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 pub fn commands() -> Vec<Command> {
-    vec![panic(), unpanic()]
+    vec![panic()]
 }
