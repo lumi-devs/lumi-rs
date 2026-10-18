@@ -141,3 +141,24 @@ impl AddonHost {
         results
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_load_and_run_ping_addon() {
+        let addon_dir = Path::new("../../addons");
+        if !addon_dir.exists() {
+            return;
+        }
+
+        let host = AddonHost::load(addon_dir).expect("failed to load addons");
+        assert!(host.count() > 0, "should have loaded at least one addon");
+
+        let responses: Vec<String> = host.call_function("handle_hello", "Alice".to_string());
+        assert!(!responses.is_empty(), "expected reply from handle_hello");
+        assert!(responses[0].contains("Hello, Alice!"), "unexpected reply: {}", responses[0]);
+    }
+}
