@@ -6,6 +6,7 @@ pub mod module;
 pub mod permits;
 pub mod ratelimit;
 pub mod scheduler;
+pub mod security;
 pub mod services;
 pub use services::Services;
 
@@ -17,3 +18,7 @@ pub use module::{ConfigField, ConfigFieldKind, Module, ModuleMeta, ModuleRegistr
 pub use permits::{PermitKind, PermitPolarity, PermitResolver, PermitTargetType};
 pub use ratelimit::RateLimiter;
 pub use scheduler::{Job, Scheduler};
+pub use security::{
+    ActionThresholdViolation, AntiNukeConfig, AntiNukeResponse, DestructiveActionKind, PanicStatus,
+    SecurityManager,
+};

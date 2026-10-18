@@ -2292,6 +2292,7 @@ dependencies = [
  "apalis-redis",
  "arc-swap",
  "async-trait",
+ "chrono",
  "croner",
  "dashmap",
  "figment",
