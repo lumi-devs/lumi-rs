@@ -26,7 +26,7 @@ impl serenity::EventHandler for Events {
             }
             serenity::FullEvent::Message { new_message, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
-                if !new_message.author.bot {
+                if !new_message.author.bot() {
                     let guild_id = new_message.guild_id.map_or(0, serenity::GuildId::get);
                     let author_id = new_message.author.id.get();
                     let verdict = services.filter.check_content(
@@ -43,7 +43,7 @@ impl serenity::EventHandler for Events {
                             message_id = %new_message.id,
                             "content filter violation detected, deleting message"
                         );
-                        if let Err(error) = new_message.delete(&ctx.http).await {
+                        if let Err(error) = new_message.channel_id.delete_message(&ctx.http, new_message.id, Some("content filter violation")).await {
                             tracing::warn!(%error, "failed to delete filtered message");
                         }
                         return;
@@ -81,32 +81,28 @@ impl serenity::EventHandler for Events {
                 ..
             } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
-                if !event.author.as_ref().is_some_and(|a| a.bot) {
-                    if let Some(content) = &event.content {
-                        let guild_id = event.guild_id.map_or(0, serenity::GuildId::get);
-                        let author_id = event
-                            .author
-                            .as_ref()
-                            .map_or(0, |a| a.id.get());
-                        let verdict = services.filter.check_content(
-                            guild_id,
-                            content,
-                            author_id,
-                        );
+                if !event.message.author.bot() {
+                    let content = event.message.content.as_str();
+                    let guild_id = event.message.guild_id.map_or(0, serenity::GuildId::get);
+                    let author_id = event.message.author.id.get();
+                    let verdict = services.filter.check_content(
+                        guild_id,
+                        content,
+                        author_id,
+                    );
 
-                        if !verdict.is_clean() {
-                            tracing::warn!(
-                                ?verdict,
-                                guild_id,
-                                author_id,
-                                message_id = %event.id,
-                                "content filter violation detected in updated message, deleting message"
-                            );
-                            if let Err(error) = ctx.http.delete_message(event.channel_id, event.id, Some("content filter violation")).await {
-                                tracing::warn!(%error, "failed to delete filtered updated message");
-                            }
-                            return;
+                    if !verdict.is_clean() {
+                        tracing::warn!(
+                            ?verdict,
+                            guild_id,
+                            author_id,
+                            message_id = %event.message.id,
+                            "content filter violation detected in updated message, deleting message"
+                        );
+                        if let Err(error) = event.message.channel_id.delete_message(&ctx.http, event.message.id, Some("content filter violation")).await {
+                            tracing::warn!(%error, "failed to delete filtered updated message");
                         }
+                        return;
                     }
                 }
 

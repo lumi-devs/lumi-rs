@@ -1,9 +1,5 @@
 use poise::serenity_prelude as serenity;
-use serenity::all::{
-    ButtonStyle, ChannelId, CreateActionRow, CreateButton, CreateComponent,
-    CreateInteractionResponse, CreateInteractionResponseMessage, MessageFlags,
-    PermissionOverwrite, PermissionOverwriteType, Permissions,
-};
+use serenity::all::{ButtonStyle, CreateActionRow, CreateButton, GenericChannelId};
 
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind, CardOptions};
@@ -15,20 +11,18 @@ use super::views::{error_card, generator_deleted_card, generator_setup_card};
 #[poise::command(
     slash_command,
     guild_only,
-    subcommands("panel", "admin")
+    subcommands("panel_cmd", "admin_cmd")
 )]
 pub async fn tempvc(ctx: Context<'_>) -> Result<(), Error> {
-    panel(ctx).await
+    panel_action(ctx).await
 }
 
-/// Open your interactive TempVC channel control deck (ephemeral buttons).
-#[poise::command(slash_command, guild_only)]
-pub async fn panel(ctx: Context<'_>) -> Result<(), Error> {
+async fn panel_action(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
     let user_id = ctx.author().id.get();
 
-    let record_opt = store::get_user_active_vc(&ctx.data().db, guild_id, user_id).await?;
+    let record_opt = store::get_active_channel(&ctx.data().db, guild_id, user_id).await?;
     let Some(record) = record_opt else {
         let card = error_card("You do not own an active temporary voice channel. Join a generator channel first.");
         ctx.send(card.reply()).await?;
@@ -42,7 +36,6 @@ pub async fn panel(ctx: Context<'_>) -> Result<(), Error> {
         "Use the interactive buttons below to manage access, lock, or modify your channel:".to_string(),
     ];
 
-    // Build interactive action rows matching TS TempVC panel
     let row1 = CreateActionRow::Buttons(vec![
         CreateButton::new(format!("tempvc:lock:{ch_id}"))
             .label("Lock Channel")
@@ -56,7 +49,7 @@ pub async fn panel(ctx: Context<'_>) -> Result<(), Error> {
             .label("Hide")
             .style(ButtonStyle::Secondary)
             .emoji('👁'),
-    ]);
+    ].into());
 
     let row2 = CreateActionRow::Buttons(vec![
         CreateButton::new(format!("tempvc:claim:{ch_id}"))
@@ -67,7 +60,7 @@ pub async fn panel(ctx: Context<'_>) -> Result<(), Error> {
             .label("Delete VC")
             .style(ButtonStyle::Danger)
             .emoji('🗑'),
-    ]);
+    ].into());
 
     let mut opts = CardOptions::default();
     opts.action_rows = vec![row1, row2];
@@ -80,14 +73,21 @@ pub async fn panel(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Open your interactive TempVC channel control deck (ephemeral buttons).
+#[poise::command(slash_command, rename = "panel", guild_only)]
+pub async fn panel_cmd(ctx: Context<'_>) -> Result<(), Error> {
+    panel_action(ctx).await
+}
+
 /// Administrative configuration for Temporary Voice Channel generators (Staff only).
 #[poise::command(
     slash_command,
+    rename = "admin",
     guild_only,
     default_member_permissions = "MANAGE_CHANNELS",
     subcommands("admin_setup", "admin_delete", "admin_list")
 )]
-pub async fn admin(ctx: Context<'_>) -> Result<(), Error> {
+pub async fn admin_cmd(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let card = Card::new(
         "🛠️ TempVC Admin Tools",
@@ -102,7 +102,7 @@ pub async fn admin(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(slash_command, rename = "setup")]
 pub async fn admin_setup(
     ctx: Context<'_>,
-    #[description = "The voice channel to act as generator"] channel: ChannelId,
+    #[description = "The voice channel to act as generator"] channel: GenericChannelId,
     #[description = "Template name for generated channels (e.g. {user}'s Lounge)"] name: Option<String>,
     #[description = "Default user limit for generated channels (0 for unlimited)"] limit: Option<i32>,
 ) -> Result<(), Error> {
@@ -129,7 +129,7 @@ pub async fn admin_setup(
 #[poise::command(slash_command, rename = "delete")]
 pub async fn admin_delete(
     ctx: Context<'_>,
-    #[description = "The generator voice channel to remove"] channel: ChannelId,
+    #[description = "The generator voice channel to remove"] channel: GenericChannelId,
 ) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();

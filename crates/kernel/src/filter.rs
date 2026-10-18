@@ -40,17 +40,17 @@ impl ContentFilter {
             .ascii_case_insensitive(true)
             .match_kind(MatchKind::LeftmostFirst)
             .build(banned_words)
-            .map_err(|e| crate::error::LumiError::Other(e.into()))?;
+            .map_err(|e| crate::error::LumiError::Other(e.to_string()))?;
 
         let invite_re = Regex::new(
             r"(?i)(?:discord\.(?:gg|com/invite)|discordapp\.com/invite)/([a-zA-Z0-9-]+)",
         )
-        .map_err(|e| crate::error::LumiError::Other(e.into()))?;
+        .map_err(|e| crate::error::LumiError::Other(e.to_string()))?;
 
         let phishing_re = Regex::new(
             r"(?i)https?://(?:[a-zA-Z0-9-]+\.)*(?:steamcommunit[a-z]|discord-nitro|dlscord|discorcl|free-nitro)[a-zA-Z0-9-]*\.[a-z]{2,}(?:/[^\s]*)?",
         )
-        .map_err(|e| crate::error::LumiError::Other(e.into()))?;
+        .map_err(|e| crate::error::LumiError::Other(e.to_string()))?;
 
         Ok(Self {
             banned_words: ac,

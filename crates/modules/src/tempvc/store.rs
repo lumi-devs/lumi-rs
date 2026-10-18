@@ -68,8 +68,8 @@ pub async fn update_generator(
     name: Option<String>,
     limit: Option<i32>,
 ) -> Result<bool> {
-    let gen = get_generator(db, guild_id, channel_id).await?;
-    if let Some(m) = gen {
+    let generator_opt = get_generator(db, guild_id, channel_id).await?;
+    if let Some(m) = generator_opt {
         let mut active: temp_vc_generator::ActiveModel = m.into();
         if let Some(n) = name {
             active.name = Set(n);

@@ -8,11 +8,45 @@ use lumi_ui::{Card, CardKind};
 #[poise::command(
     slash_command,
     guild_only,
-    subcommands("on", "off", "status"),
+    subcommands("on", "off", "status_cmd"),
     default_member_permissions = "ADMINISTRATOR"
 )]
 pub async fn panic(ctx: Context<'_>) -> Result<(), Error> {
-    status(ctx).await
+    panic_status_action(ctx).await
+}
+
+async fn panic_status_action(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
+    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
+    let sec = &ctx.data().security;
+
+    let current = sec.get_panic_status(&guild_id.to_string()).await?;
+
+    let card = if let Some(st) = current {
+        let started_str = st
+            .started_at
+            .map(|t| format!("<t:{}:F> (<t:{}:R>)", t.timestamp(), t.timestamp()))
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let lines = vec![
+            "**Status**: 🚨 Lockdown Active".to_string(),
+            format!("**Actor**: <@{}>", st.actor_id.unwrap_or_else(|| "Unknown".to_string())),
+            format!("**Started At**: {started_str}"),
+            format!("**Invites Paused**: {}", if st.invites_paused { "Yes" } else { "No" }),
+            format!("**Locked Channels Count**: {}", st.locked_channels.len()),
+        ];
+        Card::lines("Panic Status", lines).kind(CardKind::Error)
+    } else {
+        let lines = vec![
+            "**Status**: 🟢 Normal".to_string(),
+            "**Lockdown**: Inactive".to_string(),
+            "All channels and features operating normally.".to_string(),
+        ];
+        Card::lines("Panic Status", lines).kind(CardKind::Success)
+    };
+
+    ctx.send(card.into_reply().reply()).await?;
+    Ok(())
 }
 
 /// Activate panic mode: pause server invites and lock down text channels.
@@ -42,14 +76,15 @@ pub async fn on(ctx: Context<'_>) -> Result<(), Error> {
     let channels = guild_id.channels(ctx.http()).await?;
     let mut locked = Vec::new();
 
-    for (channel_id, channel) in channels {
-        if channel.is_text_based() && !channel.is_thread() {
+    for channel in channels {
+        let channel_id = channel.id;
+        if channel.is_text_based() {
             let overwrite = PermissionOverwrite {
                 allow: Permissions::empty(),
                 deny: Permissions::SEND_MESSAGES | Permissions::ADD_REACTIONS,
                 kind: PermissionOverwriteType::Role(guild_id.everyone_role()),
             };
-            if channel_id.create_permission(ctx.http(), overwrite).await.is_ok() {
+            if channel_id.create_permission(ctx.http(), overwrite, Some("Panic mode activated")).await.is_ok() {
                 locked.push(channel_id.to_string());
             }
         }
@@ -94,7 +129,7 @@ pub async fn off(ctx: Context<'_>) -> Result<(), Error> {
         if let Ok(ch_num) = ch_str.parse::<u64>() {
             let ch_id = ChannelId::new(ch_num);
             if ch_id
-                .delete_permission(ctx.http(), PermissionOverwriteType::Role(guild_id.everyone_role()))
+                .delete_permission(ctx.http(), PermissionOverwriteType::Role(guild_id.everyone_role()), Some("Panic mode deactivated"))
                 .await
                 .is_ok()
             {
@@ -116,38 +151,8 @@ pub async fn off(ctx: Context<'_>) -> Result<(), Error> {
 
 /// Check current panic lockdown status.
 #[poise::command(slash_command, rename = "status", guild_only, default_member_permissions = "ADMINISTRATOR")]
-pub async fn status(ctx: Context<'_>) -> Result<(), Error> {
-    ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
-    let sec = &ctx.data().security;
-
-    let current = sec.get_panic_status(&guild_id.to_string()).await?;
-
-    let card = if let Some(st) = current {
-        let started_str = st
-            .started_at
-            .map(|t| format!("<t:{}:F> (<t:{}:R>)", t.timestamp(), t.timestamp()))
-            .unwrap_or_else(|| "Unknown".to_string());
-
-        let lines = vec![
-            "**Status**: 🚨 Lockdown Active".to_string(),
-            format!("**Actor**: <@{}>", st.actor_id.unwrap_or_else(|| "Unknown".to_string())),
-            format!("**Started At**: {started_str}"),
-            format!("**Invites Paused**: {}", if st.invites_paused { "Yes" } else { "No" }),
-            format!("**Locked Channels Count**: {}", st.locked_channels.len()),
-        ];
-        Card::lines("Panic Status", lines).kind(CardKind::Error)
-    } else {
-        let lines = vec![
-            "**Status**: 🟢 Normal".to_string(),
-            "**Lockdown**: Inactive".to_string(),
-            "All channels and features operating normally.".to_string(),
-        ];
-        Card::lines("Panic Status", lines).kind(CardKind::Success)
-    };
-
-    ctx.send(card.into_reply().reply()).await?;
-    Ok(())
+pub async fn status_cmd(ctx: Context<'_>) -> Result<(), Error> {
+    panic_status_action(ctx).await
 }
 
 pub fn commands() -> Vec<Command> {
