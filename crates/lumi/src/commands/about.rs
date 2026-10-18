@@ -127,21 +127,30 @@ pub async fn help(
         }
     }
 
-    let mut categories: BTreeMap<&'static str, Vec<(&str, &str)>> = BTreeMap::new();
+    let mut categories: BTreeMap<String, Vec<(&str, &str)>> = BTreeMap::new();
+    let mut claimed_commands = std::collections::HashSet::new();
 
+    // 1. Query the live ModuleRegistry dynamically: each module owns its name, emoji & commands
+    for module in ctx.data().registry.iter() {
+        let meta = module.metadata();
+        let cat_header = format!("{} __{}__", meta.emoji, meta.display_name);
+
+        for cmd in module.commands() {
+            claimed_commands.insert(cmd.name.clone());
+            if let Some(matched) = all_commands.iter().find(|c| c.name == cmd.name) {
+                let actual_desc = matched.description.as_deref().unwrap_or("No description provided");
+                categories.entry(cat_header.clone()).or_default().push((&matched.name, actual_desc));
+            }
+        }
+    }
+
+    // 2. Put core root engine commands (not owned by optional modules) into Core
+    let core_header = "✨ __Core System__".to_string();
     for cmd in all_commands {
-        let desc = cmd.description.as_deref().unwrap_or("No description provided");
-        let name_str: &str = &cmd.name;
-        let cat = match name_str {
-            "warn" | "kick" | "ban" | "unban" | "case" | "reason" | "note" => "🛡️ Moderation",
-            "panic" => "🚨 Security & Anti-Nuke",
-            "tempvc" => "🎙️ Temporary Voice",
-            "balance" | "daily" | "pay" => "🪙 Economy",
-            "avatar" | "whois" | "serverinfo" | "purge" | "afk" => "🛠️ Utility",
-            "about" | "help" | "ping" | "lumi" => "✨ Core System",
-            _ => "📦 General",
-        };
-        categories.entry(cat).or_default().push((&cmd.name, desc));
+        if !claimed_commands.contains(&cmd.name) {
+            let desc = cmd.description.as_deref().unwrap_or("No description provided");
+            categories.entry(core_header.clone()).or_default().push((&cmd.name, desc));
+        }
     }
 
     let mut body = vec![
@@ -150,7 +159,7 @@ pub async fn help(
     ];
 
     for (cat_name, cmds) in categories {
-        body.push(format!("### __{cat_name}__"));
+        body.push(format!("### {cat_name}"));
         for (name, desc) in cmds {
             body.push(format!("• `/{name}` — {desc}"));
         }

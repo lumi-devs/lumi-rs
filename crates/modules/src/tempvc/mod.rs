@@ -25,6 +25,10 @@ impl Module for TempVcModule {
         }
     }
 
+    fn commands(&self) -> Vec<lumi_kernel::bot::Command> {
+        commands::commands()
+    }
+
     fn config_schema(&self) -> Vec<ConfigField> {
         vec![]
     }

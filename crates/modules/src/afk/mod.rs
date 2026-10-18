@@ -33,6 +33,10 @@ impl Module for AfkModule {
         }
     }
 
+    fn commands(&self) -> Vec<lumi_kernel::bot::Command> {
+        commands::commands()
+    }
+
     fn config_schema(&self) -> Vec<ConfigField> {
         vec![ConfigField {
             key: "nick_prefix_enabled".to_string(),

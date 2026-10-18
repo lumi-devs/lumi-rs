@@ -44,10 +44,14 @@ pub enum ConfigFieldKind {
     Enum(Vec<String>),
 }
 
-/// A feature module. Hooks (load/unload, commands) are owned by the bin.
+/// A feature module. Commands are owned and declared directly by the module.
 pub trait Module: Send + Sync + 'static {
     fn name(&self) -> &'static str;
     fn metadata(&self) -> ModuleMeta;
+    /// The slash commands supplied by this module.
+    fn commands(&self) -> Vec<crate::bot::Command> {
+        Vec::new()
+    }
     /// Config fields exposed to the dashboard; empty by default.
     fn config_schema(&self) -> Vec<ConfigField> {
         Vec::new()
