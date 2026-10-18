@@ -42,3 +42,20 @@ Before allowing any outbound request from a `net`-capable addon, reject:
 
 Exposed to scripts via `lumi_script::api`. Keep it minimal and versioned.
 Never expose raw DB access — proxy through the capability model.
+
+### Red-DiscordBot Inspired Architecture
+Following the audit of Red-DiscordBot's Cog architecture, `lumi-script` adopts Red's high-level abstractions (declarative manifests, isolated KV, sanitized contexts) while preserving strict sandboxing:
+
+1. **Declarative Manifest (`addon.toml`)**:
+   - Addon authors declare commands, triggers, permissions, and required capabilities (`db`, `msg`, `net`).
+   - Host validates and registers Poise commands ahead-of-time; scripts supply pure hook functions (e.g. `fn on_command(ctx, args)`).
+2. **Context Projection (`RhaiContext`)**:
+   - Scripts receive only primitive IDs (`guild_id`, `channel_id`, `author_id`, `is_admin`, `is_mod`).
+   - Raw Serenity clients, tokens, and pointers are strictly hidden.
+3. **Guild-Isolated Storage**:
+   - `kv_get(key)`, `kv_set(key, val)`, `kv_delete(key)` bound to `crates/db/src/entities/addon_kv.rs`.
+   - Host injects `(guild_id, addon_name)` automatically — cross-tenant / cross-addon leaks are structurally impossible.
+4. **Network Access**:
+   - `http_get(url)` and `http_post(url, json)` execute through `reqwest` only when `net` is granted.
+   - Pre-flight DNS resolution checks destination against `is_ip_allowed()` (RFC1918, link-local, cloud metadata).
+   - Strict 5s timeout and 512 KiB payload cap.
