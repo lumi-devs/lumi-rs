@@ -1,0 +1,16 @@
+use sea_orm::entity::prelude::*;
+
+#[sea_orm::model]
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+#[sea_orm(table_name = "economy_accounts")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub guild_id: String,
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub user_id: String,
+    pub wallet: i64,
+    pub bank: i64,
+    pub last_payday_at: Option<DateTimeWithTimeZone>,
+}
+
+impl ActiveModelBehavior for ActiveModel {}

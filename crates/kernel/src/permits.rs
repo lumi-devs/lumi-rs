@@ -10,9 +10,8 @@ use std::collections::HashMap;
 
 use sea_orm::{DatabaseConnection, EntityTrait};
 
-pub use lumi_db::entities::permits::{PermitKind, PermitPolarity};
-pub use lumi_db::entities::permit_assignments::PermitTargetType;
-use lumi_db::entities::{permit_assignments, permits};
+pub use lumi_db::entities::enums::{PermitKind, PermitPolarity, PermitTargetType};
+use lumi_db::entities::{permit_assignment, permit};
 use crate::Result;
 
 /// A permit as loaded from the `permits` table.
@@ -118,8 +117,8 @@ pub struct PermitResolver {
 
 impl PermitResolver {
     pub async fn load(db: &DatabaseConnection) -> Result<Self> {
-        let permit_models = permits::Entity::find().all(db).await?;
-        let assign_models = permit_assignments::Entity::find().all(db).await?;
+        let permit_models = permit::Entity::find().all(db).await?;
+        let assign_models = permit_assignment::Entity::find().all(db).await?;
 
         let permit_rows = permit_models
             .into_iter()

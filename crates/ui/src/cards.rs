@@ -9,7 +9,7 @@ use serenity::all::{
     SeparatorSpacingSize,
 };
 
-use crate::ui::layout::{format_breadcrumbs, format_status_badge, format_subtitle};
+use crate::layout::{format_breadcrumbs, format_status_badge, format_subtitle};
 
 /// Discord's hard limit for a single text display.
 pub const TEXT_DISPLAY_LIMIT: usize = 4000;
@@ -412,7 +412,7 @@ pub fn make_empty_card(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::layout::format_status_badge;
+    use crate::layout::format_status_badge;
 
     #[test]
     fn primary_has_no_accent() {

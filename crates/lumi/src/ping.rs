@@ -3,98 +3,7 @@
 use serenity::all::{ConnectionStage, Context as SerenityContext};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
-/// Per-shard connection info.
-#[derive(Clone, Debug)]
-pub struct ShardInfo {
-    pub id: u64,
-    pub ping: f64,
-    pub status: String,
-    pub sequence: u64,
-}
-
-/// Every value the ping dashboard can render. Fields missing a real source
-/// default to zero/empty (see [`collect`]).
-#[derive(Clone, Debug, Default)]
-pub struct PingData {
-    pub round_trip: Option<f64>,
-
-    pub ws_ping: f64,
-    pub loop_lag_ms: f64,
-    pub jitter_ms: f64,
-    pub shards: Vec<ShardInfo>,
-    pub active_handles: u64,
-    pub active_requests: u64,
-    pub gateway_node: String,
-    pub identifies: u64,
-    pub resumes: u64,
-
-    pub heap_used: u64,
-    pub heap_total: u64,
-    pub rss: u64,
-    pub external: u64,
-    pub array_buffers: u64,
-    pub runtime: String,
-
-    pub kernel: String,
-    pub platform: String,
-    pub arch: String,
-    pub cpu_model: String,
-    pub cpu_cores: u64,
-    pub cpu_speed_mhz: f64,
-    pub load_avg: [f64; 3],
-    pub ram_used: u64,
-    pub ram_total: u64,
-    pub swap_used_kb: u64,
-    pub swap_total_kb: u64,
-    pub os_uptime_secs: u64,
-    pub ctx_switch_vol: u64,
-    pub ctx_switch_nonvol: u64,
-    pub disk_read_bytes: u64,
-    pub disk_write_bytes: u64,
-    pub thermal_celsius: Option<f64>,
-    pub cpu_percent: f64,
-    pub cpu_flags: String,
-    pub io_wait: u64,
-
-    pub prisma_ms: Option<f64>,
-    pub db_size: Option<String>,
-    pub db_uptime_secs: Option<u64>,
-    pub table_sizes: Vec<(String, u64)>,
-    pub db_commits: Option<u64>,
-    pub db_rollbacks: Option<u64>,
-    pub tx_rate: f64,
-
-    pub redis_read_ms: Option<f64>,
-    pub redis_write_ms: Option<f64>,
-    pub redis_version: String,
-    pub redis_uptime_secs: u64,
-    pub redis_mem_used_bytes: u64,
-    pub redis_mem_peak_bytes: u64,
-    pub redis_frag_ratio: f64,
-    pub redis_hit_ratio: f64,
-    pub redis_hits: u64,
-    pub redis_misses: u64,
-    pub redis_evicted: u64,
-    pub redis_clients: u64,
-    pub redis_total_keys: u64,
-
-    pub uptime: f64,
-    pub guilds: u64,
-    pub users: u64,
-    pub channels: u64,
-    pub modules: Vec<String>,
-    pub avatar_url: String,
-    pub bot_name: String,
-    pub bot_id: String,
-    pub session_command_count: u64,
-    pub dep_count: u64,
-    pub code_lines: u64,
-    pub commands_per_sec: f64,
-    pub messages_per_min: f64,
-
-    pub djs_version: String,
-    pub prisma_version: String,
-}
+pub use lumi_ui::ping::{PingData, ShardInfo};
 
 /// Collect a best-effort snapshot using `sysinfo` for all host telemetry.
 pub async fn collect(addon_count: usize, ctx: &SerenityContext) -> PingData {
@@ -143,8 +52,8 @@ pub async fn collect(addon_count: usize, ctx: &SerenityContext) -> PingData {
     }];
 
     data.runtime = format!("Rust v{}", env!("CARGO_PKG_VERSION"));
-    data.djs_version = "0.12".to_string();
-    data.prisma_version = "sea-orm".to_string();
+    data.discord_lib = "Serenity Next + Poise".to_string();
+    data.orm_lib = "SeaORM 2.0 (PostgreSQL)".to_string();
     data.gateway_node = "Unknown".to_string();
 
     read_host_sysinfo(&mut data).await;

@@ -5,10 +5,94 @@ use serenity::all::{
     CreateSectionComponent, SeparatorSpacingSize,
 };
 
-use crate::ping::{PingData, ShardInfo};
-use crate::ui::cards::CardReply;
-use crate::ui::container::{Container, section_with_thumbnail, text_display};
-use crate::ui::panels::{action_row_of, component_emoji};
+use crate::cards::CardReply;
+use crate::container::{Container, section_with_thumbnail, text_display};
+use crate::panels::{action_row_of, component_emoji};
+
+/// Per-shard connection info.
+#[derive(Clone, Debug, Default)]
+pub struct ShardInfo {
+    pub id: u64,
+    pub ping: f64,
+    pub status: String,
+    pub sequence: u64,
+}
+
+/// Every value the ping dashboard can render.
+#[derive(Clone, Debug, Default)]
+pub struct PingData {
+    pub round_trip: Option<f64>,
+    pub ws_ping: f64,
+    pub loop_lag_ms: f64,
+    pub jitter_ms: f64,
+    pub shards: Vec<ShardInfo>,
+    pub active_handles: u64,
+    pub active_requests: u64,
+    pub gateway_node: String,
+    pub identifies: u64,
+    pub resumes: u64,
+    pub heap_used: u64,
+    pub heap_total: u64,
+    pub rss: u64,
+    pub external: u64,
+    pub array_buffers: u64,
+    pub runtime: String,
+    pub kernel: String,
+    pub platform: String,
+    pub arch: String,
+    pub cpu_model: String,
+    pub cpu_cores: u64,
+    pub cpu_speed_mhz: f64,
+    pub load_avg: [f64; 3],
+    pub ram_used: u64,
+    pub ram_total: u64,
+    pub swap_used_kb: u64,
+    pub swap_total_kb: u64,
+    pub os_uptime_secs: u64,
+    pub ctx_switch_vol: u64,
+    pub ctx_switch_nonvol: u64,
+    pub disk_read_bytes: u64,
+    pub disk_write_bytes: u64,
+    pub thermal_celsius: Option<f64>,
+    pub cpu_percent: f64,
+    pub cpu_flags: String,
+    pub io_wait: u64,
+    pub db_latency_ms: Option<f64>,
+    pub db_size: Option<String>,
+    pub db_uptime_secs: Option<u64>,
+    pub table_sizes: Vec<(String, u64)>,
+    pub db_commits: Option<u64>,
+    pub db_rollbacks: Option<u64>,
+    pub tx_rate: f64,
+    pub redis_read_ms: Option<f64>,
+    pub redis_write_ms: Option<f64>,
+    pub redis_version: String,
+    pub redis_uptime_secs: u64,
+    pub redis_mem_used_bytes: u64,
+    pub redis_mem_peak_bytes: u64,
+    pub redis_frag_ratio: f64,
+    pub redis_hit_ratio: f64,
+    pub redis_hits: u64,
+    pub redis_misses: u64,
+    pub redis_evicted: u64,
+    pub redis_clients: u64,
+    pub redis_total_keys: u64,
+    pub uptime: f64,
+    pub guilds: u64,
+    pub users: u64,
+    pub channels: u64,
+    pub modules: Vec<String>,
+    pub avatar_url: String,
+    pub bot_name: String,
+    pub bot_id: String,
+    pub session_command_count: u64,
+    pub dep_count: u64,
+    pub code_lines: u64,
+    pub commands_per_sec: f64,
+    pub messages_per_min: f64,
+    pub discord_lib: String,
+    pub orm_lib: String,
+}
 
 /// Custom-id prefix shared by every ping button.
 pub const PING_ID_PREFIX: &str = "ping";
@@ -208,7 +292,7 @@ pub fn build_overview_card(data: &PingData) -> CardReply {
     ));
     lines.push(format!(
         "🐘 **Database**: {} | Load: {:.1} tx/s",
-        fmt_ms(data.prisma_ms),
+        fmt_ms(data.db_latency_ms),
         data.tx_rate
     ));
 
@@ -323,7 +407,7 @@ fn build_engine_card(data: &PingData) -> Container {
                 ("Engine Runtime".to_string(), data.runtime.clone()),
                 (
                     "Library Stack".to_string(),
-                    format!("D.JS v{} | native runtime", data.djs_version),
+                    format!("{} | {}", data.discord_lib, data.orm_lib),
                 ),
             ],
         ),
@@ -390,7 +474,7 @@ fn build_postgres_card(data: &PingData) -> Container {
                     "Transaction Speed".to_string(),
                     format!("{:.1} ops/sec", data.tx_rate),
                 ),
-                ("Query Response".to_string(), fmt_ms(data.prisma_ms)),
+                ("Query Response".to_string(), fmt_ms(data.db_latency_ms)),
             ],
         ),
         executive_section(

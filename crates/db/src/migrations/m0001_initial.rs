@@ -11,7 +11,7 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
             .get_connection()
-            .get_schema_registry("lumi::entities::*")
+            .get_schema_registry("lumi_db::entities::*")
             .sync(manager.get_connection())
             .await?;
         Ok(())
