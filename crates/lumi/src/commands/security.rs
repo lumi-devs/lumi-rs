@@ -7,6 +7,7 @@ use lumi_ui::{Card, CardKind};
 /// Security lockdown and panic management.
 #[poise::command(
     slash_command,
+    prefix_command,
     guild_only,
     subcommands("on", "off", "status_cmd"),
     default_member_permissions = "ADMINISTRATOR"
@@ -50,7 +51,7 @@ async fn panic_status_action(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Activate panic mode: pause server invites and lock down text channels.
-#[poise::command(slash_command, rename = "on", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(slash_command, prefix_command, rename = "on", guild_only, default_member_permissions = "ADMINISTRATOR")]
 pub async fn on(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
@@ -106,7 +107,7 @@ pub async fn on(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Deactivate panic mode: restore channel permissions and resume normal activity.
-#[poise::command(slash_command, rename = "off", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(slash_command, prefix_command, rename = "off", guild_only, default_member_permissions = "ADMINISTRATOR")]
 pub async fn off(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
@@ -150,7 +151,7 @@ pub async fn off(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Check current panic lockdown status.
-#[poise::command(slash_command, rename = "status", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(slash_command, prefix_command, rename = "status", guild_only, default_member_permissions = "ADMINISTRATOR")]
 pub async fn status_cmd(ctx: Context<'_>) -> Result<(), Error> {
     panic_status_action(ctx).await
 }

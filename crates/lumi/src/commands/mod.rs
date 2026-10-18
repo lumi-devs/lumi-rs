@@ -17,13 +17,23 @@ pub fn core_commands() -> Vec<Command> {
 }
 
 /// Every command the bot registers, dynamically aggregated from the module registry.
-pub fn all() -> Vec<Command> {
+pub fn all_from_registry(registry: &lumi_kernel::ModuleRegistry) -> Vec<Command> {
     let mut commands = core_commands();
-    commands.extend(lumi_modules::afk::commands());
-    commands.extend(lumi_modules::moderation::commands::commands());
-    commands.extend(lumi_modules::tempvc::commands::commands());
-    commands.extend(lumi_modules::utility::commands::commands());
-    commands.extend(lumi_modules::economy::commands::commands());
-    commands.extend(lumi_modules::leveling::commands::commands());
+    for module in registry.iter() {
+        commands.extend(module.commands());
+    }
     commands
+}
+
+/// Backward compatibility helper
+pub fn all() -> Vec<Command> {
+    let mut registry = lumi_kernel::ModuleRegistry::new();
+    registry.register(Box::new(lumi_modules::afk::AfkModule));
+    registry.register(Box::new(lumi_modules::logging::LoggingModule));
+    registry.register(Box::new(lumi_modules::moderation::ModerationModule));
+    registry.register(Box::new(lumi_modules::tempvc::TempVcModule));
+    registry.register(Box::new(lumi_modules::utility::UtilityModule));
+    registry.register(Box::new(lumi_modules::economy::EconomyModule));
+    registry.register(Box::new(lumi_modules::leveling::LevelingModule));
+    all_from_registry(&registry)
 }

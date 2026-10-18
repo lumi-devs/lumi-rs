@@ -1,10 +1,12 @@
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
 pub mod commands;
+pub mod events;
 pub mod store;
 pub mod views;
 
 pub use commands::commands;
+pub use events::on_message;
 
 #[derive(Debug)]
 pub struct LevelingModule;

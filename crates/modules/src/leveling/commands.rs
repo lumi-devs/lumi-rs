@@ -6,7 +6,7 @@ use lumi_kernel::bot::{Command, Context, Error};
 use super::{store, views};
 
 /// View your rank and XP progress, or check another member's.
-#[poise::command(slash_command, guild_only)]
+#[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn rank(
     ctx: Context<'_>,
     #[description = "Target user"] user: Option<UserId>,
@@ -54,7 +54,7 @@ pub async fn rank(
 }
 
 /// View the top 10 server members on the XP leaderboard.
-#[poise::command(slash_command, guild_only)]
+#[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();

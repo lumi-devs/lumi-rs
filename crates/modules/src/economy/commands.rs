@@ -7,7 +7,7 @@ use lumi_ui::{Card, CardKind};
 use super::store;
 
 /// View your wallet and bank balance, or check another member's account.
-#[poise::command(slash_command, guild_only)]
+#[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn balance(
     ctx: Context<'_>,
     #[description = "Target user"] user: Option<UserId>,
@@ -32,7 +32,7 @@ pub async fn balance(
 }
 
 /// Claim your daily coin allowance.
-#[poise::command(slash_command, guild_only)]
+#[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn daily(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
@@ -52,7 +52,7 @@ pub async fn daily(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Pay coins to another server member.
-#[poise::command(slash_command, guild_only)]
+#[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn pay(
     ctx: Context<'_>,
     #[description = "Recipient"] user: UserId,
@@ -98,6 +98,87 @@ pub async fn pay(
     Ok(())
 }
 
+/// Manage bank transactions: deposit and withdraw coins.
+#[poise::command(
+    slash_command,
+    prefix_command,
+    guild_only,
+    subcommands("deposit_cmd", "withdraw_cmd")
+)]
+pub async fn bank(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
+    let card = Card::info(
+        "🏦 Server Bank",
+        "Use `/bank deposit <amount>` or `/bank withdraw <amount>` to manage funds.",
+    );
+    ctx.send(card.into_reply().reply()).await?;
+    Ok(())
+}
+
+/// Deposit coins from your wallet into the bank.
+#[poise::command(slash_command, prefix_command, rename = "deposit", guild_only)]
+pub async fn deposit_cmd(
+    ctx: Context<'_>,
+    #[description = "Amount to deposit"] amount: i64,
+) -> Result<(), Error> {
+    ctx.defer().await?;
+    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let user_id = ctx.author().id.get();
+
+    if amount <= 0 {
+        let card = Card::new("❌ Invalid Amount", "Deposit amount must be greater than zero.").kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
+    }
+
+    match store::deposit(&ctx.data().db, guild_id, user_id, amount).await? {
+        Some((wallet, bank)) => {
+            let card = Card::new(
+                "🏦 Deposit Successful",
+                format!("Deposited **{amount}** coins into your bank.\nWallet: `{wallet}` coins · Bank: `{bank}` coins."),
+            ).kind(CardKind::Success);
+            ctx.send(card.into_reply().reply()).await?;
+        }
+        None => {
+            let card = Card::new("❌ Insufficient Funds", "You do not have enough coins in your wallet.").kind(CardKind::Error);
+            ctx.send(card.into_reply().reply()).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Withdraw coins from your bank into your wallet.
+#[poise::command(slash_command, prefix_command, rename = "withdraw", guild_only)]
+pub async fn withdraw_cmd(
+    ctx: Context<'_>,
+    #[description = "Amount to withdraw"] amount: i64,
+) -> Result<(), Error> {
+    ctx.defer().await?;
+    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let user_id = ctx.author().id.get();
+
+    if amount <= 0 {
+        let card = Card::new("❌ Invalid Amount", "Withdrawal amount must be greater than zero.").kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
+    }
+
+    match store::withdraw(&ctx.data().db, guild_id, user_id, amount).await? {
+        Some((wallet, bank)) => {
+            let card = Card::new(
+                "🏦 Withdrawal Successful",
+                format!("Withdrew **{amount}** coins from your bank.\nWallet: `{wallet}` coins · Bank: `{bank}` coins."),
+            ).kind(CardKind::Success);
+            ctx.send(card.into_reply().reply()).await?;
+        }
+        None => {
+            let card = Card::new("❌ Insufficient Funds", "You do not have enough coins in your bank.").kind(CardKind::Error);
+            ctx.send(card.into_reply().reply()).await?;
+        }
+    }
+    Ok(())
+}
+
 pub fn commands() -> Vec<Command> {
-    vec![balance(), daily(), pay()]
+    vec![balance(), daily(), pay(), bank()]
 }

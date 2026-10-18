@@ -2,23 +2,45 @@
 
 ## Completed Milestones
 
-### Workspace & Monolith Elimination
-- Refactored monolithic `src/` directory into 8 specialized workspace crates.
-- Defined explicit dependency paths to guarantee fast incremental compile loops and isolate heavy dependencies.
+### Workspace & Architecture Foundation
+- 8-crate modular workspace (`lumi-db`, `lumi-kernel`, `lumi-ui`, `lumi-script`, `lumi-modules`, `lumi-api`, `lumi`, `xtask`).
+- SeaORM 2.0 entity-first architecture covering all 41 Prisma models.
+- Fast linking via mold + clang in `flake.nix`.
+- Zero-raw-SQL rule across feature modules with atomic counter helpers in `lumi-db`.
+- Process roles in `main.rs` cleanly decoupled (`all`, `gateway`, `worker`, `scheduler`, `api`).
 
-### Database Architecture & Parity
-- Defined all 41 Prisma schema models as native SeaORM 2.0 entities inside `crates/db/src/entities/`.
-- Schema baseline migration (`m0001_initial`) connects to PostgreSQL and registers the schema directly from the entity registry.
-- Guaranteed zero raw SQL rule across modules; atomic monotonic counter (`next_counter`) encapsulated inside `lumi-db`.
+### Command Framework & Single Source of Truth
+- Dynamic command resolution via `ModuleRegistry`: commands are derived from registered modules, eliminating split definitions.
+- Poise framework configured with:
+  - Global slash command sync on gateway `ready`.
+  - Dynamic per-guild prefixes querying `guilds.prefix` entity with fallback to `global_config.default_prefix`.
+  - Mention-as-prefix support (`@bot command`).
+  - Prefix command attributes wired across all active commands.
+- Autocomplete handlers:
+  - Dynamic moderation case reasons (`kick`, `ban`, `warn`, `unban`, `mute`).
+  - Addon repository name autocomplete (`repo remove`, `download install`).
+  - Command directory autocomplete (`help [command]`).
 
-### Observability & Runtime
-- Replaced custom string parsing of Linux `/proc` files with the `sysinfo` library.
-- Refactored ping diagnostics to reflect the native Rust engine, Serenity Next, and SeaORM stack instead of legacy D.JS/Prisma strings.
-- Enabled `mimalloc` global allocator for optimal long-running server memory characteristics.
-- Local compilation verified using Nix dev-shell (`cargo check --workspace` at 0 errors, 0 warnings).
+### Core Feature Ports
+- **Moderation**: `/warn`, `/kick`, `/ban`, `/unban`, `/mute` (with duration parsing and Discord timeout), `/unmute`, `/case`, `/reason`, `/note`.
+- **TempVC**: Automatic channel creation upon joining a generator, automatic moving, and automatic channel deletion when empty via `VoiceStateUpdate`. Interactive channel control deck (`/tempvc panel`) and generator configuration (`/tempvc admin`).
+- **Leveling**: Message XP calculation and persistence via `leveling::events::on_message`, `/rank`, and `/leaderboard`.
+- **Economy**: `/balance`, `/daily`, `/pay`, `/bank deposit`, `/bank withdraw`.
+- **Utility**: `/avatar`, `/whois`, `/serverinfo`, `/purge`.
+- **Security**: Panic lockdown (`/panic on|off|status`) with permission denial restoration.
+- **AFK**: `/afk`, `/afklist`, `/afkstats`, mention notifications and welcome-back cards.
+- **API**: HTTP API server (`/healthz`, `/metrics`, `/action` with typed dispatchers).
 
-## Active Focus
-- Porting core feature modules from TS reference to `lumi-modules`:
-  1. `moderation`
-  2. `utility`
-  3. `script` (Addon engine enhancements)
+---
+
+## Active Parity Gaps Tracked (from Full TS Audit)
+
+1. **Permissions & Preconditions**:
+   - Enforce hierarchical `PermitResolver` in Poise pre-command hooks.
+2. **Missing Moderation Flows**:
+   - `/softban`, `/quarantine`, `/lock`, `/lockdown`.
+3. **Staff Management Commands**:
+   - `/level add|remove|set` (admin XP adjustments).
+   - `/bank set|add|remove` (admin currency adjustments).
+4. **Utility & Personalization**:
+   - `/banner`, `/nick`, specialized `/purge` subcommands (`user`, `bots`, `links`).

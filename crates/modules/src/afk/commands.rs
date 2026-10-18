@@ -3,7 +3,7 @@ use lumi_ui::{Card, CardOptions, make_list_card};
 
 use super::data;
 
-#[poise::command(slash_command)]
+#[poise::command(slash_command, prefix_command)]
 pub async fn afk(
     ctx: Context<'_>,
     #[description = "Reason for being AFK"] reason: Option<String>,
@@ -19,7 +19,7 @@ pub async fn afk(
     Ok(())
 }
 
-#[poise::command(slash_command)]
+#[poise::command(slash_command, prefix_command)]
 pub async fn afklist(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         ctx.say("Use this in a server.").await?;
@@ -35,7 +35,7 @@ pub async fn afklist(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command)]
+#[poise::command(slash_command, prefix_command)]
 pub async fn afkstats(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         ctx.say("Use this in a server.").await?;

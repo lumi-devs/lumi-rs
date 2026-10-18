@@ -10,6 +10,7 @@ use super::views::{error_card, generator_deleted_card, generator_setup_card};
 /// Dynamic Temporary Voice Channel management.
 #[poise::command(
     slash_command,
+    prefix_command,
     guild_only,
     subcommands("panel_cmd", "admin_cmd")
 )]
@@ -38,7 +39,7 @@ async fn panel_action(ctx: Context<'_>) -> Result<(), Error> {
 
     let row1 = CreateActionRow::Buttons(vec![
         CreateButton::new(format!("tempvc:lock:{ch_id}"))
-            .label("Lock Channel")
+            .label("Lock")
             .style(ButtonStyle::Secondary)
             .emoji('🔒'),
         CreateButton::new(format!("tempvc:unlock:{ch_id}"))
@@ -49,11 +50,34 @@ async fn panel_action(ctx: Context<'_>) -> Result<(), Error> {
             .label("Hide")
             .style(ButtonStyle::Secondary)
             .emoji('👁'),
+        CreateButton::new(format!("tempvc:unhide:{ch_id}"))
+            .label("Unhide")
+            .style(ButtonStyle::Secondary)
+            .emoji('👀'),
     ].into());
 
     let row2 = CreateActionRow::Buttons(vec![
-        CreateButton::new(format!("tempvc:claim:{ch_id}"))
-            .label("Claim Ownership")
+        CreateButton::new(format!("tempvc:trust:{ch_id}"))
+            .label("Trust")
+            .style(ButtonStyle::Secondary)
+            .emoji('🤝'),
+        CreateButton::new(format!("tempvc:untrust:{ch_id}"))
+            .label("Untrust")
+            .style(ButtonStyle::Secondary)
+            .emoji('👋'),
+        CreateButton::new(format!("tempvc:block:{ch_id}"))
+            .label("Block")
+            .style(ButtonStyle::Secondary)
+            .emoji('🚫'),
+        CreateButton::new(format!("tempvc:kick:{ch_id}"))
+            .label("Kick")
+            .style(ButtonStyle::Secondary)
+            .emoji('👢'),
+    ].into());
+
+    let row3 = CreateActionRow::Buttons(vec![
+        CreateButton::new(format!("tempvc:transfer:{ch_id}"))
+            .label("Transfer Ownership")
             .style(ButtonStyle::Primary)
             .emoji('👑'),
         CreateButton::new(format!("tempvc:delete:{ch_id}"))
@@ -63,7 +87,7 @@ async fn panel_action(ctx: Context<'_>) -> Result<(), Error> {
     ].into());
 
     let mut opts = CardOptions::default();
-    opts.action_rows = vec![row1, row2];
+    opts.action_rows = vec![row1, row2, row3];
 
     let card = Card::lines(title, lines)
         .kind(CardKind::Primary)
@@ -74,7 +98,7 @@ async fn panel_action(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Open your interactive TempVC channel control deck (ephemeral buttons).
-#[poise::command(slash_command, rename = "panel", guild_only)]
+#[poise::command(slash_command, prefix_command, rename = "panel", guild_only)]
 pub async fn panel_cmd(ctx: Context<'_>) -> Result<(), Error> {
     panel_action(ctx).await
 }
@@ -82,6 +106,7 @@ pub async fn panel_cmd(ctx: Context<'_>) -> Result<(), Error> {
 /// Administrative configuration for Temporary Voice Channel generators (Staff only).
 #[poise::command(
     slash_command,
+    prefix_command,
     rename = "admin",
     guild_only,
     default_member_permissions = "MANAGE_CHANNELS",
@@ -99,7 +124,7 @@ pub async fn admin_cmd(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Register a voice channel as a generator channel.
-#[poise::command(slash_command, rename = "setup")]
+#[poise::command(slash_command, prefix_command, rename = "setup")]
 pub async fn admin_setup(
     ctx: Context<'_>,
     #[description = "The voice channel to act as generator"] channel: GenericChannelId,
@@ -126,7 +151,7 @@ pub async fn admin_setup(
 }
 
 /// Unregister a generator channel.
-#[poise::command(slash_command, rename = "delete")]
+#[poise::command(slash_command, prefix_command, rename = "delete")]
 pub async fn admin_delete(
     ctx: Context<'_>,
     #[description = "The generator voice channel to remove"] channel: GenericChannelId,
@@ -146,7 +171,7 @@ pub async fn admin_delete(
 }
 
 /// List all registered generator channels in the server.
-#[poise::command(slash_command, rename = "list")]
+#[poise::command(slash_command, prefix_command, rename = "list")]
 pub async fn admin_list(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();

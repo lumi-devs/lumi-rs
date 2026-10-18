@@ -126,3 +126,77 @@ pub async fn transfer(
     txn.commit().await?;
     Ok(Some(sender_new))
 }
+
+pub async fn deposit(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    amount: i64,
+) -> Result<Option<(i64, i64)>> {
+    let txn = db.begin().await?;
+    let acc = get_or_create_account(&txn, guild_id, user_id).await?;
+
+    if acc.wallet < amount || amount <= 0 {
+        return Ok(None);
+    }
+
+    let new_wallet = acc.wallet - amount;
+    let new_bank = acc.bank + amount;
+
+    let mut active: economy_account::ActiveModel = acc.into();
+    active.wallet = Set(new_wallet);
+    active.bank = Set(new_bank);
+    active.update(&txn).await?;
+
+    let log = economy_transaction::ActiveModel {
+        guild_id: Set(guild_id.to_string()),
+        user_id: Set(user_id.to_string()),
+        kind: Set(EconomyTxnKind::TransferOut),
+        amount: Set(-amount),
+        balance_after: Set(new_wallet),
+        reason: Set(Some("Bank deposit".to_string())),
+        created_at: Set(Utc::now().fixed_offset()),
+        ..Default::default()
+    };
+    log.insert(&txn).await?;
+
+    txn.commit().await?;
+    Ok(Some((new_wallet, new_bank)))
+}
+
+pub async fn withdraw(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    amount: i64,
+) -> Result<Option<(i64, i64)>> {
+    let txn = db.begin().await?;
+    let acc = get_or_create_account(&txn, guild_id, user_id).await?;
+
+    if acc.bank < amount || amount <= 0 {
+        return Ok(None);
+    }
+
+    let new_wallet = acc.wallet + amount;
+    let new_bank = acc.bank - amount;
+
+    let mut active: economy_account::ActiveModel = acc.into();
+    active.wallet = Set(new_wallet);
+    active.bank = Set(new_bank);
+    active.update(&txn).await?;
+
+    let log = economy_transaction::ActiveModel {
+        guild_id: Set(guild_id.to_string()),
+        user_id: Set(user_id.to_string()),
+        kind: Set(EconomyTxnKind::TransferIn),
+        amount: Set(amount),
+        balance_after: Set(new_wallet),
+        reason: Set(Some("Bank withdrawal".to_string())),
+        created_at: Set(Utc::now().fixed_offset()),
+        ..Default::default()
+    };
+    log.insert(&txn).await?;
+
+    txn.commit().await?;
+    Ok(Some((new_wallet, new_bank)))
+}

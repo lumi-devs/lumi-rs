@@ -41,14 +41,19 @@ Never run bare `cargo` locally (wrong toolchain version risk).
 | `release` | prod (`lto = "thin"`, `strip = true`, `codegen-units = 1`) |
 | `ci` | quick smoke build (`lto = "off"`, inherits release) |
 
-## Flake devShell (todo)
+## Flake devShell & Fast Development Loop
 
-Add to the flake's `devShell` packages (don't put in `.cargo/config.toml`):
-```nix
-packages = [ clang mold cargo-nextest bacon cargo-deny cargo-machete sccache ];
-env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "clang";
-env.RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
-```
+The Nix flake (`flake.nix`) supplies:
+- **`mold` & `clang`**: High-performance linker (`RUSTFLAGS="-C link-arg=-fuse-ld=mold"`), slashing incremental link times from seconds to sub-second.
+- **`cargo-watch`**: Live hot-reloading for gateway development:
+  ```bash
+  nix develop "path:." --command cargo watch -x "run --bin lumi"
+  ```
+  Watches `.rs` files, terminates the running bot gracefully, recompiles changes in ~1-3s, and reconnects to the Discord gateway.
+- **`cargo-nextest`**: Concurrent, optimized test runner:
+  ```bash
+  nix develop "path:." --command cargo nextest run
+  ```
 
 ## Git deps — pin by rev
 

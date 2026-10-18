@@ -10,6 +10,13 @@ impl serenity::EventHandler for Events {
         match event {
             serenity::FullEvent::Ready { data_about_bot, .. } => {
                 tracing::info!(user = %data_about_bot.user.name, "ready");
+                let commands = crate::commands::all();
+                tracing::info!("syncing {} slash commands globally", commands.len());
+                if let Err(e) = poise::builtins::register_globally(&ctx.http, &commands).await {
+                    tracing::error!(error = %e, "failed to sync global slash commands");
+                } else {
+                    tracing::info!("slash commands synced successfully");
+                }
             }
             serenity::FullEvent::GuildCreate { guild, is_new, .. } => {
                 tracing::debug!(guild_id = %guild.id, new = ?is_new, "guild create");
@@ -54,6 +61,12 @@ impl serenity::EventHandler for Events {
                     lumi_modules::afk::on_message(ctx, services.as_ref(), new_message).await
                 {
                     tracing::warn!(%error, "afk message handler failed");
+                }
+
+                if let Err(error) =
+                    lumi_modules::leveling::on_message(ctx, services.as_ref(), new_message).await
+                {
+                    tracing::warn!(%error, "leveling message handler failed");
                 }
             }
             serenity::FullEvent::MessageDelete {
@@ -186,6 +199,14 @@ impl serenity::EventHandler for Events {
                 .await
                 {
                     tracing::warn!(%error, "logging ban remove failed");
+                }
+            }
+            serenity::FullEvent::VoiceStateUpdate { old, new, .. } => {
+                let services = ctx.data::<lumi_kernel::bot::Data>();
+                if let Err(error) =
+                    lumi_modules::tempvc::on_voice_state_update(ctx, services.as_ref(), old, new).await
+                {
+                    tracing::warn!(%error, "tempvc voice state update handler failed");
                 }
             }
             _ => {}

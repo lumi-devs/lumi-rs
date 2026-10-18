@@ -1,10 +1,12 @@
 //! Dynamic Temporary Voice Channels module.
 
 pub mod commands;
+pub mod events;
 pub mod store;
 pub mod views;
 
 pub use commands::commands;
+pub use events::on_voice_state_update;
 
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 

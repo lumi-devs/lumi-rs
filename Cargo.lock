@@ -2249,6 +2249,7 @@ dependencies = [
  "lumi-ui",
  "mimalloc",
  "poise",
+ "rustls",
  "serenity",
  "sysinfo",
  "tokio",
@@ -2262,6 +2263,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
+ "chrono",
  "lumi-kernel",
  "metrics-exporter-prometheus",
  "once_cell",

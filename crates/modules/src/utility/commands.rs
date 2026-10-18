@@ -5,7 +5,7 @@ use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind, CardOptions};
 
 /// Fetch and display avatar of a user or yourself.
-#[poise::command(slash_command)]
+#[poise::command(slash_command, prefix_command)]
 pub async fn avatar(
     ctx: Context<'_>,
     #[description = "User to inspect"] user: Option<UserId>,
@@ -29,7 +29,7 @@ pub async fn avatar(
 }
 
 /// Fetch and inspect user profile and membership information.
-#[poise::command(slash_command, guild_only)]
+#[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn whois(
     ctx: Context<'_>,
     #[description = "User to inspect"] user: Option<UserId>,
@@ -77,7 +77,7 @@ pub async fn whois(
 }
 
 /// Display detailed statistics about the current guild.
-#[poise::command(slash_command, guild_only)]
+#[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn serverinfo(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
@@ -118,7 +118,7 @@ pub async fn serverinfo(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Bulk delete up to 100 messages in the current channel.
-#[poise::command(slash_command, guild_only, default_member_permissions = "MANAGE_MESSAGES")]
+#[poise::command(slash_command, prefix_command, guild_only, default_member_permissions = "MANAGE_MESSAGES")]
 pub async fn purge(
     ctx: Context<'_>,
     #[description = "Number of messages to delete (1-100)"] amount: u8,

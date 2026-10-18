@@ -55,3 +55,27 @@ pub async fn next_counter(db: &DatabaseConnection, guild_id: i64, name: &str) ->
     txn.commit().await?;
     Ok(value)
 }
+
+/// Look up the prefix for a guild, falling back to global_config.default_prefix, then ",".
+pub async fn get_prefix(db: &DatabaseConnection, guild_id: Option<u64>) -> String {
+    if let Some(gid) = guild_id {
+        if let Ok(Some(guild)) = entities::guild::Entity::find_by_id(gid.to_string())
+            .one(db)
+            .await
+        {
+            if let Some(prefix) = guild.prefix {
+                if !prefix.is_empty() {
+                    return prefix;
+                }
+            }
+        }
+    }
+
+    if let Ok(Some(global)) = entities::global::Entity::find().one(db).await {
+        if !global.default_prefix.is_empty() {
+            return global.default_prefix;
+        }
+    }
+
+    ",".to_string()
+}

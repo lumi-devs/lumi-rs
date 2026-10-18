@@ -27,6 +27,8 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
         std::path::PathBuf::from(&cfg.custom_dir),
     ));
 
+    let commands = crate::commands::all_from_registry(&registry);
+
     let services: Data = Arc::new(lumi_kernel::Services {
         cfg,
         db,
@@ -41,7 +43,22 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
     tokio::spawn(async move { cache.spawn_invalidation().await });
 
     let framework = poise::Framework::new(poise::FrameworkOptions {
-        commands: crate::commands::all(),
+        commands,
+        prefix_options: poise::PrefixFrameworkOptions {
+            prefix: Some(",".into()),
+            mention_as_prefix: true,
+            dynamic_prefix: Some(|ctx| {
+                Box::pin(async move {
+                    let data = ctx.framework.user_data();
+                    let db = &data.db;
+                    let guild_id = ctx.guild_id.map(|g| g.get());
+                    let p = lumi_db::get_prefix(db, guild_id).await;
+                    Ok(Some(p.into()))
+                })
+            }),
+            case_insensitive_commands: true,
+            ..Default::default()
+        },
         ..Default::default()
     });
 

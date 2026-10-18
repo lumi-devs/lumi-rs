@@ -7,7 +7,7 @@ use lumi_ui::{Card, CardKind, CardOptions};
 use crate::ping::collect;
 
 /// Display detailed information, statistics, and architecture of the Lumi bot.
-#[poise::command(slash_command, aliases("info", "stats", "botinfo"))]
+#[poise::command(slash_command, prefix_command, aliases("info", "stats", "botinfo"))]
 pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
 
@@ -89,10 +89,12 @@ pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Dynamic command directory grouped automatically by category.
-#[poise::command(slash_command)]
+#[poise::command(slash_command, prefix_command)]
 pub async fn help(
     ctx: Context<'_>,
-    #[description = "Specific command to look up"] command: Option<String>,
+    #[description = "Specific command to look up"]
+    #[autocomplete = "poise::builtins::autocomplete_command"]
+    command: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     let all_commands = ctx.framework().options().commands.as_slice();
@@ -174,6 +176,7 @@ pub async fn help(
 /// Main administrative hub and server feature overview.
 #[poise::command(
     slash_command,
+    prefix_command,
     guild_only,
     default_member_permissions = "ADMINISTRATOR"
 )]

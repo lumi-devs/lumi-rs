@@ -1,8 +1,29 @@
+use poise::serenity_prelude as serenity;
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind};
 
+async fn autocomplete_repo<'a>(
+    ctx: Context<'a>,
+    partial: &'a str,
+) -> serenity::CreateAutocompleteResponse<'a> {
+    let downloader = &ctx.data().downloader;
+    let choices: Vec<serenity::AutocompleteChoice> = if let Ok(repos) = downloader.list_repos().await {
+        repos
+            .into_iter()
+            .map(|r| r.name)
+            .filter(|name| name.to_lowercase().starts_with(&partial.to_lowercase()))
+            .map(|name| serenity::AutocompleteChoice::new(name.clone(), name))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    serenity::CreateAutocompleteResponse::new().set_choices(choices)
+}
+
 #[poise::command(
     slash_command,
+    prefix_command,
     guild_only,
     subcommands("repo_add", "repo_list", "repo_remove"),
     default_member_permissions = "ADMINISTRATOR"
@@ -17,7 +38,7 @@ pub async fn repo(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command, rename = "add", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(slash_command, prefix_command, rename = "add", guild_only, default_member_permissions = "ADMINISTRATOR")]
 pub async fn repo_add(
     ctx: Context<'_>,
     #[description = "Git clone URL"] url: String,
@@ -45,7 +66,7 @@ pub async fn repo_add(
     Ok(())
 }
 
-#[poise::command(slash_command, rename = "list", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(slash_command, prefix_command, rename = "list", guild_only, default_member_permissions = "ADMINISTRATOR")]
 pub async fn repo_list(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let downloader = &ctx.data().downloader;
@@ -76,10 +97,12 @@ pub async fn repo_list(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command, rename = "remove", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(slash_command, prefix_command, rename = "remove", guild_only, default_member_permissions = "ADMINISTRATOR")]
 pub async fn repo_remove(
     ctx: Context<'_>,
-    #[description = "Repository name to remove"] name: String,
+    #[description = "Repository name to remove"]
+    #[autocomplete = "autocomplete_repo"]
+    name: String,
 ) -> Result<(), Error> {
     ctx.defer().await?;
     let downloader = &ctx.data().downloader;
@@ -102,6 +125,7 @@ pub async fn repo_remove(
 
 #[poise::command(
     slash_command,
+    prefix_command,
     guild_only,
     subcommands("download_install", "download_list"),
     default_member_permissions = "ADMINISTRATOR"
@@ -116,10 +140,12 @@ pub async fn download(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command, rename = "install", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(slash_command, prefix_command, rename = "install", guild_only, default_member_permissions = "ADMINISTRATOR")]
 pub async fn download_install(
     ctx: Context<'_>,
-    #[description = "Repository name containing the addon"] repo: String,
+    #[description = "Repository name containing the addon"]
+    #[autocomplete = "autocomplete_repo"]
+    repo: String,
     #[description = "Addon name to install"] addon: String,
 ) -> Result<(), Error> {
     ctx.defer().await?;
@@ -143,7 +169,7 @@ pub async fn download_install(
     Ok(())
 }
 
-#[poise::command(slash_command, rename = "list", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(slash_command, prefix_command, rename = "list", guild_only, default_member_permissions = "ADMINISTRATOR")]
 pub async fn download_list(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let downloader = &ctx.data().downloader;

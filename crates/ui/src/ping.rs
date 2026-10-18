@@ -243,9 +243,24 @@ fn detail_card(subtitle: &str, data: &PingData) -> Container {
         .separator(true, SeparatorSpacingSize::Small)
 }
 
-/// Overview card: shard summary plus external services.
+/// Pagination row: ◀️ (disabled) · Close · ▶️ (disabled when single page).
+fn overview_nav_row(user_id: u64, page: usize, total: usize) -> CreateActionRow<'static> {
+    let prev = CreateButton::new(ping_custom_id("p_-1", user_id))
+        .emoji(component_emoji("◀️").unwrap())
+        .style(ButtonStyle::Secondary)
+        .disabled(page == 0);
+    let close = CreateButton::new(ping_custom_id("close", user_id))
+        .label("Close")
+        .style(ButtonStyle::Danger);
+    let next = CreateButton::new(ping_custom_id("p_1", user_id))
+        .emoji(component_emoji("▶️").unwrap())
+        .style(ButtonStyle::Secondary)
+        .disabled(page + 1 >= total);
+    action_row_of(vec![prev, close, next])
+}
+
 #[must_use]
-pub fn build_overview_card(data: &PingData) -> CardReply {
+pub fn build_overview_card_paged(data: &PingData, page: usize, _user_id: u64) -> CardReply {
     let fallback = [ShardInfo {
         id: 0,
         ping: data.ws_ping,
@@ -258,45 +273,47 @@ pub fn build_overview_card(data: &PingData) -> CardReply {
         &data.shards
     };
 
-    let mut lines: Vec<String> = Vec::new();
-    for shard in shards {
-        lines.push(format!("### __Shard {}__", shard.id));
-        lines.push(format!(
-            "{SPACE}📡 **Latency**: {}",
-            fmt_ms(Some(shard.ping))
-        ));
-        lines.push(format!(
-            "{SPACE}⏱️ **Uptime**: {}",
-            format_duration(data.uptime)
-        ));
-        lines.push(format!("{SPACE}📊 __System Resources__:"));
-        lines.push(format!("{SPACE}{SPACE}🧠 **RAM**: {}", fmt_mb(data.rss)));
-        lines.push(format!("{SPACE}{SPACE}🖥️ **CPU**: {:.0}%", data.cpu_percent));
-        lines.push(format!("{SPACE}📈 __Community Size__:"));
-        lines.push(format!(
-            "{SPACE}{SPACE}🏰 **Servers**: {}",
-            fmt_count(data.guilds)
-        ));
-        lines.push(format!(
-            "{SPACE}{SPACE}👥 **Members**: {}",
-            fmt_count(data.users)
-        ));
-        lines.push(String::new());
+    const PAGE_SIZE: usize = 5;
+    let total_pages = shards.len().div_ceil(PAGE_SIZE).max(1);
+    let page = page.min(total_pages - 1);
+    let page_shards = &shards[page * PAGE_SIZE..((page + 1) * PAGE_SIZE).min(shards.len())];
+
+    let ram_mb = data.rss as f64 / 1024.0 / 1024.0;
+    let ram_pct = if data.ram_total > 0 {
+        data.rss as f64 / data.ram_total as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    let mut c = Container::new()
+        .text(format!("__## {} Status:__", data.bot_name));
+
+    for shard in page_shards {
+        c = c.separator(true, SeparatorSpacingSize::Small);
+        let shard_text = format!(
+            "__🟢 **Shard [{}]:** __\n{SPACE}📡 {} · ⏱️ {}\n{SPACE}**CPU**: {:.0}% . 📊 **RAM:** {:.1} MB . **({:.2}%)**  \n{SPACE}📈 **Servers:** {}· 👥 **Members:** {}",
+            shard.id,
+            fmt_ms(Some(shard.ping)),
+            format_duration(data.uptime),
+            data.cpu_percent,
+            ram_mb,
+            ram_pct,
+            fmt_count(data.guilds),
+            fmt_count(data.users),
+        );
+        c = c.text(shard_text);
     }
 
-    lines.push("### __External Services__".to_string());
-    lines.push(format!(
-        "🔴 **Redis Cache**: {} | Hit Ratio: {:.1}%",
-        fmt_ms(data.redis_read_ms),
-        data.redis_hit_ratio
-    ));
-    lines.push(format!(
-        "🐘 **Database**: {} | Load: {:.1} tx/s",
+    c = c.separator(true, SeparatorSpacingSize::Small);
+    c = c.text(format!(
+        "### External Services:\n{SPACE}🧠 **Cache:** {:.1}% hit ratio \n{SPACE} 🐘 **Database:** `{}`",
+        data.redis_hit_ratio,
         fmt_ms(data.db_latency_ms),
-        data.tx_rate
     ));
+    c = c.separator(true, SeparatorSpacingSize::Small);
+    c = c.action_row(overview_nav_row(0, page, total_pages));
 
-    container_reply(Container::new().text(lines.join("\n")))
+    container_reply(c)
 }
 
 fn build_gateway_card(data: &PingData) -> Container {
