@@ -106,7 +106,7 @@ pub async fn award_xp(
     let new_total_xp = account.total_xp + amount;
     let (new_level, new_xp, gained) = calculate_level_up(account.level, account.xp + amount);
 
-    let mut active: level_account::ActiveModel = account.into();
+    let mut active: level_account::ActiveModel = account.clone().into();
     active.level = Set(new_level);
     active.xp = Set(new_xp);
     active.total_xp = Set(new_total_xp);

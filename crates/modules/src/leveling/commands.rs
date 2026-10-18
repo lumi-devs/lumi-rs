@@ -25,7 +25,7 @@ pub async fn rank(
             let user_obj = target_user_id.to_user(ctx.http()).await.ok();
             let username = user_obj
                 .as_ref()
-                .map_or_else(|| format!("User {target_id}"), |u| u.name.clone());
+                .map_or_else(|| format!("User {target_id}"), |u| u.name.to_string());
             let avatar_url = user_obj.as_ref().map(|u| u.face());
 
             views::rank_card(
@@ -44,7 +44,7 @@ pub async fn rank(
             let user_obj = target_user_id.to_user(ctx.http()).await.ok();
             let username = user_obj
                 .as_ref()
-                .map_or_else(|| format!("User {target_id}"), |u| u.name.clone());
+                .map_or_else(|| format!("User {target_id}"), |u| u.name.to_string());
             views::no_rank_card(&username)
         }
     };
