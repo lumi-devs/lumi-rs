@@ -6,44 +6,81 @@ use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind, CardOptions};
 use crate::ping::collect;
 
-/// System information, hardware metrics, and bot architecture overview.
-#[poise::command(slash_command)]
+/// Display detailed information, statistics, and architecture of the Lumi bot.
+#[poise::command(slash_command, aliases("info", "stats", "botinfo"))]
 pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
 
     let data = collect(0, ctx.serenity_context()).await;
-    let title = "✨ About Lumi";
+
+    let fmt_count = |count: u64| {
+        if count >= 1000 {
+            format!("{:.1}K", (count as f64) / 1000.0)
+        } else {
+            count.to_string()
+        }
+    };
+
+    let fmt_mb = |bytes: u64| {
+        let mb = (bytes as f64) / (1024.0 * 1024.0);
+        if mb >= 1024.0 {
+            format!("{:.1} GB", mb / 1024.0)
+        } else {
+            format!("{:.1} MB", mb)
+        }
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let boot_time_sec = now.saturating_sub((data.uptime / 1000.0) as u64);
+    let host_boot_time_sec = now.saturating_sub(data.os_uptime_secs);
 
     let body = vec![
-        "### __Lumi (Rust Engine)__".to_string(),
-        "Lumi is a native, self-hosted Discord administration platform written in **Rust** designed to effortlessly scale across millions of communities with microsecond command latency.".to_string(),
-        String::new(),
-        "### __Core Architecture__".to_string(),
-        format!("• **Runtime**: `{}` on `{}` (`{}`)", data.runtime, data.platform, data.arch),
-        format!("• **Discord Stack**: {}", data.discord_lib),
-        format!("• **Database Engine**: {}", data.orm_lib),
-        "• **Components Engine**: Discord Components V2 (Native Cards, zero legacy embeds)".to_string(),
-        "• **Global Allocator**: mimalloc (high concurrency, low fragmentation)".to_string(),
-        String::new(),
-        "### __Cluster Status__".to_string(),
-        format!("• **Cached Guilds**: `{}`", data.guilds),
-        format!("• **Cached Users**: `{}`", data.users),
-        format!("• **Active Channels**: `{}`", data.channels),
-        format!("• **Memory Footprint**: {:.1} MB", (data.rss as f64) / (1024.0 * 1024.0)),
-        format!("• **CPU Cores**: {} (Load: {:.2})", data.cpu_cores, data.load_avg[0]),
+        "# __Lumi__\n\nLumi is a powerful, self-hosted Discord administration platform designed for communities that demand full control and rock-solid reliability. Powered by native Rust. Lumi guarantees instant command responses, modular capability, and enterprise-grade uptime for your server. The all-in-one administration platform you host yourself - moderation, leveling, economy, and logging, engineered for reliability.".to_string(),
+        format!(
+            "### 📊 __Instance Statistics__\n-# {} servers · {} members · {} channels\n-# Uptime <t:{}:R> (Host Uptime <t:{}:R>)\n-# Gateway `{:.0}ms` · Memory `{}` · CPU `{:.1}%`",
+            fmt_count(data.guilds),
+            fmt_count(data.users),
+            fmt_count(data.channels),
+            boot_time_sec,
+            host_boot_time_sec,
+            data.ws_ping.max(0.0),
+            fmt_mb(data.rss),
+            data.cpu_percent
+        ),
+        format!(
+            "### ⚙️ __Core Architecture__\n_Lumi version_ v{}\n*Rust* v{} · *Serenity* Next · *SeaORM* 2.0\n*PostgreSQL* · *Redis*",
+            env!("CARGO_PKG_VERSION"),
+            env!("CARGO_PKG_VERSION")
+        ),
+        "### 📦 __Codebase__\n**Self-hosted, open source, and allergic to downtime.**".to_string(),
     ];
 
-    let row = CreateActionRow::Buttons(vec![
+    let row1 = CreateActionRow::Buttons(vec![
         CreateButton::new_link("https://github.com/lumi-devs/lumi-rs")
-            .label("GitHub Source")
-            .emoji('📦'),
+            .label("Source Code"),
+        CreateButton::new_link("https://lumi-devs.github.io/Lumi-docs")
+            .label("Documentation"),
+    ].into());
+
+    let row2 = CreateActionRow::Buttons(vec![
+        CreateButton::new_link("https://lumi-devs.github.io/Lumi-docs/reference/data-and-privacy")
+            .label("Privacy Policy"),
+        CreateButton::new_link("https://github.com/lumi-devs/Lumi/blob/main/LICENSE")
+            .label("Terms of Service"),
     ].into());
 
     let mut opts = CardOptions::default();
+    opts.hide_title = true;
+    opts.no_accent = true;
     opts.thumbnail_url = Some(data.avatar_url);
-    opts.action_rows = vec![row];
+    opts.separator_above_action_rows = true;
+    opts.action_rows = vec![row1, row2];
 
-    let card = Card::lines(title, body)
+    let card = Card::lines("", body)
         .kind(CardKind::Primary)
         .options(opts);
 
@@ -60,7 +97,6 @@ pub async fn help(
     ctx.defer_ephemeral().await?;
     let all_commands = ctx.framework().options().commands.as_slice();
 
-    // If specific command requested, show its detailed documentation
     if let Some(query) = command {
         let found = all_commands.iter().find(|c| c.name.eq_ignore_ascii_case(&query));
         if let Some(cmd) = found {
@@ -91,7 +127,6 @@ pub async fn help(
         }
     }
 
-    // Dynamic categorisation based on module origin and command purpose
     let mut categories: BTreeMap<&'static str, Vec<(&str, &str)>> = BTreeMap::new();
 
     for cmd in all_commands {
@@ -127,7 +162,7 @@ pub async fn help(
     Ok(())
 }
 
-/// Main administrative hub and cluster health overview.
+/// Main administrative hub and server feature overview.
 #[poise::command(
     slash_command,
     guild_only,
@@ -143,23 +178,15 @@ pub async fn lumi(ctx: Context<'_>) -> Result<(), Error> {
 
     let title = format!("🎛️ Lumi Control Hub — {}", guild_name);
 
-    let modules = ctx.data().registry.iter().map(|m| {
-        let meta = m.metadata();
-        format!("• {} **{}** (v{}) — {}", meta.emoji, meta.display_name, meta.version, meta.description)
-    }).collect::<Vec<_>>();
-
     let mut body = vec![
-        "Server administration overview and active engine subsystems:".to_string(),
+        "Configure and review your server's active administration capabilities:".to_string(),
         String::new(),
-        "### __Active Modules__".to_string(),
     ];
-    body.extend(modules);
 
-    body.push(String::new());
-    body.push("### __Integrated Kernel Subsystems__".to_string());
-    body.push("• 🛡️ **Anti-Nuke**: Active (In-memory sliding window rate trackers)".to_string());
-    body.push("• 🔍 **Content Filter**: Active (Zero-allocation Aho-Corasick & regex matcher)".to_string());
-    body.push("• 🔒 **Panic Lockdown**: Configured (`/panic on|off|status`)".to_string());
+    for m in ctx.data().registry.iter() {
+        let meta = m.metadata();
+        body.push(format!("### {} __{}__\n-# {}", meta.emoji, meta.display_name, meta.description));
+    }
 
     let mut opts = CardOptions::default();
     if let Some(icon) = guild_icon {
