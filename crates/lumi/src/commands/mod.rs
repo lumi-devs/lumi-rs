@@ -1,6 +1,7 @@
 use lumi_kernel::bot::Command;
 
 pub mod about;
+pub mod downloader;
 pub mod general;
 pub mod security;
 
@@ -11,6 +12,7 @@ pub fn core_commands() -> Vec<Command> {
     let mut commands = vec![general::ping()];
     commands.extend(about::commands());
     commands.extend(security::commands());
+    commands.extend(downloader::commands());
     commands
 }
 
