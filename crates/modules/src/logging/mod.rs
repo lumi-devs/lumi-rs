@@ -8,6 +8,7 @@ use serde_json::json;
 
 use lumi_kernel::module::{ConfigField, ConfigFieldKind, Module, ModuleMeta};
 
+#[derive(Debug)]
 pub struct LoggingModule;
 
 fn channel(key: &str, label: &str, description: &str, group: &str) -> ConfigField {

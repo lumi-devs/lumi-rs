@@ -20,6 +20,7 @@ pub mod global_module_state;
 pub mod guild;
 pub mod guild_backup;
 pub mod guild_case_counter;
+pub mod guild_config;
 pub mod guild_module_config;
 pub mod guild_module_state;
 pub mod ignore_entry;

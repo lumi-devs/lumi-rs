@@ -27,6 +27,7 @@ sea-orm     = { workspace = true }
 apalis      = { workspace = true }
 apalis-redis = { workspace = true }
 poise       = { workspace = true }
+serenity    = { workspace = true }
 figment     = { workspace = true }
 humantime   = { workspace = true }
 croner      = { workspace = true }

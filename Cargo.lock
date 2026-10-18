@@ -2237,6 +2237,7 @@ name = "lumi"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "console-subscriber",
  "dotenvy",
@@ -2305,6 +2306,7 @@ dependencies = [
  "sea-orm",
  "serde",
  "serde_json",
+ "serenity",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -2319,10 +2321,12 @@ name = "lumi-modules"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "lumi-db",
  "lumi-kernel",
  "lumi-ui",
  "poise",
+ "sea-orm",
  "serde",
  "serde_json",
  "serenity",
@@ -2361,6 +2365,7 @@ dependencies = [
 name = "lumi-ui"
 version = "0.1.0"
 dependencies = [
+ "poise",
  "serde",
  "serde_json",
  "serenity",

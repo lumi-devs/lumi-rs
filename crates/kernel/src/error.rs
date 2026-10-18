@@ -14,6 +14,8 @@ pub enum LumiError {
     Json(#[from] serde_json::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("discord error: {0}")]
+    Discord(#[from] serenity::Error),
     #[error("other: {0}")]
     Other(String),
 }

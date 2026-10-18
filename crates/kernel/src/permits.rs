@@ -96,6 +96,7 @@ pub struct Decision {
     pub rows: Vec<TierExplanation>,
 }
 
+#[derive(Clone, Debug)]
 pub struct CheckContext<'a> {
     pub user_id: u64,
     pub channel_id: Option<u64>,
@@ -138,7 +139,7 @@ impl PermitResolver {
             .map(|a| PermitAssignment {
                 permit_id: a.permit_id,
                 target_type: a.target_type,
-                target_id: a.target_id,
+                target_id: a.target_id.parse().unwrap_or(0),
             })
             .collect();
 

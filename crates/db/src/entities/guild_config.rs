@@ -1,6 +1,5 @@
 use sea_orm::entity::prelude::*;
 
-/// Per-guild, per-module, per-key config value (the generic module config store).
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "guild_config")]

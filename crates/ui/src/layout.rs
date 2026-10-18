@@ -49,6 +49,7 @@ pub fn format_breadcrumb_header(crumbs: &[String]) -> String {
 }
 
 /// Trailing hint for a paginated footer: an item count or a free-form string.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PageFooterHint {
     Count(usize),
     Hint(String),

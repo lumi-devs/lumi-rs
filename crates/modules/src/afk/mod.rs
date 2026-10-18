@@ -14,6 +14,7 @@ use serde_json::json;
 
 use lumi_kernel::module::{ConfigField, ConfigFieldKind, Module, ModuleMeta};
 
+#[derive(Debug)]
 pub struct AfkModule;
 
 impl Module for AfkModule {
