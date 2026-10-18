@@ -7,9 +7,7 @@ members = [
   "crates/script",
   "crates/modules",
   "crates/api",
-  "crates/rest",
   "crates/lumi",
-  "crates/lints",
   "xtask",
 ]
 
@@ -29,7 +27,6 @@ lumi-ui      = { path = "crates/ui" }
 lumi-script  = { path = "crates/script" }
 lumi-modules = { path = "crates/modules" }
 lumi-api     = { path = "crates/api" }
-lumi-rest    = { path = "crates/rest" }
 
 # Discord
 serenity = { git = "https://github.com/serenity-rs/serenity", branch = "next", default-features = false, features = [

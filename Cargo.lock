@@ -2316,10 +2316,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lumi-lints"
-version = "0.1.0"
-
-[[package]]
 name = "lumi-modules"
 version = "0.1.0"
 dependencies = [
@@ -2335,21 +2331,6 @@ dependencies = [
  "serenity",
  "thiserror 2.0.21",
  "tokio",
- "tracing",
-]
-
-[[package]]
-name = "lumi-rest"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum 0.8.9",
- "lumi-kernel",
- "serde",
- "serde_json",
- "tokio",
- "tower 0.5.3",
- "tower-http",
  "tracing",
 ]
 

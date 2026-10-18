@@ -101,7 +101,14 @@ impl AddonHost {
         if dir.is_dir() {
             for entry in std::fs::read_dir(dir)? {
                 let path = entry?.path();
-                if path.extension().is_some_and(|ext| ext == "rhai") {
+                if path.is_dir() {
+                    let script_path = path.join("script.rhai");
+                    if script_path.exists() {
+                        let source = std::fs::read_to_string(&script_path)?;
+                        let ast = engine.compile(source)?;
+                        scripts.push(ast);
+                    }
+                } else if path.extension().is_some_and(|ext| ext == "rhai") {
                     let source = std::fs::read_to_string(&path)?;
                     scripts.push(engine.compile(source)?);
                 }
@@ -115,7 +122,22 @@ impl AddonHost {
         &self.engine
     }
 
+    pub fn scripts(&self) -> &[AST] {
+        &self.scripts
+    }
+
     pub fn count(&self) -> usize {
         self.scripts.len()
+    }
+
+    /// Execute a function across all loaded addon scripts.
+    pub fn call_function<T: Clone + Send + Sync + 'static>(&self, fn_name: &str, arg: impl Clone + Send + Sync + 'static) -> Vec<T> {
+        let mut results = Vec::new();
+        for ast in &self.scripts {
+            if let Ok(res) = self.engine.call_fn::<T>(&mut rhai::Scope::new(), ast, fn_name, (arg.clone(),)) {
+                results.push(res);
+            }
+        }
+        results
     }
 }

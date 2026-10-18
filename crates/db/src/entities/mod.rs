@@ -35,8 +35,6 @@ pub mod module_scoped_config;
 pub mod panic_state;
 pub mod permit;
 pub mod permit_assignment;
-pub mod reaction_role_menu;
-pub mod reaction_role_option;
 pub mod shared_api_token;
 pub mod temp_vc_generator;
 pub mod temp_vc_record;
