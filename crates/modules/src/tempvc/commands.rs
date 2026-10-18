@@ -1,30 +1,109 @@
 use poise::serenity_prelude as serenity;
-use serenity::all::{ChannelId, PermissionOverwrite, PermissionOverwriteType, Permissions};
-
-use lumi_kernel::bot::{Command, Context, Error};
-use super::store;
-use super::views::{
-    channel_limit_card, channel_locked_card, channel_renamed_card, error_card,
-    generator_deleted_card, generator_setup_card,
+use serenity::all::{
+    ButtonStyle, ChannelId, CreateActionRow, CreateButton, CreateComponent,
+    CreateInteractionResponse, CreateInteractionResponseMessage, MessageFlags,
+    PermissionOverwrite, PermissionOverwriteType, Permissions,
 };
 
-/// Configure or manage dynamic temporary voice channel generators.
+use lumi_kernel::bot::{Command, Context, Error};
+use lumi_ui::{Card, CardKind, CardOptions};
+
+use super::store;
+use super::views::{error_card, generator_deleted_card, generator_setup_card};
+
+/// Dynamic Temporary Voice Channel management.
 #[poise::command(
     slash_command,
     guild_only,
-    subcommands("tempvc_setup", "tempvc_delete"),
-    default_member_permissions = "MANAGE_CHANNELS"
+    subcommands("panel", "admin")
 )]
-pub async fn tempvc(_ctx: Context<'_>) -> Result<(), Error> {
+pub async fn tempvc(ctx: Context<'_>) -> Result<(), Error> {
+    panel(ctx).await
+}
+
+/// Open your interactive TempVC channel control deck (ephemeral buttons).
+#[poise::command(slash_command, guild_only)]
+pub async fn panel(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let user_id = ctx.author().id.get();
+
+    let record_opt = store::get_user_active_vc(&ctx.data().db, guild_id, user_id).await?;
+    let Some(record) = record_opt else {
+        let card = error_card("You do not own an active temporary voice channel. Join a generator channel first.");
+        ctx.send(card.reply()).await?;
+        return Ok(());
+    };
+
+    let ch_id: u64 = record.channel_id.parse().unwrap_or(0);
+    let title = "🎙️ Voice Channel Control Deck";
+    let lines = vec![
+        format!("**Managed Channel**: <#{ch_id}>"),
+        "Use the interactive buttons below to manage access, lock, or modify your channel:".to_string(),
+    ];
+
+    // Build interactive action rows matching TS TempVC panel
+    let row1 = CreateActionRow::Buttons(vec![
+        CreateButton::new(format!("tempvc:lock:{ch_id}"))
+            .label("Lock Channel")
+            .style(ButtonStyle::Secondary)
+            .emoji('🔒'),
+        CreateButton::new(format!("tempvc:unlock:{ch_id}"))
+            .label("Unlock")
+            .style(ButtonStyle::Secondary)
+            .emoji('🔓'),
+        CreateButton::new(format!("tempvc:hide:{ch_id}"))
+            .label("Hide")
+            .style(ButtonStyle::Secondary)
+            .emoji('👁'),
+    ]);
+
+    let row2 = CreateActionRow::Buttons(vec![
+        CreateButton::new(format!("tempvc:claim:{ch_id}"))
+            .label("Claim Ownership")
+            .style(ButtonStyle::Primary)
+            .emoji('👑'),
+        CreateButton::new(format!("tempvc:delete:{ch_id}"))
+            .label("Delete VC")
+            .style(ButtonStyle::Danger)
+            .emoji('🗑'),
+    ]);
+
+    let mut opts = CardOptions::default();
+    opts.action_rows = vec![row1, row2];
+
+    let card = Card::lines(title, lines)
+        .kind(CardKind::Primary)
+        .options(opts);
+
+    ctx.send(card.into_reply().reply()).await?;
     Ok(())
 }
 
-/// Setup a voice channel as a generator for temporary voice channels.
+/// Administrative configuration for Temporary Voice Channel generators (Staff only).
+#[poise::command(
+    slash_command,
+    guild_only,
+    default_member_permissions = "MANAGE_CHANNELS",
+    subcommands("admin_setup", "admin_delete", "admin_list")
+)]
+pub async fn admin(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
+    let card = Card::new(
+        "🛠️ TempVC Admin Tools",
+        "Use `/tempvc admin setup <channel>` to register a generator channel or `/tempvc admin list` to view active generators.",
+    )
+    .kind(CardKind::Info);
+    ctx.send(card.into_reply().reply()).await?;
+    Ok(())
+}
+
+/// Register a voice channel as a generator channel.
 #[poise::command(slash_command, rename = "setup")]
-pub async fn tempvc_setup(
+pub async fn admin_setup(
     ctx: Context<'_>,
     #[description = "The voice channel to act as generator"] channel: ChannelId,
-    #[description = "Template name for generated channels (e.g. {user}'s VC)"] name: Option<String>,
+    #[description = "Template name for generated channels (e.g. {user}'s Lounge)"] name: Option<String>,
     #[description = "Default user limit for generated channels (0 for unlimited)"] limit: Option<i32>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
@@ -46,17 +125,17 @@ pub async fn tempvc_setup(
     Ok(())
 }
 
-/// Remove a temporary voice channel generator.
+/// Unregister a generator channel.
 #[poise::command(slash_command, rename = "delete")]
-pub async fn tempvc_delete(
+pub async fn admin_delete(
     ctx: Context<'_>,
     #[description = "The generator voice channel to remove"] channel: ChannelId,
 ) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
 
-    let deleted = store::delete_generator(&ctx.data().db, guild_id, channel.get()).await?;
-    if deleted {
+    let removed = store::delete_generator(&ctx.data().db, guild_id, channel.get()).await?;
+    if removed {
         let card = generator_deleted_card(channel.get());
         ctx.send(card.reply()).await?;
     } else {
@@ -66,112 +145,39 @@ pub async fn tempvc_delete(
     Ok(())
 }
 
-/// Manage your temporary voice channel.
-#[poise::command(
-    slash_command,
-    guild_only,
-    subcommands("vc_name", "vc_limit", "vc_lock")
-)]
-pub async fn vc(_ctx: Context<'_>) -> Result<(), Error> {
-    Ok(())
-}
-
-/// Rename your temporary voice channel.
-#[poise::command(slash_command, rename = "name")]
-pub async fn vc_name(
-    ctx: Context<'_>,
-    #[description = "New name for your voice channel"] name: String,
-) -> Result<(), Error> {
+/// List all registered generator channels in the server.
+#[poise::command(slash_command, rename = "list")]
+pub async fn admin_list(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
-    let user_id = ctx.author().id.get();
 
-    let record = store::get_active_channel(&ctx.data().db, guild_id, user_id).await?;
-    let Some(rec) = record else {
-        let card = error_card("You do not own an active temporary voice channel.");
-        ctx.send(card.reply()).await?;
+    let generators = store::list_generators(&ctx.data().db, guild_id).await?;
+    if generators.is_empty() {
+        let card = Card::new(
+            "📡 TempVC Generators",
+            "No generator voice channels are configured on this server.",
+        )
+        .kind(CardKind::Info);
+        ctx.send(card.into_reply().reply()).await?;
         return Ok(());
-    };
+    }
 
-    let channel_id = ChannelId::new(rec.channel_id.parse::<u64>()?);
-    let builder = serenity::EditChannel::new().name(&name);
-    channel_id.edit(ctx.http(), builder).await?;
+    let mut lines = Vec::new();
+    for (i, g) in generators.iter().enumerate() {
+        lines.push(format!(
+            "**{}.** <#{}> — Name: `{}` | Limit: `{}`",
+            i + 1,
+            g.channel_id,
+            g.name,
+            if g.limit == 0 { "Unlimited".to_string() } else { g.limit.to_string() }
+        ));
+    }
 
-    store::set_name(&ctx.data().db, guild_id, channel_id.get(), &name).await?;
-
-    let card = channel_renamed_card(&name);
-    ctx.send(card.reply()).await?;
-    Ok(())
-}
-
-/// Change user limit of your temporary voice channel.
-#[poise::command(slash_command, rename = "limit")]
-pub async fn vc_limit(
-    ctx: Context<'_>,
-    #[description = "User limit (0 for unlimited)"] limit: u32,
-) -> Result<(), Error> {
-    ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
-    let user_id = ctx.author().id.get();
-
-    let record = store::get_active_channel(&ctx.data().db, guild_id, user_id).await?;
-    let Some(rec) = record else {
-        let card = error_card("You do not own an active temporary voice channel.");
-        ctx.send(card.reply()).await?;
-        return Ok(());
-    };
-
-    let channel_id = ChannelId::new(rec.channel_id.parse::<u64>()?);
-    let builder = serenity::EditChannel::new().user_limit(limit);
-    channel_id.edit(ctx.http(), builder).await?;
-
-    let card = channel_limit_card(limit as i32);
-    ctx.send(card.reply()).await?;
-    Ok(())
-}
-
-/// Lock or unlock your temporary voice channel.
-#[poise::command(slash_command, rename = "lock")]
-pub async fn vc_lock(ctx: Context<'_>) -> Result<(), Error> {
-    ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
-    let user_id = ctx.author().id.get();
-
-    let record = store::get_active_channel(&ctx.data().db, guild_id.get(), user_id).await?;
-    let Some(rec) = record else {
-        let card = error_card("You do not own an active temporary voice channel.");
-        ctx.send(card.reply()).await?;
-        return Ok(());
-    };
-
-    let channel_id = ChannelId::new(rec.channel_id.parse::<u64>()?);
-    let new_locked = !rec.locked;
-
-    let everyone_role_id = guild_id.everyone_role();
-    let permissions = if new_locked {
-        PermissionOverwrite {
-            allow: Permissions::empty(),
-            deny: Permissions::CONNECT,
-            kind: PermissionOverwriteType::Role(everyone_role_id),
-        }
-    } else {
-        PermissionOverwrite {
-            allow: Permissions::CONNECT,
-            deny: Permissions::empty(),
-            kind: PermissionOverwriteType::Role(everyone_role_id),
-        }
-    };
-
-    let builder = serenity::EditChannel::new().permissions(vec![permissions]);
-    channel_id.edit(ctx.http(), builder).await?;
-
-    store::set_locked(&ctx.data().db, guild_id.get(), channel_id.get(), new_locked).await?;
-
-    let card = channel_locked_card(new_locked);
-    ctx.send(card.reply()).await?;
+    let card = Card::lines("📡 TempVC Generator Channels", lines).kind(CardKind::Info);
+    ctx.send(card.into_reply().reply()).await?;
     Ok(())
 }
 
 pub fn commands() -> Vec<Command> {
-    vec![tempvc(), vc()]
+    vec![tempvc()]
 }
