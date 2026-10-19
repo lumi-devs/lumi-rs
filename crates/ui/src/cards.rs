@@ -9,7 +9,8 @@ use serenity::all::{
     SeparatorSpacingSize,
 };
 
-use crate::layout::{format_breadcrumbs, format_status_badge, format_subtitle};
+use crate::layout::{format_breadcrumb_header, format_status_badge, format_subtitle};
+use crate::panels::clamp_action_rows;
 
 /// Discord's hard limit for a single text display.
 pub const TEXT_DISPLAY_LIMIT: usize = 4000;
@@ -23,14 +24,13 @@ pub enum CardKind {
     Success,
     Warning,
     Error,
-    Neutral,
     Gold,
     Purple,
-    Cyan,
 }
 
 impl CardKind {
     /// Accent colour, or `None` for `Primary` (matches `resolveCardColor`).
+    #[must_use]
     pub const fn accent(self) -> Option<Colour> {
         match self {
             CardKind::Primary => None,
@@ -38,14 +38,13 @@ impl CardKind {
             CardKind::Success => Some(Colour::new(0x0012_b886)),
             CardKind::Warning => Some(Colour::new(0x00f5_9f00)),
             CardKind::Error => Some(Colour::new(0x00fa_5252)),
-            CardKind::Neutral => Some(Colour::new(0x0049_5057)),
             CardKind::Gold => Some(Colour::new(0x00ff_d43b)),
             CardKind::Purple => Some(Colour::new(0x0097_75fa)),
-            CardKind::Cyan => Some(Colour::new(0x0022_b8cf)),
         }
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug)]
 pub struct CardOptions {
     pub subtitle: Option<String>,
@@ -91,28 +90,28 @@ pub struct CardReply {
 }
 
 impl CardReply {
-    /// Render into a poise reply: V2 flag set, no-ping allowed mentions.
-    pub fn reply(&self) -> poise::CreateReply<'static> {
+    fn flags(&self) -> MessageFlags {
         let mut flags = MessageFlags::IS_COMPONENTS_V2;
         if self.ephemeral {
             flags |= MessageFlags::EPHEMERAL;
         }
+        flags
+    }
+
+    /// Render into a poise reply: V2 flag set, no-ping allowed mentions.
+    pub fn reply(&self) -> poise::CreateReply<'static> {
         poise::CreateReply::default()
             .components(self.components.clone())
             .allowed_mentions(CreateAllowedMentions::new())
-            .flags(flags)
+            .flags(self.flags())
     }
 
     /// Render into a raw channel message (V2 flag set, no-ping mentions).
     pub fn message(&self) -> CreateMessage<'static> {
-        let mut flags = MessageFlags::IS_COMPONENTS_V2;
-        if self.ephemeral {
-            flags |= MessageFlags::EPHEMERAL;
-        }
         CreateMessage::new()
             .components(self.components.clone())
             .allowed_mentions(CreateAllowedMentions::new())
-            .flags(flags)
+            .flags(self.flags())
     }
 }
 
@@ -156,26 +155,31 @@ impl Card {
         Card::new(title, body).kind(CardKind::Warning)
     }
 
-    pub fn kind(mut self, kind: CardKind) -> Self {
+    #[must_use]
+    pub const fn kind(mut self, kind: CardKind) -> Self {
         self.accent = kind.accent();
         self
     }
 
-    pub fn accent(mut self, colour: Option<Colour>) -> Self {
+    #[must_use]
+    pub const fn accent(mut self, colour: Option<Colour>) -> Self {
         self.accent = colour;
         self
     }
 
+    #[must_use]
     pub fn options(mut self, options: CardOptions) -> Self {
         self.options = options;
         self
     }
 
-    pub fn ephemeral(mut self) -> Self {
+    #[must_use]
+    pub const fn ephemeral(mut self) -> Self {
         self.ephemeral = true;
         self
     }
 
+    #[must_use]
     pub fn into_reply(&self) -> CardReply {
         CardReply {
             components: vec![CreateComponent::Container(self.build_container())],
@@ -189,7 +193,7 @@ impl Card {
 
         let mut header: Vec<String> = Vec::new();
         if !opts.breadcrumbs.is_empty() {
-            header.push(format_breadcrumbs(&opts.breadcrumbs, " \u{276f} "));
+            header.push(format_breadcrumb_header(&opts.breadcrumbs));
         }
         if let Some((status, label)) = &opts.status_badge {
             header.push(format_status_badge(status, label.as_deref()));
@@ -271,18 +275,20 @@ impl Card {
             children.push(text(format!("-# {footer}")));
         }
 
-        if opts.separator_above_action_rows && !opts.action_rows.is_empty() {
+        // Central action-row clamp, mirroring TS `buildSafeActionRows`.
+        let action_rows = clamp_action_rows(opts.action_rows.clone());
+        if opts.separator_above_action_rows && !action_rows.is_empty() {
             children.push(CreateContainerComponent::Separator(CreateSeparator::new()));
         }
-        for row in &opts.action_rows {
-            children.push(CreateContainerComponent::ActionRow(row.clone()));
+        for row in action_rows {
+            children.push(CreateContainerComponent::ActionRow(row));
         }
 
         let mut container = CreateContainer::new(children);
-        if let Some(accent) = self.accent {
-            if !opts.no_accent {
-                container = container.accent_colour(accent);
-            }
+        if let Some(accent) = self.accent
+            && !opts.no_accent
+        {
+            container = container.accent_colour(accent);
         }
         container
     }
@@ -321,8 +327,13 @@ pub fn fit_lines(lines: &[String], budget: usize) -> String {
     kept.join("\n").chars().take(budget).collect()
 }
 
-/// Truncate to `max` chars, appending `…` when cut.
-fn cut_text(text: &str, max: usize) -> String {
+/// Truncate to `max` chars, appending `…` when cut. Char-based, so never splits
+/// a multi-byte codepoint.
+#[must_use]
+pub fn cut_text(text: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
     if text.chars().count() <= max {
         return text.to_string();
     }
@@ -331,35 +342,8 @@ fn cut_text(text: &str, max: usize) -> String {
     truncated
 }
 
-/// Build a card from an explicit accent + body parts (the `makeCard` core).
-pub fn make_card(kind: CardKind, title: &str, body: Vec<String>, options: CardOptions) -> CardReply {
-    Card {
-        title: title.to_string(),
-        body,
-        accent: kind.accent(),
-        options,
-        ephemeral: false,
-    }
-    .into_reply()
-}
-
-pub fn make_success_card(title: &str, body: Vec<String>, options: CardOptions) -> CardReply {
-    make_card(CardKind::Success, title, body, options)
-}
-
-pub fn make_error_card(title: &str, body: Vec<String>, options: CardOptions) -> CardReply {
-    make_card(CardKind::Error, title, body, options)
-}
-
-pub fn make_warning_card(title: &str, body: Vec<String>, options: CardOptions) -> CardReply {
-    make_card(CardKind::Warning, title, body, options)
-}
-
-pub fn make_info_card(title: &str, body: Vec<String>, options: CardOptions) -> CardReply {
-    make_card(CardKind::Info, title, body, options)
-}
-
 /// Bulleted list card: max 25 visible items, each truncated to 200 chars.
+#[must_use]
 pub fn make_list_card(title: &str, items: &[String], options: CardOptions) -> CardReply {
     let body = if items.is_empty() {
         vec!["-# *No items to display.*".to_string()]
@@ -378,35 +362,10 @@ pub fn make_list_card(title: &str, items: &[String], options: CardOptions) -> Ca
         }
         vec![fit_lines(&lines, TEXT_DISPLAY_LIMIT)]
     };
-    make_info_card(title, body, options)
-}
-
-/// Empty-state card with an optional suggestion and a default footer.
-pub fn make_empty_card(
-    title: &str,
-    reason: &str,
-    suggestion: Option<&str>,
-    options: CardOptions,
-) -> CardReply {
-    let body = suggestion.map_or_else(
-        || vec![reason.to_string()],
-        |hint| {
-            vec![fit_lines(
-                &[reason.to_string(), String::new(), format!("**Try:** {hint}")],
-                TEXT_DISPLAY_LIMIT,
-            )]
-        },
-    );
-    let mut options = options;
-    if options.footer.is_none() {
-        options.footer = Some("No items to display".to_string());
-    }
-    make_card(
-        CardKind::Info,
-        &format!("\u{1f4ed} {title}"),
-        body,
-        options,
-    )
+    Card::lines(title, body)
+        .kind(CardKind::Info)
+        .options(options)
+        .into_reply()
 }
 
 #[cfg(test)]
@@ -432,5 +391,47 @@ mod tests {
         let out = fit_lines(&lines, 300);
         assert!(out.chars().count() <= 300);
         assert!(out.contains("more item(s)."));
+    }
+
+    #[test]
+    fn oversized_cards_are_clamped() {
+        use crate::panels::{action_row_of, MAX_ACTION_ROWS, MAX_ROW_COMPONENTS};
+        use serenity::all::CreateButton;
+        let rows: Vec<CreateActionRow<'static>> = (0..MAX_ACTION_ROWS + 3)
+            .map(|i| {
+                action_row_of(
+                    (0..MAX_ROW_COMPONENTS + 2)
+                        .map(|j| CreateButton::new(format!("b{i}-{j}")))
+                        .collect(),
+                )
+            })
+            .collect();
+        let card = Card::new("t", "b")
+            .options(CardOptions {
+                action_rows: rows,
+                ..CardOptions::default()
+            })
+            .into_reply();
+        let Ok(json) = serde_json::to_value(&card.components[0]) else {
+            panic!("card serializes");
+        };
+        let rows = json["components"]
+            .as_array()
+            .map_or(0, |components| {
+                components
+                    .iter()
+                    .filter(|component| component["type"] == 1)
+                    .count()
+            });
+        assert_eq!(rows, MAX_ACTION_ROWS);
+    }
+
+    #[test]
+    fn cut_text_is_codepoint_safe() {
+        assert_eq!(cut_text("short", 10), "short");
+        assert_eq!(cut_text("short", 0), "");
+        let cut = cut_text("🦀🦀🦀🦀", 3);
+        assert_eq!(cut.chars().count(), 3);
+        assert!(cut.ends_with('\u{2026}'));
     }
 }

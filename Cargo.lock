@@ -2374,6 +2374,7 @@ dependencies = [
  "mimalloc",
  "poise",
  "rustls",
+ "serde_json",
  "serenity",
  "sysinfo",
  "tokio",
@@ -2486,6 +2487,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serenity",
+ "tracing",
 ]
 
 [[package]]

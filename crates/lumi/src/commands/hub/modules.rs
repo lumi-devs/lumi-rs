@@ -1,23 +1,28 @@
 use poise::serenity_prelude as serenity;
+use serde_json::Value;
 use serenity::all::{
-    ButtonStyle, ComponentInteractionDataKind, CreateActionRow, CreateButton,
+    ButtonStyle, ComponentInteractionDataKind, CreateActionRow, CreateButton, CreateInputText,
+    CreateLabel, CreateModal, CreateModalComponent, InputTextStyle, ModalInteraction,
 };
 
 use lumi_kernel::bot::Error;
 use lumi_kernel::module::{ConfigField, ConfigFieldKind};
 use lumi_kernel::module_state::{self, FeatureRow};
 use lumi_kernel::Services;
-use lumi_ui::panels::{action_row_of, setting_row, string_select};
-use lumi_ui::{format_page_footer, Card, CardKind, CardOptions, CardReply, PageFooterHint};
+use lumi_ui::panels::{
+    action_row_of, back_button, channel_select, pagination_row, role_select, role_select_multi,
+    setting_row, string_select, user_select,
+};
+use lumi_ui::{cut_text, format_page_footer, Card, CardKind, CardOptions, CardReply};
 
 use super::{cid, tab_row, GuildCtx, HubId, HubOutcome, HubView};
 
 const FEATURES_PER_PAGE: usize = 8;
 const FIELDS_PER_PAGE: usize = 8;
 const MAX_SELECT_OPTIONS: usize = 25;
-/// Separator between field key and value inside a select option value; Discord
-/// option values are opaque strings, so this keeps both halves in one value.
-const SELECT_SEP: char = '\u{1f}';
+const MAX_MULTI_VALUES: u8 = 25;
+/// Custom-id prefix of the field-edit modal (`lumi:cfgmodal:<module>:<key>:<section>`).
+const MODAL_PREFIX: &str = "cfgmodal";
 
 /// The feature/module list.
 pub async fn list_card(
@@ -54,7 +59,7 @@ pub async fn list_card(
         .iter()
         .map(|row| {
             CreateButton::new(cid(&["cfg", "toggle", row.name.as_str()]))
-                .label(cut(&row.display_name, 80))
+                .label(cut_text(&row.display_name, 80))
                 .style(if row.enabled {
                     ButtonStyle::Success
                 } else {
@@ -65,11 +70,9 @@ pub async fn list_card(
     for chunk in toggles.chunks(5) {
         action_rows.push(action_row_of(chunk.to_vec()));
     }
-    if let Some(pagination) = lumi_ui::panels::pagination_row(
-        &cid(&["cfg", "list"]),
-        safe_page,
-        total_pages,
-    ) {
+    if let Some(pagination) =
+        pagination_row(&cid(&["cfg", "list"]), safe_page, total_pages)
+    {
         action_rows.push(pagination);
     }
     action_rows.push(tab_row(HubView::Modules));
@@ -84,21 +87,21 @@ pub async fn list_card(
         format_page_footer(
             safe_page,
             total_pages,
-            Some(PageFooterHint::Hint(
-                "Open a module to configure it.".to_string(),
-            )),
+            Some("Open a module to configure it."),
         )
     } else {
         "Open a module to configure it.".to_string()
     };
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Hub".to_string(), "Modules".to_string()];
-    opts.thumbnail_url = guild.icon.clone();
-    opts.footer = Some(footer);
-    opts.separator_above_action_rows = true;
-    opts.sections = sections;
-    opts.action_rows = action_rows;
+    let opts = CardOptions {
+        breadcrumbs: vec!["Hub".to_string(), "Modules".to_string()],
+        thumbnail_url: guild.icon.clone(),
+        footer: Some(footer),
+        separator_above_action_rows: true,
+        sections,
+        action_rows,
+        ..CardOptions::default()
+    };
 
     let _ = user_id;
     Ok(Card::lines("⚙️ Modules", body)
@@ -149,14 +152,6 @@ fn sections(schema: &[ConfigField]) -> Vec<Section<'_>> {
     out
 }
 
-/// The section index containing `key`, so a field edit reopens its own section.
-fn section_of(schema: &[ConfigField], key: &str) -> usize {
-    sections(schema)
-        .iter()
-        .position(|section| section.fields.iter().any(|field| field.key == key))
-        .unwrap_or(0)
-}
-
 /// Picker options: one per section, labelled with its setting count.
 fn section_options(sections: &[Section<'_>], current: usize) -> Vec<(String, String)> {
     sections
@@ -167,15 +162,47 @@ fn section_options(sections: &[Section<'_>], current: usize) -> Vec<(String, Str
             let name = section.name.as_deref().unwrap_or("Settings");
             let marker = if index == current { "\u{2022} " } else { "" };
             (
-                cut(&format!("{marker}{name} ({} setting(s))", section.fields.len()), 100),
+                cut_text(
+                    &format!("{marker}{name} ({} setting(s))", section.fields.len()),
+                    100,
+                ),
                 index.to_string(),
             )
         })
         .collect()
 }
 
-/// A module's config panel, one schema section at a time: values plus inline
-/// editors for enums/booleans, a section picker and prev/next arrows.
+/// A field's status glyph: check/cross for booleans, dot otherwise.
+fn status_glyph(field: &ConfigField, value: Option<&Value>) -> &'static str {
+    if matches!(&field.kind, ConfigFieldKind::Boolean) {
+        let on = value
+            .and_then(Value::as_bool)
+            .or_else(|| field.default.as_bool())
+            .unwrap_or(false);
+        return if on { "✅" } else { "❌" };
+    }
+    if value.is_some_and(|value| !value.is_null()) {
+        "🟢"
+    } else {
+        "🔴"
+    }
+}
+
+/// One `glyph **Label** = value` line, plus the description when present.
+fn field_lines(field: &ConfigField, value: Option<&Value>) -> String {
+    let rendered = module_state::format_field_value(field, value);
+    let line = format!("{} **{}** = {rendered}", status_glyph(field, value), field.label);
+    if field.description.is_empty() {
+        line
+    } else {
+        format!("{line}\n-# {}", field.description)
+    }
+}
+
+/// A module's config panel, one schema section at a time.
+///
+/// Values with per-field editors (inline toggle for booleans, an edit view for every other kind), a
+/// section picker, a module toggle, reset and prev/next arrows.
 pub async fn config_card(
     services: &Services,
     guild: &GuildCtx,
@@ -190,42 +217,65 @@ pub async fn config_card(
     let meta = module.metadata();
     let schema = module.config_schema();
     let overrides = module_state::get_config(&services.db, guild.id, module_name).await;
+    let enabled = module_state::is_enabled(&services.db, guild.id, module_name).await;
 
     let sections = sections(&schema);
     let total = sections.len().max(1);
     let safe = section.min(total - 1);
-    let current = &sections[safe];
+    let current = sections.get(safe);
     let multi = total > 1;
 
     let mut body = Vec::new();
-    if multi {
-        if let Some(name) = &current.name {
-            body.push(format!("-# Section **{name}** · {}/{}", safe + 1, total));
-        }
-    }
-    if current.fields.is_empty() {
-        body.push("-# *No configurable fields.*".to_string());
-    } else {
-        for &field in &current.fields {
-            let value = module_state::format_field_value(field, overrides.get(&field.key));
-            let line = format!("**{}** = {value}", field.label);
-            if field.description.is_empty() {
-                body.push(line);
-            } else {
-                body.push(format!("{line}\n-# {}", field.description));
-            }
-        }
+    body.push(format!("**Status:** {}", if enabled { "🟢 `ENABLED`" } else { "🔴 `DISABLED`" }));
+    if multi
+        && let Some(name) = current.and_then(|s| s.name.as_deref())
+    {
+        body.push(format!("-# Section **{name}** · {}/{}", safe + 1, total));
     }
 
-    let edit_options = edit_options(&current.fields);
-    let mut action_rows: Vec<CreateActionRow<'static>> = Vec::new();
-    if !edit_options.is_empty() {
-        action_rows.push(string_select(
-            cid(&["cfg", "field", module_name]),
-            "Edit a setting…",
-            edit_options,
-        ));
+    let fields: &[&ConfigField] = current.map_or(&[], |s| s.fields.as_slice());
+    if fields.is_empty() {
+        body.push("-# *No configurable fields.*".to_string());
     }
+
+    let mut sections_ui = Vec::with_capacity(fields.len());
+    for &field in fields {
+        let value = overrides.get(&field.key);
+        let text = field_lines(field, value);
+        let accessory = if matches!(field.kind, ConfigFieldKind::Boolean) {
+            let on = value
+                .and_then(Value::as_bool)
+                .or_else(|| field.default.as_bool())
+                .unwrap_or(false);
+            CreateButton::new(cid(&[
+                "cfg",
+                "bool",
+                module_name,
+                field.key.as_str(),
+                &safe.to_string(),
+            ]))
+            .label(if on { "✅" } else { "❌" })
+            .style(if on {
+                ButtonStyle::Success
+            } else {
+                ButtonStyle::Secondary
+            })
+        } else {
+            CreateButton::new(cid(&[
+                "cfg",
+                "fedit",
+                module_name,
+                field.key.as_str(),
+                &safe.to_string(),
+            ]))
+            .label("Edit")
+            .emoji('✏')
+            .style(ButtonStyle::Secondary)
+        };
+        sections_ui.push(setting_row(text, accessory));
+    }
+
+    let mut action_rows: Vec<CreateActionRow<'static>> = Vec::new();
     if multi {
         action_rows.push(string_select(
             cid(&["cfg", "section", module_name]),
@@ -234,102 +284,277 @@ pub async fn config_card(
         ));
     }
     action_rows.push(action_row_of(vec![
+        CreateButton::new(cid(&["cfg", "toggle", module_name]))
+            .label(if enabled { "Disable Module" } else { "Enable Module" })
+            .emoji(if enabled { '❌' } else { '✅' })
+            .style(if enabled {
+                ButtonStyle::Danger
+            } else {
+                ButtonStyle::Success
+            }),
         CreateButton::new(cid(&["cfg", "reset", module_name]))
-            .label("Reset Override")
+            .label("Reset")
             .emoji('🗑')
+            .style(ButtonStyle::Secondary),
+        CreateButton::new(cid(&["cfg", "hist", module_name, &safe.to_string()]))
+            .label("History")
+            .emoji('🕐')
             .style(ButtonStyle::Secondary),
         CreateButton::new(cid(&["cfg", "back"]))
             .label("Back")
             .emoji('⬅')
             .style(ButtonStyle::Secondary),
     ]));
-    if let Some(pagination) = lumi_ui::panels::pagination_row(
-        &cid(&["cfg", "page", module_name]),
-        safe,
-        total,
-    ) {
+    if let Some(pagination) =
+        pagination_row(&cid(&["cfg", "page", module_name]), safe, total)
+    {
         action_rows.push(pagination);
     }
     action_rows.push(tab_row(HubView::Modules));
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Hub".to_string(), "Modules".to_string()];
-    opts.subtitle = Some(meta.description.clone());
-    opts.separator_above_action_rows = true;
-    opts.action_rows = action_rows;
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Modules".to_string(),
+            meta.display_name.clone(),
+        ],
+        subtitle: Some(meta.description.clone()),
+        separator_above_action_rows: true,
+        sections: sections_ui,
+        action_rows,
+        ..CardOptions::default()
+    };
+
+    Ok(Card::lines(format!("⚙️ {}", meta.display_name), body)
+        .kind(if enabled {
+            CardKind::Primary
+        } else {
+            CardKind::Warning
+        })
+        .options(opts)
+        .into_reply())
+}
+
+/// A single field's editor: a native select for enums/roles/users/channels, or a
+/// modal button for free-form text.
+async fn field_edit_card(
+    services: &Services,
+    guild: &GuildCtx,
+    module_name: &str,
+    key: &str,
+    section: usize,
+) -> Result<CardReply, Error> {
+    let Some(module) = services.registry.get(module_name) else {
+        return Ok(Card::error("Unknown Module", format!("No module named `{module_name}`.")).into_reply());
+    };
+    let meta = module.metadata();
+    let schema = module.config_schema();
+    let Some(field) = schema.iter().find(|field| field.key == key) else {
+        return Ok(Card::error("Unknown Setting", format!("No setting named `{key}`.")).into_reply());
+    };
+    let overrides = module_state::get_config(&services.db, guild.id, module_name).await;
+    let value = overrides.get(key);
+
+    let section_token = section.to_string();
+    let action_rows: Vec<CreateActionRow<'static>> = match &field.kind {
+        ConfigFieldKind::Enum(choices) => {
+            let options = choices
+                .iter()
+                .take(MAX_SELECT_OPTIONS)
+                .map(|choice| (cut_text(choice, 100), choice.clone()))
+                .collect();
+            vec![string_select(
+                cid(&["cfg", "enum", module_name, key, &section_token]),
+                cut_text(&field.label, 100),
+                options,
+            )]
+        }
+        ConfigFieldKind::Channel => vec![channel_select(
+            cid(&["cfg", "setch", module_name, key, &section_token]),
+            cut_text(&field.label, 100),
+        )],
+        ConfigFieldKind::Role => vec![role_select(
+            cid(&["cfg", "setrole", module_name, key, &section_token]),
+            cut_text(&field.label, 100),
+        )],
+        ConfigFieldKind::RoleArray => vec![role_select_multi(
+            cid(&["cfg", "setrole", module_name, key, &section_token]),
+            cut_text(&field.label, 100),
+            MAX_MULTI_VALUES,
+        )],
+        ConfigFieldKind::User => vec![user_select(
+            cid(&["cfg", "setuser", module_name, key, &section_token]),
+            cut_text(&field.label, 100),
+        )],
+        _ => vec![action_row_of(vec![CreateButton::new(cid(&[
+            "cfg",
+            "modal",
+            module_name,
+            key,
+            &section_token,
+        ]))
+        .label("Enter value…")
+        .emoji('✏')
+        .style(ButtonStyle::Primary)])],
+    };
+
+    let mut rows = action_rows;
+    rows.push(back_button(cid(&[
+        "cfg",
+        "open",
+        module_name,
+        &section_token,
+    ])));
+
+    let body = vec![
+        module_state::format_field_value(field, value),
+        "-# Pick a new value below, or clear the selection to unset.".to_string(),
+    ];
+
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Modules".to_string(),
+            meta.display_name.clone(),
+            field.label.clone(),
+        ],
+        subtitle: if field.description.is_empty() {
+            None
+        } else {
+            Some(field.description.clone())
+        },
+        separator_above_action_rows: true,
+        action_rows: rows,
+        ..CardOptions::default()
+    };
 
     Ok(Card::lines(
-        format!("⚙️ {} Config", meta.display_name),
+        format!("⚙️ {} • {}", meta.display_name, field.label),
         body,
     )
-    .kind(CardKind::Info)
+    .kind(CardKind::Primary)
     .options(opts)
     .into_reply())
 }
 
-/// Select options that set an enum or boolean field directly (no modal/state).
-fn edit_options(fields: &[&ConfigField]) -> Vec<(String, String)> {
-    let mut options = Vec::new();
-    for field in fields {
-        match &field.kind {
-            ConfigFieldKind::Enum(choices) => {
-                for choice in choices {
-                    if options.len() >= MAX_SELECT_OPTIONS {
-                        return options;
-                    }
-                    options.push((
-                        cut(&format!("{}: {}", field.label, choice), 100),
-                        encode(&field.key, choice),
-                    ));
-                }
-            }
-            ConfigFieldKind::Boolean => {
-                if options.len() + 2 > MAX_SELECT_OPTIONS {
-                    return options;
-                }
-                options.push((
-                    cut(&format!("{}: On", field.label), 100),
-                    encode(&field.key, "true"),
-                ));
-                options.push((
-                    cut(&format!("{}: Off", field.label), 100),
-                    encode(&field.key, "false"),
-                ));
-            }
-            _ => {}
-        }
-    }
-    options
+/// Config change history for a module.
+fn history_card(
+    services: &Services,
+    module_name: &str,
+    section: usize,
+) -> CardReply {
+    let Some(module) = services.registry.get(module_name) else {
+        return Card::error("Unknown Module", format!("No module named `{module_name}`.")).into_reply();
+    };
+    let meta = module.metadata();
+    let body = vec![
+        "-# Recent configuration changes recorded for this server.".to_string(),
+        "*No changes recorded yet.*".to_string(),
+    ];
+
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Modules".to_string(),
+            meta.display_name.clone(),
+            "History".to_string(),
+        ],
+        separator_above_action_rows: true,
+        action_rows: vec![back_button(cid(&[
+            "cfg",
+            "open",
+            module_name,
+            &section.to_string(),
+        ]))],
+        ..CardOptions::default()
+    };
+
+    Card::lines(format!("🕐 {} • History", meta.display_name), body)
+        .kind(CardKind::Primary)
+        .options(opts)
+        .into_reply()
 }
 
-fn encode(key: &str, value: &str) -> String {
-    format!("{key}{SELECT_SEP}{value}")
+/// Channel and role overrides for a module.
+fn overrides_card(
+    services: &Services,
+    module_name: &str,
+    section: usize,
+) -> CardReply {
+    let Some(module) = services.registry.get(module_name) else {
+        return Card::error("Unknown Module", format!("No module named `{module_name}`.")).into_reply();
+    };
+    let meta = module.metadata();
+    let body = vec![
+        "-# Channel, role, and category specific configuration overrides.".to_string(),
+        "*No channel, role, or user overrides configured.*".to_string(),
+    ];
+
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Modules".to_string(),
+            meta.display_name.clone(),
+            "Overrides".to_string(),
+        ],
+        separator_above_action_rows: true,
+        action_rows: vec![back_button(cid(&[
+            "cfg",
+            "open",
+            module_name,
+            &section.to_string(),
+        ]))],
+        ..CardOptions::default()
+    };
+
+    Card::lines(format!("🛡️ {} • Overrides", meta.display_name), body)
+        .kind(CardKind::Primary)
+        .options(opts)
+        .into_reply()
 }
 
-fn decode(raw: &str) -> Option<(&str, &str)> {
-    raw.split_once(SELECT_SEP)
+fn field_modal(module_name: &str, field: &ConfigField, section: usize) -> CreateModal<'static> {
+    CreateModal::new(
+        cid(&[MODAL_PREFIX, module_name, field.key.as_str(), &section.to_string()]),
+        format!("Set {}", cut_text(&field.label, 45)),
+    )
+    .components(vec![CreateModalComponent::Label(CreateLabel::input_text(
+        cut_text(&field.label, 45),
+        CreateInputText::new(InputTextStyle::Paragraph, "value")
+            .required(false)
+            .max_length(4000)
+            .placeholder(cut_text(&field.description, 100)),
+    ))])
 }
 
-fn select_value(data: &serenity::ComponentInteractionData) -> Option<String> {
+/// The first value from any select menu, as a string.
+fn select_string(data: &serenity::ComponentInteractionData) -> Option<String> {
     match &data.kind {
         ComponentInteractionDataKind::StringSelect { values } => values.first().cloned(),
         _ => None,
     }
 }
 
-fn cut(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
+/// Every selected snowflake id from a user/role/channel select, in order.
+fn select_ids(data: &serenity::ComponentInteractionData) -> Vec<String> {
+    match &data.kind {
+        ComponentInteractionDataKind::UserSelect { values } => {
+            values.iter().map(|id| id.get().to_string()).collect()
+        }
+        ComponentInteractionDataKind::RoleSelect { values } => {
+            values.iter().map(|id| id.get().to_string()).collect()
+        }
+        ComponentInteractionDataKind::ChannelSelect { values } => {
+            values.iter().map(|id| id.get().to_string()).collect()
+        }
+        _ => Vec::new(),
     }
-    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
-    out.push('\u{2026}');
-    out
 }
 
 /// Route a module-list / config interaction.
 ///
 /// `dispatch_ext` in `mod.rs` only forwards the `cfg` action to this module, so
-/// every id is `lumi:cfg:<verb>:<module>[:<arg>]` and the verb is `id.sub()`.
+/// every id is `lumi:cfg:<verb>:<module>[:<arg>]` and the verb is segment 1.
 pub async fn dispatch(
     services: &Services,
     guild: &GuildCtx,
@@ -337,10 +562,10 @@ pub async fn dispatch(
     data: &serenity::ComponentInteractionData,
     user_id: u64,
 ) -> Result<HubOutcome, Error> {
-    let name = id.tail.get(1).map(String::as_str);
-    match id.sub() {
+    let name = id.get(2);
+    match id.get(1) {
         Some("list") => {
-            let page = id.tail.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let page = id.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
             Ok(HubOutcome::Update(
                 list_card(services, guild, page, user_id).await?,
             ))
@@ -359,15 +584,16 @@ pub async fn dispatch(
             let Some(name) = name else {
                 return Ok(HubOutcome::Done);
             };
+            let section = id.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
             Ok(HubOutcome::Update(
-                config_card(services, guild, name, 0).await?,
+                config_card(services, guild, name, section).await?,
             ))
         }
         Some("page") => {
             let Some(name) = name else {
                 return Ok(HubOutcome::Done);
             };
-            let page = id.tail.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let page = id.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
             Ok(HubOutcome::Update(
                 config_card(services, guild, name, page).await?,
             ))
@@ -376,36 +602,111 @@ pub async fn dispatch(
             let Some(name) = name else {
                 return Ok(HubOutcome::Done);
             };
-            let Some(section) = select_value(data).and_then(|value| value.parse().ok()) else {
+            let Some(section) = select_string(data).and_then(|value| value.parse().ok()) else {
                 return Ok(HubOutcome::Done);
             };
             Ok(HubOutcome::Update(
                 config_card(services, guild, name, section).await?,
             ))
         }
-        Some("field") => {
-            let Some(name) = name else {
+        Some("bool") => {
+            let (Some(name), Some(key)) = (name, id.get(3)) else {
                 return Ok(HubOutcome::Done);
             };
-            let Some(selected) = select_value(data) else {
+            let section = id.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let Some(module) = services.registry.get(name) else {
                 return Ok(HubOutcome::Done);
             };
-            let Some((key, raw)) = decode(&selected) else {
+            let schema = module.config_schema();
+            let Some(field) = schema.iter().find(|field| field.key == key) else {
+                return Ok(HubOutcome::Done);
+            };
+            let current = module_state::get_config(&services.db, guild.id, name)
+                .await
+                .get(key)
+                .and_then(Value::as_bool)
+                .or_else(|| field.default.as_bool())
+                .unwrap_or(false);
+            module_state::set_config_field(
+                &services.db,
+                guild.id,
+                name,
+                key,
+                Value::Bool(!current),
+            )
+            .await?;
+            Ok(HubOutcome::Update(
+                config_card(services, guild, name, section).await?,
+            ))
+        }
+        Some("fedit") => {
+            let (Some(name), Some(key)) = (name, id.get(3)) else {
+                return Ok(HubOutcome::Done);
+            };
+            let section = id.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+            Ok(HubOutcome::Update(
+                field_edit_card(services, guild, name, key, section).await?,
+            ))
+        }
+        Some("enum") => {
+            let (Some(name), Some(key)) = (name, id.get(3)) else {
+                return Ok(HubOutcome::Done);
+            };
+            let section = id.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let Some(choice) = select_string(data) else {
                 return Ok(HubOutcome::Done);
             };
             let Some(module) = services.registry.get(name) else {
                 return Ok(HubOutcome::Done);
             };
             let schema = module.config_schema();
-            let Some(field) = schema.iter().find(|f| f.key == key) else {
+            let Some(field) = schema.iter().find(|field| field.key == key) else {
                 return Ok(HubOutcome::Done);
             };
-            let section = section_of(&schema, key);
-            module_state::set_config_value(&services.db, guild.id, name, key, raw, &field.kind)
-                .await?;
+            module_state::set_config_value(
+                &services.db,
+                guild.id,
+                name,
+                key,
+                &choice,
+                &field.kind,
+            )
+            .await?;
             Ok(HubOutcome::Update(
                 config_card(services, guild, name, section).await?,
             ))
+        }
+        Some("setch" | "setrole" | "setuser") => {
+            let (Some(name), Some(key)) = (name, id.get(3)) else {
+                return Ok(HubOutcome::Done);
+            };
+            let section = id.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let ids = select_ids(data);
+            let value = match ids.first() {
+                None => Value::Null,
+                Some(_) if is_role_array(services, name, key) => Value::Array(
+                    ids.iter().map(|id| Value::String(id.clone())).collect(),
+                ),
+                Some(first) => Value::String(first.clone()),
+            };
+            module_state::set_config_field(&services.db, guild.id, name, key, value).await?;
+            Ok(HubOutcome::Update(
+                config_card(services, guild, name, section).await?,
+            ))
+        }
+        Some("modal") => {
+            let (Some(name), Some(key)) = (name, id.get(3)) else {
+                return Ok(HubOutcome::Done);
+            };
+            let section = id.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let Some(module) = services.registry.get(name) else {
+                return Ok(HubOutcome::Done);
+            };
+            let schema = module.config_schema();
+            let Some(field) = schema.iter().find(|field| field.key == key) else {
+                return Ok(HubOutcome::Done);
+            };
+            Ok(HubOutcome::Modal(field_modal(name, field, section)))
         }
         Some("reset") => {
             let Some(name) = name else {
@@ -416,9 +717,98 @@ pub async fn dispatch(
                 config_card(services, guild, name, 0).await?,
             ))
         }
+        Some("hist") => {
+            let Some(name) = name else {
+                return Ok(HubOutcome::Done);
+            };
+            let section = id.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+            Ok(HubOutcome::Update(history_card(services, name, section)))
+        }
+        Some("ovr") => {
+            let Some(name) = name else {
+                return Ok(HubOutcome::Done);
+            };
+            let section = id.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+            Ok(HubOutcome::Update(overrides_card(services, name, section)))
+        }
         Some("back") => Ok(HubOutcome::Update(
             list_card(services, guild, 0, user_id).await?,
         )),
         _ => Ok(HubOutcome::Done),
+    }
+}
+
+/// Whether the field at `key` is a multi-role array (drives single vs array IDs).
+fn is_role_array(services: &Services, module_name: &str, key: &str) -> bool {
+    services
+        .registry
+        .get(module_name)
+        .is_some_and(|module| {
+            module
+                .config_schema()
+                .iter()
+                .any(|field| field.key == key && matches!(field.kind, ConfigFieldKind::RoleArray))
+        })
+}
+
+/// Handle a `lumi:cfgmodal:<module>:<key>:<section>` submission.
+pub async fn handle_modal(
+    services: &Services,
+    guild: &GuildCtx,
+    modal: &ModalInteraction,
+) -> Result<HubOutcome, Error> {
+    let Some(id) = HubId::parse(&modal.data.custom_id, super::PREFIX) else {
+        return Ok(HubOutcome::Done);
+    };
+    if id.get(0) != Some(MODAL_PREFIX) {
+        return Ok(HubOutcome::Done);
+    }
+    let (Some(name), Some(key)) = (id.get(1), id.get(2)) else {
+        return Ok(HubOutcome::Done);
+    };
+    let section = id.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let Some(module) = services.registry.get(name) else {
+        return Ok(HubOutcome::Done);
+    };
+    let schema = module.config_schema();
+    let Some(field) = schema.iter().find(|field| field.key == key) else {
+        return Ok(HubOutcome::Done);
+    };
+    let raw = super::read_input(&modal.data.components, "value").unwrap_or_default();
+    let Some(value) = parse_modal_value(&raw, &field.kind) else {
+        return Ok(HubOutcome::Ephemeral(
+            Card::error(
+                "Invalid Value",
+                format!("`{}` could not be parsed as {}.", cut_text(&raw, 120), field.label),
+            )
+            .into_reply(),
+        ));
+    };
+    module_state::set_config_field(&services.db, guild.id, name, key, value).await?;
+    Ok(HubOutcome::Update(
+        config_card(services, guild, name, section).await?,
+    ))
+}
+
+/// Convert a modal's text into the field's JSON type, or `None` if invalid.
+fn parse_modal_value(raw: &str, kind: &ConfigFieldKind) -> Option<Value> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Some(Value::Null);
+    }
+    match kind {
+        ConfigFieldKind::Integer => trimmed.parse::<i64>().ok().map(Value::from),
+        ConfigFieldKind::StringArray => Some(Value::Array(
+            trimmed
+                .split(['\n', ','])
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| Value::String(item.to_string()))
+                .collect(),
+        )),
+        ConfigFieldKind::ObjectArray => {
+            serde_json::from_str::<Value>(trimmed).ok().filter(Value::is_array)
+        }
+        _ => Some(Value::String(raw.to_string())),
     }
 }

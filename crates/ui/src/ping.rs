@@ -1,5 +1,11 @@
 //! Faithful port of lumi's `src/modules/onboarding/ui/PingCards.ts`.
 
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+
 use serenity::all::{
     ButtonStyle, CreateActionRow, CreateButton, CreateComponent, CreateSection,
     CreateSectionComponent, SeparatorSpacingSize,
@@ -261,6 +267,7 @@ fn overview_nav_row(user_id: u64, page: usize, total: usize) -> CreateActionRow<
 
 #[must_use]
 pub fn build_overview_card_paged(data: &PingData, page: usize, _user_id: u64) -> CardReply {
+    const PAGE_SIZE: usize = 5;
     let fallback = [ShardInfo {
         id: 0,
         ping: data.ws_ping,
@@ -273,10 +280,11 @@ pub fn build_overview_card_paged(data: &PingData, page: usize, _user_id: u64) ->
         &data.shards
     };
 
-    const PAGE_SIZE: usize = 5;
     let total_pages = shards.len().div_ceil(PAGE_SIZE).max(1);
     let page = page.min(total_pages - 1);
-    let page_shards = &shards[page * PAGE_SIZE..((page + 1) * PAGE_SIZE).min(shards.len())];
+    let start = page.saturating_mul(PAGE_SIZE).min(shards.len());
+    let end = start.saturating_add(PAGE_SIZE).min(shards.len());
+    let page_shards = &shards[start..end];
 
     let ram_mb = data.rss as f64 / 1024.0 / 1024.0;
     let ram_pct = if data.ram_total > 0 {

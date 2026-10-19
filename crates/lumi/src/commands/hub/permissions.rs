@@ -7,7 +7,7 @@ use lumi_kernel::Services;
 use lumi_ui::panels::{
     action_row_of, back_button, pagination_row, role_select, setting_row, string_select, user_select,
 };
-use lumi_ui::{format_page_footer, Card, CardKind, CardOptions, CardReply, PageFooterHint};
+use lumi_ui::{format_page_footer, Card, CardKind, CardOptions, CardReply};
 
 use super::{cid, tab_row, GuildCtx, HubId, HubOutcome, HubView};
 
@@ -25,10 +25,10 @@ pub async fn list_card(
     let assignments = lumi_db::list_assignments(&services.db, guild.id).await?;
     let total = page_count(assignments.len(), PERMS_PER_PAGE);
     let safe_page = page.min(total - 1);
-    let start = safe_page * PERMS_PER_PAGE;
-    let end = (start + PERMS_PER_PAGE).min(assignments.len());
+    let start = safe_page.saturating_mul(PERMS_PER_PAGE).min(assignments.len());
+    let end = start.saturating_add(PERMS_PER_PAGE).min(assignments.len());
 
-    let sections = assignments[start.min(assignments.len())..end]
+    let sections = assignments[start..end]
         .iter()
         .map(|a| {
             let target_type = target_str(a.target_type);
@@ -76,14 +76,8 @@ pub async fn list_card(
     action_rows.push(tab_row(HubView::Permissions));
 
     let footer = if total > 1 {
-        format_page_footer(
-            safe_page,
-            total,
-            Some(PageFooterHint::Hint(format!(
-                "{} assignment(s)",
-                assignments.len()
-            ))),
-        )
+        let hint = format!("{} assignment(s)", assignments.len());
+        format_page_footer(safe_page, total, Some(&hint))
     } else {
         format!("{} assignment(s)", assignments.len())
     };
@@ -260,13 +254,13 @@ async fn explain_picker_card(
     let names = node_names(services, guild).await?;
     let total = page_count(names.len(), EXPLAIN_NODES_PER_PAGE);
     let safe_page = node_page.min(total - 1);
-    let start = safe_page * EXPLAIN_NODES_PER_PAGE;
-    let end = (start + EXPLAIN_NODES_PER_PAGE).min(names.len());
+    let start = safe_page.saturating_mul(EXPLAIN_NODES_PER_PAGE).min(names.len());
+    let end = start.saturating_add(EXPLAIN_NODES_PER_PAGE).min(names.len());
 
     let mut action_rows = vec![user_select(cid(&["permexplainuser"]), "Pick a member…")];
     if let Some(user_id) = subject {
         let user_token = user_id.to_string();
-        let shown = &names[start.min(names.len())..end];
+        let shown = &names[start..end];
         if !shown.is_empty() {
             let options = shown.iter().map(|n| (n.clone(), n.clone())).collect();
             action_rows.push(string_select(
@@ -376,25 +370,22 @@ pub async fn dispatch(
     data: &serenity::ComponentInteractionData,
     user_id: u64,
 ) -> Result<HubOutcome, Error> {
-    match id.action.as_str() {
+    match id.head().unwrap_or_default() {
         "permdel" => {
-            if let Some((permit_id, target_type, target_id)) = id.sub().and_then(parse_target) {
+            if let Some((permit_id, target_type, target_id)) = id.get(1).and_then(parse_target) {
                 lumi_db::unassign_permit(&services.db, guild.id, permit_id, target_type, &target_id)
                     .await?;
             }
             Ok(HubOutcome::Update(list_card(services, guild, 0, user_id).await?))
         }
         "permpage" => Ok(HubOutcome::Update(
-            list_card(services, guild, parse_page(id.sub()), user_id).await?,
+            list_card(services, guild, parse_page(id.get(1)), user_id).await?,
         )),
-        "permorder" => Ok(HubOutcome::Update(
-            order_card(services, guild, parse_page(id.sub())).await?,
-        )),
-        "permorderpage" => Ok(HubOutcome::Update(
-            order_card(services, guild, parse_page(id.sub())).await?,
+        "permorder" | "permorderpage" => Ok(HubOutcome::Update(
+            order_card(services, guild, parse_page(id.get(1))).await?,
         )),
         "permmove" => {
-            let moved = id.sub().and_then(|payload| {
+            let moved = id.get(1).and_then(|payload| {
                 let (permit_id, direction) = payload.split_once('|')?;
                 Some((permit_id.parse::<i32>().ok()?, direction.to_string()))
             });
@@ -414,9 +405,9 @@ pub async fn dispatch(
             explain_picker_card(services, guild, None, 0).await?,
         )),
         "permexplainnodepage" => {
-            let subject = id.sub().and_then(|s| s.parse::<u64>().ok());
+            let subject = id.get(1).and_then(|s| s.parse::<u64>().ok());
             let page = id
-                .tail
+                .segments()
                 .iter()
                 .rev()
                 .find_map(|token| token.parse::<usize>().ok())
@@ -432,7 +423,7 @@ pub async fn dispatch(
             ))
         }
         "permexplainnode" => {
-            let subject = id.sub().and_then(|s| s.parse::<u64>().ok());
+            let subject = id.get(1).and_then(|s| s.parse::<u64>().ok());
             match (subject, first_value(data)) {
                 (Some(subject), Some(node)) => Ok(HubOutcome::Update(
                     explain_card(services, guild, &node, subject).await?,
@@ -442,13 +433,13 @@ pub async fn dispatch(
                 )),
             }
         }
-        "permit" => match id.sub() {
+        "permit" => match id.get(1) {
             Some("grant") => {
-                let kind = parse_kind(&id.rest(1));
+                let kind = parse_kind(&id.tail(2));
                 Ok(HubOutcome::Update(picker_card(services, guild, kind).await?))
             }
             Some("pick") => {
-                let kind = parse_kind(&id.rest(1));
+                let kind = parse_kind(&id.tail(2));
                 let permit = match first_value(data).and_then(|v| v.parse::<i32>().ok()) {
                     Some(permit_id) => lumi_db::get_permit(&services.db, guild.id, permit_id).await?,
                     None => None,
@@ -466,7 +457,7 @@ pub async fn dispatch(
                     _ => PermitTargetType::User,
                 };
                 if let (Some(permit_id), Some(target_id)) = (
-                    id.rest(1).parse::<i32>().ok(),
+                    id.tail(2).parse::<i32>().ok(),
                     first_value(data),
                 ) {
                     lumi_db::assign_permit(&services.db, guild.id, permit_id, target_type, &target_id)
@@ -484,7 +475,7 @@ fn page_count(len: usize, per: usize) -> usize {
     len.div_ceil(per).max(1)
 }
 
-fn kind_str(kind: PermitKind) -> &'static str {
+const fn kind_str(kind: PermitKind) -> &'static str {
     match kind {
         PermitKind::Custom => "custom",
         PermitKind::Enforced => "enforced",
@@ -499,7 +490,7 @@ fn parse_kind(token: &str) -> PermitKind {
     }
 }
 
-fn target_str(target_type: PermitTargetType) -> &'static str {
+const fn target_str(target_type: PermitTargetType) -> &'static str {
     match target_type {
         PermitTargetType::User => "user",
         PermitTargetType::Role => "role",
@@ -507,7 +498,7 @@ fn target_str(target_type: PermitTargetType) -> &'static str {
     }
 }
 
-fn icon(kind: PermitKind) -> &'static str {
+const fn icon(kind: PermitKind) -> &'static str {
     match kind {
         PermitKind::Custom => "✅",
         PermitKind::Enforced => "🛡️",
