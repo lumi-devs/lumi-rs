@@ -1,6 +1,7 @@
-use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
+use lumi_kernel::module::{ConfigField, ConfigFieldKind, Module, ModuleMeta};
 
 pub mod commands;
+pub mod config;
 pub mod store;
 
 #[derive(Debug)]
@@ -25,6 +26,34 @@ impl Module for EconomyModule {
     }
 
     fn config_schema(&self) -> Vec<ConfigField> {
-        Vec::new()
+        vec![
+            ConfigField {
+                key: "currency_name".to_string(),
+                label: "Currency Name".to_string(),
+                description: "What the currency is called (shown after amounts).".to_string(),
+                kind: ConfigFieldKind::String,
+                default: serde_json::json!("credits"),
+                subfields: Vec::new(),
+                group: None,
+            },
+            ConfigField {
+                key: "currency_emoji".to_string(),
+                label: "Currency Emoji".to_string(),
+                description: "Emoji shown before amounts.".to_string(),
+                kind: ConfigFieldKind::String,
+                default: serde_json::json!("🪙"),
+                subfields: Vec::new(),
+                group: None,
+            },
+            ConfigField {
+                key: "bank_name".to_string(),
+                label: "Bank Label".to_string(),
+                description: "What the bank balance is called.".to_string(),
+                kind: ConfigFieldKind::String,
+                default: serde_json::json!("Bank"),
+                subfields: Vec::new(),
+                group: None,
+            },
+        ]
     }
 }

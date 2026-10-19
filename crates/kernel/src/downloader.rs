@@ -510,13 +510,14 @@ impl Downloader {
     }
 
     /// Count repositories whose remote branch is ahead of the local checkout.
-    pub async fn check_for_updates(&self) -> anyhow::Result<u32> {
+    /// Names of tracked repositories that have a pending update.
+    pub async fn check_for_updates_detailed(&self) -> anyhow::Result<Vec<String>> {
         let modules = self.list_installed_modules().await?;
         let repos = self.list_repos().await?;
         let names: HashMap<i32, String> = repos.into_iter().map(|r| (r.id, r.name)).collect();
 
         let mut seen: HashSet<i32> = HashSet::new();
-        let mut pending = 0u32;
+        let mut pending = Vec::new();
         for module in modules {
             let Some(name) = names.get(&module.repo_id) else {
                 continue;
@@ -526,7 +527,7 @@ impl Downloader {
             }
             if let Ok(check) = self.check_repo_update(name).await {
                 if check.ok && check.has_update {
-                    pending += 1;
+                    pending.push(name.clone());
                 }
             }
         }
