@@ -1,21 +1,120 @@
+use std::net::IpAddr;
 use poise::serenity_prelude as serenity;
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind};
+
+/// Check whether an IP address belongs to loopback, private, link-local,
+/// unspecified, or documentation blocks (IPv4 and IPv6).
+fn is_forbidden_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => {
+            ipv4.is_loopback()
+                || ipv4.is_private()
+                || ipv4.is_link_local()
+                || ipv4.is_broadcast()
+                || ipv4.is_unspecified()
+                || ipv4.octets()[0] == 0
+        }
+        IpAddr::V6(ipv6) => {
+            ipv6.is_loopback()
+                || ipv6.is_unspecified()
+                // ULA fc00::/7 (covers fc00::/8 and fd00::/8)
+                || (ipv6.segments()[0] & 0xfe00) == 0xfc00
+                // Link-local fe80::/10
+                || (ipv6.segments()[0] & 0xffc0) == 0xfe80
+                // IPv4-mapped IPv6 (::ffff:0:0/96)
+                || match ipv6.to_ipv4_mapped() {
+                    Some(v4) => is_forbidden_ip(IpAddr::V4(v4)),
+                    None => false,
+                }
+        }
+    }
+}
+
+fn parse_host_port(url_str: &str) -> Option<(&str, u16)> {
+    let (rest, default_port) = if let Some(stripped) = url_str.strip_prefix("https://") {
+        (stripped, 443)
+    } else if let Some(stripped) = url_str.strip_prefix("http://") {
+        (stripped, 80)
+    } else {
+        return None;
+    };
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host_port = authority.split('@').next_back()?;
+    if host_port.starts_with('[') {
+        let end_bracket = host_port.find(']')?;
+        let host = &host_port[1..end_bracket];
+        let remaining = &host_port[end_bracket + 1..];
+        let port = if let Some(p_str) = remaining.strip_prefix(':') {
+            p_str.parse::<u16>().ok()?
+        } else {
+            default_port
+        };
+        Some((host, port))
+    } else if let Some((host, p_str)) = host_port.split_once(':') {
+        let port = p_str.parse::<u16>().ok()?;
+        Some((host, port))
+    } else {
+        Some((host_port, default_port))
+    }
+}
+
+/// Validate clone URLs against SSRF: ensure http(s) scheme and resolve
+/// hostnames, rejecting loopback, link-local, and private ranges in IPv4 and IPv6.
+async fn validate_clone_url(raw: &str) -> Result<(), &'static str> {
+    let (host, port) =
+        parse_host_port(raw).ok_or("Invalid or unsupported URL scheme (must be http/https)")?;
+    if host.is_empty() {
+        return Err("URL contains an empty host");
+    }
+    if host.eq_ignore_ascii_case("localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+        || host.ends_with(".localhost")
+    {
+        return Err("Local and internal hosts are forbidden (SSRF protection)");
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_forbidden_ip(ip) {
+            return Err("Private, loopback, or internal IP addresses are forbidden (SSRF protection)");
+        }
+        return Ok(());
+    }
+
+    match tokio::net::lookup_host((host, port)).await {
+        Ok(addrs) => {
+            let mut resolved_any = false;
+            for addr in addrs {
+                resolved_any = true;
+                if is_forbidden_ip(addr.ip()) {
+                    return Err("Target hostname resolves to a forbidden private/internal IP address");
+                }
+            }
+            if !resolved_any {
+                return Err("Failed to resolve target hostname");
+            }
+            Ok(())
+        }
+        Err(_) => Err("Failed to resolve target hostname"),
+    }
+}
 
 async fn autocomplete_repo<'a>(
     ctx: Context<'a>,
     partial: &'a str,
 ) -> serenity::CreateAutocompleteResponse<'a> {
     let downloader = &ctx.data().downloader;
-    let choices: Vec<serenity::AutocompleteChoice> = if let Ok(repos) = downloader.list_repos().await {
-        repos
+    let choices: Vec<serenity::AutocompleteChoice> = match downloader.list_repos().await {
+        Ok(repos) => repos
             .into_iter()
             .map(|r| r.name)
             .filter(|name| name.to_lowercase().starts_with(&partial.to_lowercase()))
             .map(|name| serenity::AutocompleteChoice::new(name.clone(), name))
-            .collect()
-    } else {
-        Vec::new()
+            .collect(),
+        Err(err) => {
+            tracing::warn!(%err, "repository autocomplete query failed");
+            Vec::new()
+        }
     };
 
     serenity::CreateAutocompleteResponse::new().set_choices(choices)
@@ -46,6 +145,11 @@ pub async fn repo_add(
     #[description = "Git branch (optional)"] branch: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
+    if let Err(err) = validate_clone_url(&url).await {
+        let card = Card::error("Invalid Repository URL", err);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
+    }
     let downloader = &ctx.data().downloader;
     match downloader.add_repo(&url, name.as_deref(), branch.as_deref()).await {
         Ok(repo) => {
@@ -183,7 +287,14 @@ pub async fn download_list(ctx: Context<'_>) -> Result<(), Error> {
                 for m in &modules {
                     let repo_label = match downloader.get_repo_by_id(m.repo_id).await {
                         Ok(Some(r)) => r.name,
-                        _ => format!("repo #{}", m.repo_id),
+                        Ok(None) => {
+                            tracing::warn!(repo_id = m.repo_id, "installed addon references a missing repository");
+                            format!("repo #{}", m.repo_id)
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, repo_id = m.repo_id, "failed to resolve addon repository");
+                            format!("repo #{}", m.repo_id)
+                        }
                     };
                     let ver = m.version.as_deref().unwrap_or("unversioned");
                     lines.push(format!("• **{}** (v{ver}) from `{repo_label}`", m.module_name));
@@ -202,4 +313,64 @@ pub async fn download_list(ctx: Context<'_>) -> Result<(), Error> {
 
 pub fn commands() -> Vec<Command> {
     vec![repo(), download()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_hosts_and_ports_correctly() {
+        assert_eq!(
+            parse_host_port("https://github.com/foo/bar.git"),
+            Some(("github.com", 443))
+        );
+        assert_eq!(
+            parse_host_port("http://example.com:8080/repo.git"),
+            Some(("example.com", 8080))
+        );
+        assert_eq!(
+            parse_host_port("http://[::1]:9090/repo.git"),
+            Some(("::1", 9090))
+        );
+        assert_eq!(
+            parse_host_port("http://[fe80::1]/repo.git"),
+            Some(("fe80::1", 80))
+        );
+        assert_eq!(parse_host_port("ftp://example.com"), None);
+        assert_eq!(parse_host_port("git@github.com:foo/bar.git"), None);
+    }
+
+    #[test]
+    fn blocks_forbidden_ips() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0))));
+
+        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
+        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1))));
+        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 1))));
+        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(0xfd12, 0x3456, 0x789a, 0, 0, 0, 0, 1))));
+        assert!(is_forbidden_ip(IpAddr::V6(Ipv4Addr::new(127, 0, 0, 1).to_ipv6_mapped())));
+        assert!(is_forbidden_ip(IpAddr::V6(Ipv4Addr::new(192, 168, 1, 1).to_ipv6_mapped())));
+
+        assert!(!is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+        assert!(!is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
+        assert!(!is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111))));
+    }
+
+    #[tokio::test]
+    async fn validates_clone_urls_against_ssrf() {
+        assert!(validate_clone_url("https://127.0.0.1/test.git").await.is_err());
+        assert!(validate_clone_url("http://localhost/test.git").await.is_err());
+        assert!(validate_clone_url("http://internal.service.local/test.git").await.is_err());
+        assert!(validate_clone_url("http://[::1]/test.git").await.is_err());
+        assert!(validate_clone_url("file:///etc/passwd").await.is_err());
+    }
 }

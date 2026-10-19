@@ -1,7 +1,6 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use std::sync::Arc;
 use anyhow::Result;
 use clap::Parser;
 
@@ -68,26 +67,10 @@ async fn main() -> Result<()> {
 
 async fn start_api(cfg: lumi_kernel::Config) -> Result<()> {
     let addr = format!("0.0.0.0:{}", cfg.rpc_port).parse()?;
-    let db = lumi_db::connect(&cfg.database_url).await?;
-    let cache = Arc::new(lumi_kernel::Cache::connect(&cfg.redis_url).await?);
-    let permits = Arc::new(lumi_kernel::PermitResolver::load(&db).await?);
-    let registry = lumi_kernel::ModuleRegistry::new();
-    let security = Arc::new(lumi_kernel::SecurityManager::new(db.clone()));
-    let downloader = Arc::new(lumi_kernel::Downloader::new(
-        db.clone(),
-        std::path::PathBuf::from(&cfg.custom_dir),
-    ));
-    let services = Arc::new(lumi_kernel::Services {
-        cfg: cfg.clone(),
-        db,
-        cache,
-        permits,
-        registry,
-        security,
-        downloader,
-    });
+    let token = cfg.rpc_token.clone();
+    let services = lumi::runtime::services(cfg).await?;
     tracing::info!(addr = %addr, "starting HTTP/RPC API server");
-    lumi_api::serve(addr, cfg.rpc_token, services).await?;
+    lumi_api::serve(addr, token, services).await?;
     Ok(())
 }
 
@@ -96,7 +79,7 @@ async fn start_gateway(cfg: lumi_kernel::Config) -> Result<()> {
     let shutdown_trigger = client.shard_manager.get_shutdown_trigger();
 
     tokio::spawn(async move {
-        shutdown_signal().await;
+        lumi::runtime::shutdown_signal().await;
         tracing::info!("shutdown signal received, closing gateway shards");
         shutdown_trigger();
     });
@@ -111,16 +94,16 @@ async fn start_worker(cfg: lumi_kernel::Config) -> Result<()> {
     let _db = lumi_db::connect(&cfg.database_url).await?;
 
     // Worker background loop listening on Redis stream/pubsub
-    let shutdown = shutdown_signal();
+    let shutdown = lumi::runtime::shutdown_signal();
     tokio::pin!(shutdown);
 
     loop {
         tokio::select! {
-            _ = &mut shutdown => {
+            () = &mut shutdown => {
                 tracing::info!("worker received shutdown signal, draining jobs");
                 break;
             }
-            _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
+            () = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
                 // Background worker iteration (e.g. invalidate expired caches, process queues)
             }
         }
@@ -132,13 +115,13 @@ async fn start_scheduler(cfg: lumi_kernel::Config) -> Result<()> {
     tracing::info!("starting Lumi scheduler cron runner");
     let _db = lumi_db::connect(&cfg.database_url).await?;
 
-    let shutdown = shutdown_signal();
+    let shutdown = lumi::runtime::shutdown_signal();
     tokio::pin!(shutdown);
 
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
     loop {
         tokio::select! {
-            _ = &mut shutdown => {
+            () = &mut shutdown => {
                 tracing::info!("scheduler received shutdown signal");
                 break;
             }
@@ -156,35 +139,4 @@ fn init_tracing() {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,lumi=debug"));
     fmt().with_env_filter(filter).init();
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        if let Err(err) = tokio::signal::ctrl_c().await {
-            tracing::error!(error = %err, "failed to register ctrl_c handler");
-            std::future::pending::<()>().await;
-        }
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        use tokio::signal::unix::{signal, SignalKind};
-        match signal(SignalKind::terminate()) {
-            Ok(mut sig) => {
-                sig.recv().await;
-            }
-            Err(err) => {
-                tracing::error!(error = %err, "failed to register sigterm handler");
-                std::future::pending::<()>().await;
-            }
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
-    }
 }

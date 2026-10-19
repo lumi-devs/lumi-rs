@@ -8,6 +8,8 @@ use serenity::all::{
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind};
 
+use crate::commands::guild_id;
+
 /// Toggle the `INVITES_DISABLED` guild feature. Returns whether the change
 /// applied so callers can record the real invite state.
 async fn set_invites_disabled(ctx: Context<'_>, guild_id: serenity::GuildId, disabled: bool) -> bool {
@@ -46,7 +48,7 @@ pub async fn panic(ctx: Context<'_>) -> Result<(), Error> {
 
 async fn panic_status_action(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
+    let guild_id = guild_id(ctx)?;
     let sec = &ctx.data().security;
 
     let current = sec.get_panic_status(&guild_id.to_string()).await?;
@@ -54,8 +56,9 @@ async fn panic_status_action(ctx: Context<'_>) -> Result<(), Error> {
     let card = if let Some(st) = current {
         let started_str = st
             .started_at
-            .map(|t| format!("<t:{}:F> (<t:{}:R>)", t.timestamp(), t.timestamp()))
-            .unwrap_or_else(|| "Unknown".to_string());
+            .map_or_else(|| "Unknown".to_string(), |t| {
+                format!("<t:{}:F> (<t:{}:R>)", t.timestamp(), t.timestamp())
+            });
 
         let lines = vec![
             "**Status**: 🚨 Lockdown Active".to_string(),
@@ -82,24 +85,23 @@ async fn panic_status_action(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(slash_command, prefix_command, rename = "on", guild_only, default_member_permissions = "ADMINISTRATOR")]
 pub async fn on(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
+    let guild_id = guild_id(ctx)?;
     let actor_id = ctx.author().id;
     let sec = &ctx.data().security;
 
-    if let Some(existing) = sec.get_panic_status(&guild_id.to_string()).await? {
-        if existing.active {
-            let started_fmt = existing
-                .started_at
-                .map(|t| format!("<t:{}:R>", t.timestamp()))
-                .unwrap_or_else(|| "previously".to_string());
-            let card = Card::new(
-                "Panic Mode Already Active",
-                format!("Panic mode was already triggered {started_fmt} by <@{}>.", existing.actor_id.unwrap_or_default()),
-            )
-            .kind(CardKind::Warning);
-            ctx.send(card.into_reply().reply()).await?;
-            return Ok(());
-        }
+    if let Some(existing) = sec.get_panic_status(&guild_id.to_string()).await?
+        && existing.active
+    {
+        let started_fmt = existing
+            .started_at
+            .map_or_else(|| "previously".to_string(), |t| format!("<t:{}:R>", t.timestamp()));
+        let card = Card::new(
+            "Panic Mode Already Active",
+            format!("Panic mode was already triggered {started_fmt} by <@{}>.", existing.actor_id.unwrap_or_default()),
+        )
+        .kind(CardKind::Warning);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
     }
 
     let channels = guild_id.channels(ctx.http()).await?;
@@ -143,7 +145,7 @@ pub async fn on(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(slash_command, prefix_command, rename = "off", guild_only, default_member_permissions = "ADMINISTRATOR")]
 pub async fn off(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
+    let guild_id = guild_id(ctx)?;
     let sec = &ctx.data().security;
 
     let prior_status = sec.deactivate_panic(&guild_id.to_string()).await?;

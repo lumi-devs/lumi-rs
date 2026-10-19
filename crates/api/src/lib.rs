@@ -1,7 +1,7 @@
 //! RPC/dashboard HTTP surface (axum): health, Prometheus metrics, and typed action dispatch.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -10,7 +10,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
-use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tower_governor::GovernorLayer;
@@ -19,24 +18,23 @@ use tower_governor::governor::GovernorConfigBuilder;
 use lumi_kernel::services::Services;
 use lumi_kernel::Result;
 
-static PROMETHEUS: OnceCell<PrometheusHandle> = OnceCell::new();
+static PROMETHEUS: LazyLock<Option<PrometheusHandle>> =
+    LazyLock::new(|| match PrometheusBuilder::new().install_recorder() {
+        Ok(handle) => Some(handle),
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to install prometheus recorder");
+            None
+        }
+    });
 
 /// Install the global Prometheus recorder. Idempotent.
 pub fn init_metrics() {
-    if PROMETHEUS.get().is_some() {
-        return;
-    }
-    match PrometheusBuilder::new().install_recorder() {
-        Ok(handle) => {
-            let _ = PROMETHEUS.set(handle);
-        }
-        Err(err) => tracing::warn!(error = %err, "failed to install prometheus recorder"),
-    }
+    LazyLock::force(&PROMETHEUS);
 }
 
 fn render_metrics() -> String {
     PROMETHEUS
-        .get()
+        .as_ref()
         .map_or_else(String::new, PrometheusHandle::render)
 }
 
@@ -146,23 +144,26 @@ async fn action(
             }))
         }
         "security.panic.status" => {
-            if let Some(payload) = req.payload {
-                if let Some(guild_id) = payload.get("guild_id").and_then(|v| v.as_str()) {
-                    match state.services.security.get_panic_status(guild_id).await {
-                        Ok(st) => {
-                            return (StatusCode::OK, Json(ActionResponse {
-                                success: true,
-                                data: Some(json!({ "panic": st })),
-                                error: None,
-                            }));
-                        }
-                        Err(e) => {
-                            return (StatusCode::INTERNAL_SERVER_ERROR, Json(ActionResponse {
-                                success: false,
-                                data: None,
-                                error: Some(e.to_string()),
-                            }));
-                        }
+            if let Some(guild_id) = req
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("guild_id"))
+                .and_then(Value::as_str)
+            {
+                match state.services.security.get_panic_status(guild_id).await {
+                    Ok(st) => {
+                        return (StatusCode::OK, Json(ActionResponse {
+                            success: true,
+                            data: Some(json!({ "panic": st })),
+                            error: None,
+                        }));
+                    }
+                    Err(e) => {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ActionResponse {
+                            success: false,
+                            data: None,
+                            error: Some(e.to_string()),
+                        }));
                     }
                 }
             }

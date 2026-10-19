@@ -1,4 +1,5 @@
-use lumi_kernel::bot::Command;
+use lumi_kernel::bot::{Command, Context, Error};
+use poise::serenity_prelude as serenity;
 
 pub mod about;
 pub mod downloader;
@@ -8,6 +9,16 @@ pub mod security;
 
 pub use general::handle_component;
 pub use hub::{handle_component as handle_hub_component, handle_modal as handle_hub_modal};
+pub use crate::interactions::confirm;
+
+/// Resolve the interaction/command guild, or return a user-facing error.
+///
+/// One extractor for every `guild_only`-adjacent code path so the message stays
+/// consistent and no call site invents its own wording.
+pub fn guild_id(ctx: Context<'_>) -> Result<serenity::GuildId, Error> {
+    ctx.guild_id()
+        .ok_or_else(|| anyhow::anyhow!("this command can only be used in a server"))
+}
 
 /// Core root commands always registered by the host engine.
 pub fn core_commands() -> Vec<Command> {
@@ -26,18 +37,4 @@ pub fn all_from_registry(registry: &lumi_kernel::ModuleRegistry) -> Vec<Command>
         commands.extend(module.commands());
     }
     commands
-}
-
-/// Backward compatibility helper
-pub fn all() -> Vec<Command> {
-    let mut registry = lumi_kernel::ModuleRegistry::new();
-    registry.register(Box::new(lumi_modules::afk::AfkModule));
-    registry.register(Box::new(lumi_modules::logging::LoggingModule));
-    registry.register(Box::new(lumi_modules::moderation::ModerationModule));
-    registry.register(Box::new(lumi_modules::security::SecurityModule));
-    registry.register(Box::new(lumi_modules::tempvc::TempVcModule));
-    registry.register(Box::new(lumi_modules::utility::UtilityModule));
-    registry.register(Box::new(lumi_modules::economy::EconomyModule));
-    registry.register(Box::new(lumi_modules::leveling::LevelingModule));
-    all_from_registry(&registry)
 }

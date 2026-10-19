@@ -1,16 +1,16 @@
-use async_trait::async_trait;
 use poise::serenity_prelude as serenity;
 
 #[derive(Debug)]
 pub struct Events;
 
-#[async_trait]
+#[serenity::async_trait]
 impl serenity::EventHandler for Events {
     async fn dispatch(&self, ctx: &serenity::Context, event: &serenity::FullEvent) {
         match event {
             serenity::FullEvent::Ready { data_about_bot, .. } => {
                 tracing::info!(user = %data_about_bot.user.name, "ready");
-                let commands = crate::commands::all();
+                let services = ctx.data::<lumi_kernel::bot::Data>();
+                let commands = crate::commands::all_from_registry(&services.registry);
                 tracing::info!("syncing {} slash commands globally", commands.len());
                 if let Err(e) = poise::builtins::register_globally(&ctx.http, &commands).await {
                     tracing::error!(error = %e, "failed to sync global slash commands");
@@ -25,52 +25,21 @@ impl serenity::EventHandler for Events {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
                 match interaction {
                     serenity::Interaction::Component(component) => {
-                        let result = if component.data.custom_id.starts_with("lumi:") {
-                            crate::commands::handle_hub_component(
-                                ctx,
-                                services.as_ref(),
-                                component,
-                            )
-                            .await
-                        } else if component.data.custom_id.starts_with("tempvc:") {
-                            lumi_modules::tempvc::handle_component(
-                                ctx,
-                                services.as_ref(),
-                                component,
-                            )
-                            .await
-                        } else if component.data.custom_id.starts_with("media:") {
-                            lumi_modules::utility::handle_component(
-                                ctx,
-                                services.as_ref(),
-                                component,
-                            )
-                            .await
-                        } else if component.data.custom_id.starts_with("econ:") {
-                            lumi_modules::economy::handle_component(
-                                ctx,
-                                services.as_ref(),
-                                component,
-                            )
-                            .await
-                        } else {
-                            crate::commands::handle_component(ctx, 0, component).await
-                        };
-                        if let Err(error) = result {
+                        if let Err(error) = crate::interactions::handle_component(
+                            ctx,
+                            services.as_ref(),
+                            component,
+                        )
+                        .await
+                        {
                             tracing::warn!(%error, "component interaction failed");
                         }
                     }
                     serenity::Interaction::Modal(modal) => {
-                        if modal.data.custom_id.starts_with("lumi:") {
-                            if let Err(error) = crate::commands::handle_hub_modal(
-                                ctx,
-                                services.as_ref(),
-                                modal,
-                            )
-                            .await
-                            {
-                                tracing::warn!(%error, "hub modal interaction failed");
-                            }
+                        if let Err(error) =
+                            crate::interactions::handle_modal(ctx, services.as_ref(), modal).await
+                        {
+                            tracing::warn!(%error, "modal interaction failed");
                         }
                     }
                     _ => {}
