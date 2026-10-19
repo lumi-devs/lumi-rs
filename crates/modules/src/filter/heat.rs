@@ -3,18 +3,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use poise::serenity_prelude as serenity;
 use regex::Regex;
-use serenity::all::{
-    ChannelType, EditMember, GenericChannelId, GuildId, Http, Message, PermissionOverwrite,
-    PermissionOverwriteType, Permissions, Timestamp, UserId,
-};
+use serenity::all::{EditMember, GenericChannelId, Message, Timestamp, UserId};
 
 use lumi_kernel::Services;
 use lumi_ui::{Card, CardKind};
 
 use super::store::FilterRules;
-
-const URL_PATTERN: &str = r#"(?i)https?://[^\s/<>"']+"#;
-const CUSTOM_EMOJI_PATTERN: &str = r"<a?:[a-zA-Z0-9_]+:[0-9]+>";
+use crate::patterns::{CUSTOM_EMOJI_PATTERN, URL_PATTERN};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeatAction {
@@ -49,9 +44,7 @@ pub fn is_zalgo(content: &str) -> bool {
 
 pub fn count_emoji(content: &str) -> u64 {
     static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    let custom = RE
-        .get_or_init(|| Regex::new(CUSTOM_EMOJI_PATTERN).ok())
-        .as_ref()
+    let custom = crate::regex::cached(&RE, CUSTOM_EMOJI_PATTERN)
         .map_or(0, |re| re.find_iter(content).count() as u64);
     let unicode = content
         .chars()
@@ -72,9 +65,7 @@ pub fn count_emoji(content: &str) -> u64 {
 
 pub fn contains_link(content: &str) -> bool {
     static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(URL_PATTERN).ok())
-        .as_ref()
-        .is_some_and(|re| re.is_match(content))
+    crate::regex::cached(&RE, URL_PATTERN).is_some_and(|re| re.is_match(content))
 }
 
 fn now_millis() -> u64 {
@@ -187,67 +178,12 @@ pub async fn activate_auto_lockdown(
         .arg(&key)
         .arg(now_millis().to_string())
         .arg("EX")
-        .arg((duration_minutes * 60).max(60))
+        .arg(duration_minutes.saturating_mul(60).max(60))
         .arg("NX")
         .query_async(&mut conn)
         .await
         .ok();
     res.as_deref() == Some("OK")
-}
-
-pub async fn lock_text_channels(ctx: &serenity::Context, guild_id: GuildId) -> u32 {
-    let everyone = guild_id.everyone_role();
-    let Ok(channels) = guild_id.channels(&ctx.http).await else {
-        return 0;
-    };
-
-    let mut modified = 0u32;
-    for ch in channels.iter() {
-        if !matches!(ch.base.kind, ChannelType::Text | ChannelType::News) {
-            continue;
-        }
-        let overwrite = PermissionOverwrite {
-            allow: Permissions::empty(),
-            deny: Permissions::SEND_MESSAGES,
-            kind: PermissionOverwriteType::Role(everyone),
-        };
-        if ch
-            .id
-            .create_permission(&ctx.http, overwrite, Some("Filter auto-lockdown"))
-            .await
-            .is_ok()
-        {
-            modified += 1;
-        }
-    }
-    modified
-}
-
-pub async fn unlock_text_channels(http: &Arc<Http>, guild_id: GuildId) -> u32 {
-    let everyone = guild_id.everyone_role();
-    let Ok(channels) = guild_id.channels(http).await else {
-        return 0;
-    };
-
-    let mut modified = 0u32;
-    for ch in channels.iter() {
-        if !matches!(ch.base.kind, ChannelType::Text | ChannelType::News) {
-            continue;
-        }
-        if ch
-            .id
-            .delete_permission(
-                http,
-                PermissionOverwriteType::Role(everyone),
-                Some("Filter auto-lockdown lifted"),
-            )
-            .await
-            .is_ok()
-        {
-            modified += 1;
-        }
-    }
-    modified
 }
 
 pub async fn check_mention_flood(
@@ -288,7 +224,14 @@ pub async fn check_mention_flood(
         return;
     }
 
-    let modified = lock_text_channels(ctx, guild_id).await;
+    let modified = crate::moderation::channels::set_guild_locked(
+        &ctx.http,
+        guild_id,
+        true,
+        "Filter auto-lockdown",
+    )
+    .await
+    .modified;
     let detail = format!(
         "Mention flood: {total} mentions within {}s. Locked {modified} channel(s) for {duration_minutes}m.",
         rules.lockdown_window_seconds
@@ -307,8 +250,14 @@ pub async fn check_mention_flood(
     let http = Arc::clone(&ctx.http);
     let cache = Arc::clone(&services.cache);
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(duration_minutes * 60)).await;
-        unlock_text_channels(&http, guild_id).await;
+        tokio::time::sleep(Duration::from_secs(duration_minutes.saturating_mul(60))).await;
+        crate::moderation::channels::set_guild_locked(
+            &http,
+            guild_id,
+            false,
+            "Filter auto-lockdown lifted",
+        )
+        .await;
         let mut conn = cache.redis();
         let key = format!("lumi:filter:{guild_id}:autolockdown");
         let _: Result<(), _> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
@@ -334,18 +283,21 @@ pub async fn check_heat(
 
     let mut points = rules.heat_per_message as f64;
     if rules.heat_per_mention > 0 && mention_count > 0 {
-        points += (rules.heat_per_mention * mention_count as i64) as f64;
+        let mentions = i64::try_from(mention_count).unwrap_or(i64::MAX);
+        points += rules.heat_per_mention.saturating_mul(mentions) as f64;
     }
     if was_filter_hit && rules.heat_per_filter_hit > 0 {
         points += rules.heat_per_filter_hit as f64;
     }
     if rules.heat_per_attachment > 0 && !message.attachments.is_empty() {
-        points += (rules.heat_per_attachment * message.attachments.len() as i64) as f64;
+        let count = i64::try_from(message.attachments.len()).unwrap_or(i64::MAX);
+        points += rules.heat_per_attachment.saturating_mul(count) as f64;
     }
     if rules.heat_per_emoji > 0 {
         let emojis = count_emoji(&message.content);
         if emojis > 0 {
-            points += (rules.heat_per_emoji * emojis as i64) as f64;
+            let emoji_count = i64::try_from(emojis).unwrap_or(i64::MAX);
+            points += rules.heat_per_emoji.saturating_mul(emoji_count) as f64;
         }
     }
     if rules.heat_per_link > 0 && contains_link(&message.content) {
@@ -418,7 +370,9 @@ pub async fn check_heat(
         HeatAction::Timeout => {
             let duration_mins = rules.heat_timeout_minutes.max(1);
             let until = Timestamp::from_unix_timestamp(
-                Timestamp::now().unix_timestamp() + duration_mins * 60,
+                Timestamp::now()
+                    .unix_timestamp()
+                    .saturating_add(duration_mins.saturating_mul(60)),
             );
             if let Ok(until) = until {
                 let reason = format!("Heat escalation: exceeded {} heat ({heat:.1})", rules.heat_timeout);

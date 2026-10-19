@@ -12,6 +12,8 @@ use unicode_normalization::char::is_combining_mark;
 
 use lumi_kernel::module_state;
 
+use crate::config;
+
 const MODULE: &str = "filter";
 
 /// Mirrors lumi's `DefaultCapsMinLength`.
@@ -96,7 +98,7 @@ impl FilterRules {
         let mut terms = Vec::new();
         let mut patterns = Vec::new();
         let mut labels = Vec::new();
-        for term in string_list(map, "terms") {
+        for term in config::string_list(map, "terms") {
             let normalized = normalize(&term);
             if normalized.is_empty() {
                 continue;
@@ -114,7 +116,7 @@ impl FilterRules {
                 .ok()
         };
 
-        let regexes = compile_regexes(&string_list(map, "regex_rules"));
+        let regexes = compile_regexes(&config::string_list(map, "regex_rules"));
         let warn_message = map
             .get("warn_message")
             .and_then(Value::as_str)
@@ -125,36 +127,37 @@ impl FilterRules {
             term_matcher,
             term_labels: labels,
             regexes,
-            invite_allow: lowercase(string_list(map, "invite_allowlist")),
-            block_invites: boolean(map, "block_invites", false),
-            link_allow: lowercase(string_list(map, "link_allowlist")),
-            block_links: boolean(map, "block_links", false),
-            max_mentions: number(map, "max_mentions", 0),
-            caps_pct: number(map, "max_caps_percent", 0),
-            caps_min_len: number(map, "caps_min_length", DEFAULT_CAPS_MIN_LENGTH).max(1) as usize,
-            exempt_roles: id_list(map, "exempt_roles"),
-            timeout_minutes: number(map, "timeout_minutes", 0),
-            spam_timeout_minutes: number(map, "spam_timeout_minutes", 0),
-            invite_timeout_minutes: number(map, "invite_timeout_minutes", 0),
-            link_timeout_minutes: number(map, "link_timeout_minutes", 0),
+            invite_allow: lowercase(config::string_list(map, "invite_allowlist")),
+            block_invites: config::boolean(map, "block_invites", false),
+            link_allow: lowercase(config::string_list(map, "link_allowlist")),
+            block_links: config::boolean(map, "block_links", false),
+            max_mentions: config::integer(map, "max_mentions", 0),
+            caps_pct: config::integer(map, "max_caps_percent", 0),
+            caps_min_len: config::integer(map, "caps_min_length", DEFAULT_CAPS_MIN_LENGTH).max(1)
+                as usize,
+            exempt_roles: config::id_list(map, "exempt_roles"),
+            timeout_minutes: config::integer(map, "timeout_minutes", 0),
+            spam_timeout_minutes: config::integer(map, "spam_timeout_minutes", 0),
+            invite_timeout_minutes: config::integer(map, "invite_timeout_minutes", 0),
+            link_timeout_minutes: config::integer(map, "link_timeout_minutes", 0),
             warn_message,
-            log_channel: map.get("log_channel_id").and_then(module_state::parse_id),
-            heat_enabled: boolean(map, "heat_enabled", false),
-            heat_per_message: number(map, "heat_per_message", 1),
-            heat_per_mention: number(map, "heat_per_mention", 2),
-            heat_per_filter_hit: number(map, "heat_per_filter_hit", 5),
-            heat_per_attachment: number(map, "heat_per_attachment", 2),
-            heat_per_emoji: number(map, "heat_per_emoji", 1),
-            heat_per_link: number(map, "heat_per_link", 2),
-            heat_per_zalgo: number(map, "heat_per_zalgo", 3),
-            heat_decay_per_minute: number(map, "heat_decay_per_minute", 5),
-            heat_warn: number(map, "heat_warn", 15),
-            heat_timeout: number(map, "heat_timeout", 30),
-            heat_timeout_minutes: number(map, "heat_timeout_minutes", 10),
-            heat_quarantine: number(map, "heat_quarantine", 50),
-            lockdown_mention_threshold: number(map, "lockdown_mention_threshold", 0),
-            lockdown_window_seconds: number(map, "lockdown_window_seconds", 10),
-            lockdown_duration_minutes: number(map, "lockdown_duration_minutes", 10),
+            log_channel: config::id(map, "log_channel_id"),
+            heat_enabled: config::boolean(map, "heat_enabled", false),
+            heat_per_message: config::integer(map, "heat_per_message", 1),
+            heat_per_mention: config::integer(map, "heat_per_mention", 2),
+            heat_per_filter_hit: config::integer(map, "heat_per_filter_hit", 5),
+            heat_per_attachment: config::integer(map, "heat_per_attachment", 2),
+            heat_per_emoji: config::integer(map, "heat_per_emoji", 1),
+            heat_per_link: config::integer(map, "heat_per_link", 2),
+            heat_per_zalgo: config::integer(map, "heat_per_zalgo", 3),
+            heat_decay_per_minute: config::integer(map, "heat_decay_per_minute", 5),
+            heat_warn: config::integer(map, "heat_warn", 15),
+            heat_timeout: config::integer(map, "heat_timeout", 30),
+            heat_timeout_minutes: config::integer(map, "heat_timeout_minutes", 10),
+            heat_quarantine: config::integer(map, "heat_quarantine", 50),
+            lockdown_mention_threshold: config::integer(map, "lockdown_mention_threshold", 0),
+            lockdown_window_seconds: config::integer(map, "lockdown_window_seconds", 10),
+            lockdown_duration_minutes: config::integer(map, "lockdown_duration_minutes", 10),
         }
     }
 }
@@ -228,42 +231,8 @@ fn compile_regexes(patterns: &[String]) -> Vec<regex::Regex> {
         .collect()
 }
 
-fn string_list(map: &Map<String, Value>, key: &str) -> Vec<String> {
-    map.get(key)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn lowercase(items: Vec<String>) -> Vec<String> {
     items.into_iter().map(|item| item.to_lowercase()).collect()
-}
-
-fn id_list(map: &Map<String, Value>, key: &str) -> Vec<u64> {
-    map.get(key)
-        .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(module_state::parse_id).collect())
-        .unwrap_or_default()
-}
-
-fn boolean(map: &Map<String, Value>, key: &str, fallback: bool) -> bool {
-    map.get(key).and_then(Value::as_bool).unwrap_or(fallback)
-}
-
-fn number(map: &Map<String, Value>, key: &str, fallback: i64) -> i64 {
-    map.get(key)
-        .and_then(|value| {
-            value
-                .as_i64()
-                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-        })
-        .unwrap_or(fallback)
 }
 
 #[cfg(test)]

@@ -6,25 +6,23 @@ pub mod events;
 pub mod heat;
 pub mod store;
 
-use lumi_kernel::module::{ConfigField, ConfigFieldKind, Module, ModuleMeta};
+use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
-use crate::shared::{
-    bool_field, channel_field, config_field, int_field, string_array_field, string_field,
-};
+use crate::config;
 
 #[derive(Debug)]
 pub struct FilterModule;
 
 fn string_array(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
-    string_array_field(key, label, description, Some(group))
+    config::string_array_field(key, label, description, group)
 }
 
 fn boolean(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
-    bool_field(key, label, description, false, Some(group))
+    config::bool_field(key, label, description, false, group)
 }
 
 fn number(key: &str, label: &str, description: &str, default: i64, group: &str) -> ConfigField {
-    int_field(key, label, description, default, Some(group))
+    config::int_field(key, label, description, default, group)
 }
 
 impl Module for FilterModule {
@@ -106,13 +104,11 @@ impl Module for FilterModule {
                 12,
                 spam,
             ),
-            config_field(
+            config::role_array_field(
                 "exempt_roles",
                 "Exempt Roles",
                 "Roles that bypass all filter rules (members with Manage Messages are always exempt).",
-                ConfigFieldKind::RoleArray,
-                serde_json::json!([]),
-                Some(punish),
+                punish,
             ),
             number(
                 "timeout_minutes",
@@ -142,18 +138,18 @@ impl Module for FilterModule {
                 0,
                 punish,
             ),
-            string_field(
+            config::string_field(
                 "warn_message",
                 "Warning Message",
                 "Transient warning sent after a deletion. Placeholders: {user}, {reason}. Empty disables the warning.",
                 store::DEFAULT_WARN_MESSAGE,
-                Some(punish),
+                punish,
             ),
-            channel_field(
+            config::channel_field(
                 "log_channel_id",
                 "Log Channel",
                 "Channel where filter hits are logged.",
-                Some(punish),
+                punish,
             ),
             boolean(
                 "heat_enabled",

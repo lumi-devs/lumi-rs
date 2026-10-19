@@ -8,23 +8,23 @@ pub mod store;
 
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
-use crate::shared::{bool_field, channel_field, enum_field, int_field, string_array_field};
+use crate::config;
 
 #[derive(Debug)]
 pub struct SecurityModule;
 
 fn number(key: &str, label: &str, description: &str, default: i64, group: &str) -> ConfigField {
-    int_field(key, label, description, default, Some(group))
+    config::int_field(key, label, description, default, group)
 }
 
 fn response(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
-    enum_field(
+    config::enum_field(
         key,
         label,
         description,
         &["log", "quarantine", "ban"],
         "quarantine",
-        Some(group),
+        group,
     )
 }
 
@@ -48,12 +48,12 @@ impl Module for SecurityModule {
         let limits = "Nuke Limits";
         let panic = "Panic Mode";
         vec![
-            bool_field(
+            config::bool_field(
                 "antinuke_enabled",
                 "Anti-Nuke",
                 "Watch the audit log for mass destructive actions.",
                 false,
-                Some(anti),
+                anti,
             ),
             number(
                 "window_seconds",
@@ -62,17 +62,17 @@ impl Module for SecurityModule {
                 60,
                 anti,
             ),
-            string_array_field(
+            config::string_array_field(
                 "trusted_role_ids",
                 "Trusted Roles",
                 "Role IDs exempt from anti-nuke.",
-                Some(anti),
+                anti,
             ),
-            channel_field(
+            config::channel_field(
                 "log_channel_id",
                 "Security Log Channel",
                 "Channel for anti-nuke alerts.",
-                Some(anti),
+                anti,
             ),
             number("max_bans", "Max Bans", "Bans allowed per executor within the window.", 5, limits),
             response("response_bans", "Response - Bans", "Action taken when the ban threshold trips.", limits),
@@ -138,12 +138,12 @@ impl Module for SecurityModule {
                 1,
                 limits,
             ),
-            bool_field(
+            config::bool_field(
                 "panic_lock_mod_commands",
                 "Lock Mod Commands During Panic",
                 "While panic mode is active, only managers may run permission-gated commands.",
                 true,
-                Some(panic),
+                panic,
             ),
         ]
     }

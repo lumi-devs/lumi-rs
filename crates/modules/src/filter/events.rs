@@ -9,6 +9,7 @@ use lumi_ui::{Card, CardKind};
 use super::enforce;
 use super::heat;
 use super::store::{self, FilterRules};
+use crate::text::cut;
 
 /// Screen a created message. Returns `true` when it was enforced (deleted), so
 /// the caller can stop before running the other message listeners.
@@ -172,7 +173,9 @@ async fn timeout(ctx: &serenity::Context, message: &Message, minutes: i64) {
         return;
     };
     let until = Timestamp::from_unix_timestamp(
-        Timestamp::now().unix_timestamp() + minutes.saturating_mul(60),
+        Timestamp::now()
+            .unix_timestamp()
+            .saturating_add(minutes.saturating_mul(60)),
     );
     let Ok(until) = until else {
         return;
@@ -222,11 +225,4 @@ async fn log_hit(
     {
         tracing::warn!(%error, "filter: failed to log hit");
     }
-}
-
-fn cut(content: &str, max: usize) -> String {
-    if content.chars().count() <= max {
-        return content.to_string();
-    }
-    content.chars().take(max).collect()
 }
