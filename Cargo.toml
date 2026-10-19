@@ -36,7 +36,7 @@ serenity = { git = "https://github.com/serenity-rs/serenity", branch = "next", d
 poise = { git = "https://github.com/serenity-rs/poise", branch = "serenity-next" }
 
 # Async
-tokio      = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync", "fs", "net"] }
+tokio      = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync", "fs", "net", "process"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures    = "0.3"
 async-trait = "0.1"

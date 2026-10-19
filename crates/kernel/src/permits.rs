@@ -5,13 +5,17 @@
 //! `custom` buckets in chain order (user, channel, roles high→low). Deny wins
 //! inside a bucket, and the first tier that returns a verdict decides; a tier
 //! with no matching node passes to the next.
+//!
+//! One engine produces both the fast decision ([`PermitResolver::resolve`]) and
+//! the full tier walk ([`PermitResolver::explain`], [`explain_permit`]).
 
 use std::collections::HashMap;
 
 use sea_orm::{DatabaseConnection, EntityTrait};
 
 pub use lumi_db::entities::enums::{PermitKind, PermitPolarity, PermitTargetType};
-use lumi_db::entities::{permit_assignment, permit};
+use lumi_db::entities::{permit, permit_assignment};
+
 use crate::Result;
 
 /// A permit as loaded from the `permits` table.
@@ -25,6 +29,21 @@ pub struct PermitRow {
     pub nodes: Vec<String>,
     pub builtin: bool,
     pub position: i32,
+}
+
+impl PermitRow {
+    fn from_model(model: permit::Model) -> Self {
+        Self {
+            id: model.id,
+            guild_id: model.guild_id,
+            name: model.name,
+            kind: model.kind,
+            polarity: model.polarity,
+            nodes: model.nodes,
+            builtin: model.builtin,
+            position: model.position,
+        }
+    }
 }
 
 /// A permit-to-target binding.
@@ -67,13 +86,12 @@ pub fn node_matches(pattern: &str, node: &str) -> bool {
     match NodeScope::of(pattern) {
         NodeScope::Wildcard => true,
         NodeScope::Exact => pattern == node,
-        NodeScope::Namespace => {
-            let namespace = &pattern[..pattern.len() - 2];
+        NodeScope::Namespace => pattern.strip_suffix(".*").is_some_and(|namespace| {
             node == namespace
                 || node
                     .strip_prefix(namespace)
                     .is_some_and(|rest| rest.starts_with('.'))
-        }
+        }),
     }
 }
 
@@ -128,6 +146,20 @@ pub fn required_node(command: &str) -> Option<&'static str> {
     }
 }
 
+/// The permit node a command requires.
+///
+/// A `&'static str` placed in the command's poise `custom_data` wins, so a
+/// command (or subcommand) can declare its own node; otherwise the built-in
+/// [`required_node`] name map is used.
+#[must_use]
+pub fn command_node(command: &crate::bot::Command) -> Option<&'static str> {
+    command
+        .custom_data
+        .downcast_ref::<&'static str>()
+        .copied()
+        .or_else(|| required_node(&command.name))
+}
+
 #[derive(Debug)]
 pub struct PermitResolver {
     permits: HashMap<i32, PermitRow>,
@@ -136,43 +168,51 @@ pub struct PermitResolver {
     by_role: HashMap<(String, i64), Vec<i32>>,
 }
 
+fn tier_row(tier: &str, verdict: Verdict, detail: Option<String>) -> TierExplanation {
+    TierExplanation {
+        tier: tier.into(),
+        verdict,
+        detail,
+    }
+}
+
+/// Bucket key: guild + numeric target id.
+fn slot(guild_id: &str, id: u64) -> (String, i64) {
+    (guild_id.to_string(), i64::try_from(id).unwrap_or(i64::MAX))
+}
+
 impl PermitResolver {
     pub async fn load(db: &DatabaseConnection) -> Result<Self> {
-        let permit_models = permit::Entity::find().all(db).await?;
-        let assign_models = permit_assignment::Entity::find().all(db).await?;
-
-        let permit_rows = permit_models
+        let permits = permit::Entity::find()
+            .all(db)
+            .await?
             .into_iter()
-            .map(|p| PermitRow {
-                id: p.id,
-                guild_id: p.guild_id,
-                name: p.name,
-                kind: p.kind,
-                polarity: p.polarity,
-                nodes: p.nodes,
-                builtin: p.builtin,
-                position: p.position,
+            .map(PermitRow::from_model)
+            .collect();
+
+        let assignments = permit_assignment::Entity::find()
+            .all(db)
+            .await?
+            .into_iter()
+            .filter_map(|a| match a.target_id.parse::<i64>() {
+                Ok(target_id) => Some(PermitAssignment {
+                    permit_id: a.permit_id,
+                    guild_id: a.guild_id,
+                    target_type: a.target_type,
+                    target_id,
+                }),
+                Err(_) => {
+                    tracing::warn!(target = %a.target_id, permit_id = a.permit_id, "skipping permit assignment with non-numeric target");
+                    None
+                }
             })
             .collect();
 
-        let assignments = assign_models
-            .into_iter()
-            .map(|a| PermitAssignment {
-                permit_id: a.permit_id,
-                guild_id: a.guild_id,
-                target_type: a.target_type,
-                target_id: a.target_id.parse().unwrap_or(0),
-            })
-            .collect();
-
-        Ok(Self::new(permit_rows, assignments))
+        Ok(Self::new(permits, assignments))
     }
 
     pub fn new(permits: Vec<PermitRow>, assignments: Vec<PermitAssignment>) -> Self {
-        let mut permit_map = HashMap::new();
-        for p in permits {
-            permit_map.insert(p.id, p);
-        }
+        let permit_map = permits.into_iter().map(|p| (p.id, p)).collect();
 
         let mut by_user: HashMap<(String, i64), Vec<i32>> = HashMap::new();
         let mut by_channel: HashMap<(String, i64), Vec<i32>> = HashMap::new();
@@ -195,167 +235,148 @@ impl PermitResolver {
         }
     }
 
-    /// Every permit belonging to one guild (the TS `getPermitChain` read side).
-    pub fn permits_for_guild(&self, guild_id: &str) -> Vec<&PermitRow> {
-        self.permits
-            .values()
-            .filter(|p| p.guild_id == guild_id)
-            .collect()
-    }
-
+    /// Decide access for one node; the returned rows stop at the deciding tier.
     pub fn resolve(&self, ctx: &CheckContext<'_>) -> Decision {
-        let mut rows = Vec::new();
-
-        if ctx.is_owner {
-            rows.push(TierExplanation {
-                tier: "owner".into(),
-                verdict: Verdict::Allow,
-                detail: Some("bot owner bypass".into()),
-            });
-            return Decision {
-                allowed: true,
-                rows,
-            };
-        }
-
-        if ctx.is_guild_owner {
-            rows.push(TierExplanation {
-                tier: "owner".into(),
-                verdict: Verdict::Allow,
-                detail: Some("server owner bypass".into()),
-            });
-            return Decision {
-                allowed: true,
-                rows,
-            };
-        }
-
-        if ctx.is_manager {
-            rows.push(TierExplanation {
-                tier: "manager".into(),
-                verdict: Verdict::Allow,
-                detail: Some("server manager bypass".into()),
-            });
-            return Decision {
-                allowed: true,
-                rows,
-            };
-        }
-
-        let mut decided = false;
-        let mut allowed = false;
-
-        // Tier: Enforced (User target only)
-        let enforced_row = self.evaluate_bucket(
-            "enforced",
-            self.by_user.get(&(ctx.guild_id.clone(), ctx.user_id as i64)),
-            ctx.node,
-            true,
-        );
-        consider(&mut rows, &mut decided, &mut allowed, enforced_row);
-
-        if decided || ctx.is_quarantined {
-            if ctx.is_quarantined && !decided {
-                rows.push(TierExplanation {
-                    tier: "quarantine".into(),
-                    verdict: Verdict::Deny,
-                    detail: Some("user is quarantined".into()),
-                });
-            }
-            return Decision { allowed, rows };
-        }
-
-        // Tier: User Custom
-        let user_row = self.evaluate_bucket(
-            "user",
-            self.by_user.get(&(ctx.guild_id.clone(), ctx.user_id as i64)),
-            ctx.node,
-            false,
-        );
-        consider(&mut rows, &mut decided, &mut allowed, user_row);
-        if decided {
-            return Decision { allowed, rows };
-        }
-
-        // Tier: Channel Custom
-        if let Some(channel_id) = ctx.channel_id {
-            let channel_row = self.evaluate_bucket(
-                "channel",
-                self.by_channel.get(&(ctx.guild_id.clone(), channel_id as i64)),
-                ctx.node,
-                false,
-            );
-            consider(&mut rows, &mut decided, &mut allowed, channel_row);
-            if decided {
-                return Decision { allowed, rows };
-            }
-        }
-
-        // Tier: Roles Custom (in priority order)
-        for &role_id in ctx.role_ids {
-            let role_row = self.evaluate_bucket(
-                &format!("role:{role_id}"),
-                self.by_role.get(&(ctx.guild_id.clone(), role_id as i64)),
-                ctx.node,
-                false,
-            );
-            consider(&mut rows, &mut decided, &mut allowed, role_row);
-            if decided {
-                return Decision { allowed, rows };
-            }
-        }
-
+        let rows = self.explain(ctx);
+        let allowed = rows
+            .iter()
+            .rev()
+            .find(|row| row.verdict != Verdict::Pass)
+            .is_some_and(|row| row.verdict == Verdict::Allow);
         Decision { allowed, rows }
     }
 
-    fn evaluate_bucket(&self, tier: &str, permit_ids: Option<&Vec<i32>>, node: &str, enforced_only: bool) -> TierExplanation {
+    /// Every tier evaluated for one node, in resolution order, including
+    /// passing tiers. Stops at the first deciding tier.
+    pub fn explain(&self, ctx: &CheckContext<'_>) -> Vec<TierExplanation> {
+        let mut rows = Vec::new();
+
+        if ctx.is_owner {
+            rows.push(tier_row("owner", Verdict::Allow, Some("bot owner".into())));
+            return rows;
+        }
+        if ctx.is_guild_owner {
+            rows.push(tier_row("owner", Verdict::Allow, Some("server owner".into())));
+            return rows;
+        }
+        rows.push(tier_row("owner", Verdict::Pass, None));
+
+        if ctx.is_manager {
+            rows.push(tier_row(
+                "manager",
+                Verdict::Allow,
+                Some("Administrator or ManageGuild".into()),
+            ));
+            return rows;
+        }
+        rows.push(tier_row("manager", Verdict::Pass, None));
+
+        let mut decided = false;
+        let mut allowed = false;
+        let user = slot(&ctx.guild_id, ctx.user_id);
+
+        consider(
+            &mut rows,
+            &mut decided,
+            &mut allowed,
+            self.evaluate_bucket("enforced:user", self.by_user.get(&user), ctx.node, true),
+        );
+        if decided || ctx.is_quarantined {
+            if ctx.is_quarantined && !decided {
+                rows.push(tier_row("quarantine", Verdict::Deny, Some("user is quarantined".into())));
+            }
+            return rows;
+        }
+
+        consider(
+            &mut rows,
+            &mut decided,
+            &mut allowed,
+            self.evaluate_bucket("custom:user", self.by_user.get(&user), ctx.node, false),
+        );
+        if decided {
+            return rows;
+        }
+
+        if let Some(channel_id) = ctx.channel_id {
+            let channel = slot(&ctx.guild_id, channel_id);
+            consider(
+                &mut rows,
+                &mut decided,
+                &mut allowed,
+                self.evaluate_bucket("custom:channel", self.by_channel.get(&channel), ctx.node, false),
+            );
+            if decided {
+                return rows;
+            }
+        }
+
+        for &role_id in ctx.role_ids {
+            let role = slot(&ctx.guild_id, role_id);
+            consider(
+                &mut rows,
+                &mut decided,
+                &mut allowed,
+                self.evaluate_bucket(
+                    &format!("custom:role:{role_id}"),
+                    self.by_role.get(&role),
+                    ctx.node,
+                    false,
+                ),
+            );
+            if decided {
+                return rows;
+            }
+        }
+
+        rows
+    }
+
+    /// Deny wins inside one bucket, then grant, else the tier passes.
+    fn evaluate_bucket(
+        &self,
+        tier: &str,
+        permit_ids: Option<&Vec<i32>>,
+        node: &str,
+        enforced_only: bool,
+    ) -> TierExplanation {
         let Some(ids) = permit_ids else {
-            return TierExplanation {
-                tier: tier.into(),
-                verdict: Verdict::Pass,
-                detail: None,
-            };
+            return tier_row(tier, Verdict::Pass, None);
         };
 
-        let mut has_grant = false;
-        let mut has_deny = false;
+        let wanted = if enforced_only {
+            PermitKind::Enforced
+        } else {
+            PermitKind::Custom
+        };
+        let mut deny = None;
+        let mut grant = None;
 
         for &id in ids {
-            if let Some(permit) = self.permits.get(&id) {
-                if enforced_only && permit.kind != PermitKind::Enforced {
-                    continue;
-                }
-                if !enforced_only && permit.kind != PermitKind::Custom {
-                    continue;
-                }
-
-                if permit.nodes.iter().any(|pattern| node_matches(pattern, node)) {
-                    match permit.polarity {
-                        PermitPolarity::Deny => has_deny = true,
-                        PermitPolarity::Grant => has_grant = true,
+            let Some(permit) = self.permits.get(&id) else {
+                continue;
+            };
+            if permit.kind != wanted {
+                continue;
+            }
+            if let Some(pattern) = permit.nodes.iter().find(|pattern| node_matches(pattern, node)) {
+                match permit.polarity {
+                    PermitPolarity::Deny => deny = Some(pattern.clone()),
+                    PermitPolarity::Grant => {
+                        if grant.is_none() {
+                            grant = Some(pattern.clone());
+                        }
                     }
                 }
             }
         }
 
-        if has_deny {
-            TierExplanation {
-                tier: tier.into(),
-                verdict: Verdict::Deny,
-                detail: Some("denied by node match".into()),
-            }
-        } else if has_grant {
-            TierExplanation {
-                tier: tier.into(),
-                verdict: Verdict::Allow,
-                detail: Some("granted by node match".into()),
-            }
+        if let Some(pattern) = deny {
+            tier_row(tier, Verdict::Deny, Some(format!("deny {pattern}")))
+        } else if let Some(pattern) = grant {
+            tier_row(tier, Verdict::Allow, Some(format!("grant {pattern}")))
         } else {
-            TierExplanation {
-                tier: tier.into(),
-                verdict: Verdict::Pass,
-                detail: None,
-            }
+            tier_row(tier, Verdict::Pass, None)
         }
     }
 }
@@ -379,143 +400,50 @@ pub async fn explain_permit(
     node: &str,
     subject: &ExplainSubject,
 ) -> Result<Vec<TierExplanation>> {
-    let permits: HashMap<i32, permit::Model> = lumi_db::list_permits(db, guild_id)
+    let permits = lumi_db::list_permits(db, guild_id)
         .await?
         .into_iter()
-        .map(|p| (p.id, p))
+        .map(PermitRow::from_model)
         .collect();
-    let assignments = lumi_db::list_assignments(db, guild_id).await?;
 
-    let mut rows = Vec::new();
-    if subject.is_owner {
-        rows.push(TierExplanation { tier: "owner".into(), verdict: Verdict::Allow, detail: Some("bot owner".into()) });
-        return Ok(rows);
-    }
-    if subject.is_guild_owner {
-        rows.push(TierExplanation { tier: "owner".into(), verdict: Verdict::Allow, detail: Some("server owner".into()) });
-        return Ok(rows);
-    }
-    rows.push(tier_row("owner", Verdict::Pass, None));
-    if subject.is_manager {
-        rows.push(TierExplanation {
-            tier: "manager".into(),
-            verdict: Verdict::Allow,
-            detail: Some("Administrator or ManageGuild".into()),
-        });
-        return Ok(rows);
-    }
-    rows.push(tier_row("manager", Verdict::Pass, None));
-
-    let mut decided = false;
-    let user = subject.user_id.to_string();
-
-    push_tier(
-        &mut rows,
-        &mut decided,
-        "enforced:user",
-        tier_verdict(&permits, &assignments, PermitKind::Enforced, node, |a| {
-            a.target_type == PermitTargetType::User && a.target_id == user
-        }),
-    );
-    if decided {
-        return Ok(rows);
-    }
-
-    push_tier(
-        &mut rows,
-        &mut decided,
-        "custom:user",
-        tier_verdict(&permits, &assignments, PermitKind::Custom, node, |a| {
-            a.target_type == PermitTargetType::User && a.target_id == user
-        }),
-    );
-    if decided {
-        return Ok(rows);
-    }
-
-    if let Some(channel_id) = subject.channel_id {
-        let channel = channel_id.to_string();
-        push_tier(
-            &mut rows,
-            &mut decided,
-            "custom:channel",
-            tier_verdict(&permits, &assignments, PermitKind::Custom, node, |a| {
-                a.target_type == PermitTargetType::Channel && a.target_id == channel
+    let assignments = lumi_db::list_assignments(db, guild_id)
+        .await?
+        .into_iter()
+        .filter_map(|row| match row.target_id.parse::<i64>() {
+            Ok(target_id) => Some(PermitAssignment {
+                permit_id: row.permit_id,
+                guild_id: guild_id.to_string(),
+                target_type: row.target_type,
+                target_id,
             }),
-        );
-        if decided {
-            return Ok(rows);
-        }
-    }
-
-    for role_id in &subject.role_ids {
-        let role = role_id.to_string();
-        push_tier(
-            &mut rows,
-            &mut decided,
-            &format!("custom:role:{role_id}"),
-            tier_verdict(&permits, &assignments, PermitKind::Custom, node, |a| {
-                a.target_type == PermitTargetType::Role && a.target_id == role
-            }),
-        );
-        if decided {
-            return Ok(rows);
-        }
-    }
-
-    Ok(rows)
-}
-
-/// Deny wins inside one bucket, then grant, else the tier passes.
-fn tier_verdict(
-    permits: &HashMap<i32, permit::Model>,
-    assignments: &[lumi_db::AssignmentRow],
-    kind: PermitKind,
-    node: &str,
-    target: impl Fn(&lumi_db::AssignmentRow) -> bool,
-) -> (Verdict, Option<String>) {
-    let mut grant = None;
-    let mut deny = None;
-    for assignment in assignments.iter().filter(|a| a.kind == kind && target(a)) {
-        let Some(permit) = permits.get(&assignment.permit_id) else {
-            continue;
-        };
-        if let Some(pattern) = permit.nodes.iter().find(|p| node_matches(p, node)) {
-            match permit.polarity {
-                PermitPolarity::Deny => deny = Some(pattern.clone()),
-                PermitPolarity::Grant => {
-                    if grant.is_none() {
-                        grant = Some(pattern.clone());
-                    }
-                }
+            Err(_) => {
+                tracing::warn!(target = %row.target_id, "skipping permit assignment with non-numeric target");
+                None
             }
-        }
-    }
-    if let Some(pattern) = deny {
-        (Verdict::Deny, Some(format!("deny {pattern}")))
-    } else if let Some(pattern) = grant {
-        (Verdict::Allow, Some(format!("grant {pattern}")))
-    } else {
-        (Verdict::Pass, None)
-    }
+        })
+        .collect();
+
+    let resolver = PermitResolver::new(permits, assignments);
+    let ctx = CheckContext {
+        guild_id: guild_id.to_string(),
+        user_id: subject.user_id,
+        channel_id: subject.channel_id,
+        role_ids: &subject.role_ids,
+        is_owner: subject.is_owner,
+        is_guild_owner: subject.is_guild_owner,
+        is_manager: subject.is_manager,
+        is_quarantined: false,
+        node,
+    };
+    Ok(resolver.explain(&ctx))
 }
 
-fn tier_row(tier: &str, verdict: Verdict, detail: Option<String>) -> TierExplanation {
-    TierExplanation { tier: tier.into(), verdict, detail }
-}
-
-fn push_tier(rows: &mut Vec<TierExplanation>, decided: &mut bool, tier: &str, verdict: (Verdict, Option<String>)) {
-    if *decided {
-        return;
-    }
-    let (verdict, detail) = verdict;
-    if verdict != Verdict::Pass {
-        *decided = true;
-    }
-    rows.push(tier_row(tier, verdict, detail));
-}
-
-fn consider(rows: &mut Vec<TierExplanation>, decided: &mut bool, allowed: &mut bool, row: TierExplanation) {
+fn consider(
+    rows: &mut Vec<TierExplanation>,
+    decided: &mut bool,
+    allowed: &mut bool,
+    row: TierExplanation,
+) {
     if *decided {
         return;
     }
@@ -533,5 +461,121 @@ fn consider(rows: &mut Vec<TierExplanation>, decided: &mut bool, allowed: &mut b
         Verdict::Pass => {
             rows.push(row);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn permit(id: i32, kind: PermitKind, polarity: PermitPolarity, nodes: &[&str]) -> PermitRow {
+        PermitRow {
+            id,
+            guild_id: "1".into(),
+            name: format!("p{id}"),
+            kind,
+            polarity,
+            nodes: nodes.iter().map(ToString::to_string).collect(),
+            builtin: false,
+            position: id,
+        }
+    }
+
+    fn assignment(permit_id: i32, target_type: PermitTargetType, target_id: i64) -> PermitAssignment {
+        PermitAssignment {
+            permit_id,
+            guild_id: "1".into(),
+            target_type,
+            target_id,
+        }
+    }
+
+    fn ctx<'a>(role_ids: &'a [u64], node: &'a str) -> CheckContext<'a> {
+        CheckContext {
+            guild_id: "1".into(),
+            user_id: 7,
+            channel_id: None,
+            role_ids,
+            is_owner: false,
+            is_guild_owner: false,
+            is_manager: false,
+            is_quarantined: false,
+            node,
+        }
+    }
+
+    #[test]
+    fn node_patterns() {
+        assert!(node_matches("*", "mod.ban"));
+        assert!(node_matches("mod.ban", "mod.ban"));
+        assert!(!node_matches("mod.ban", "mod.kick"));
+        assert!(node_matches("admin.*", "admin.b"));
+        assert!(node_matches("admin.*", "admin"));
+        assert!(!node_matches("admin.*", "administrator"));
+        assert!(!node_matches("", "mod.ban"));
+        assert!(!node_matches("mod.ban", ""));
+    }
+
+    #[test]
+    fn owner_always_allowed() {
+        let resolver = PermitResolver::new(Vec::new(), Vec::new());
+        let mut c = ctx(&[], "mod.ban");
+        c.is_owner = true;
+        assert!(resolver.resolve(&c).allowed);
+    }
+
+    #[test]
+    fn command_node_reads_custom_data_then_name() {
+        let mut command = crate::bot::Command::default();
+        command.name = "ban".into();
+        assert_eq!(command_node(&command), Some("mod.ban"));
+
+        command.custom_data = Box::new("custom.node");
+        assert_eq!(command_node(&command), Some("custom.node"));
+    }
+
+    #[test]
+    fn user_custom_grant_decides() {
+        let permits = vec![permit(1, PermitKind::Custom, PermitPolarity::Grant, &["mod.ban"])];
+        let resolver = PermitResolver::new(permits, vec![assignment(1, PermitTargetType::User, 7)]);
+        let decision = resolver.resolve(&ctx(&[], "mod.ban"));
+        assert!(decision.allowed);
+        assert!(decision.rows.iter().any(|r| r.tier == "custom:user"));
+    }
+
+    #[test]
+    fn enforced_deny_beats_custom_grant() {
+        let permits = vec![
+            permit(1, PermitKind::Enforced, PermitPolarity::Deny, &["*"]),
+            permit(2, PermitKind::Custom, PermitPolarity::Grant, &["*"]),
+        ];
+        let resolver = PermitResolver::new(
+            permits,
+            vec![
+                assignment(1, PermitTargetType::User, 7),
+                assignment(2, PermitTargetType::User, 7),
+            ],
+        );
+        let decision = resolver.resolve(&ctx(&[], "mod.ban"));
+        assert!(!decision.allowed);
+        assert_eq!(decision.rows.last().map(|r| r.tier.as_str()), Some("enforced:user"));
+    }
+
+    #[test]
+    fn quarantine_denies_when_undecided() {
+        let resolver = PermitResolver::new(Vec::new(), Vec::new());
+        let mut c = ctx(&[], "mod.ban");
+        c.is_quarantined = true;
+        let decision = resolver.resolve(&c);
+        assert!(!decision.allowed);
+        assert!(decision.rows.iter().any(|r| r.tier == "quarantine"));
+    }
+
+    #[test]
+    fn explain_lists_passing_tiers() {
+        let resolver = PermitResolver::new(Vec::new(), Vec::new());
+        let rows = resolver.explain(&ctx(&[], "mod.ban"));
+        assert_eq!(rows.first().map(|r| r.tier.as_str()), Some("owner"));
+        assert!(rows.iter().any(|r| r.tier == "manager" && r.verdict == Verdict::Pass));
     }
 }

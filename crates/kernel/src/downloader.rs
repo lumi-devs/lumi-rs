@@ -1,3 +1,8 @@
+//! Addon repository management: git-backed installs of external modules.
+//!
+//! Every git invocation goes through the async [`git`] helper; only the
+//! recursive directory copy runs on the blocking pool.
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -8,7 +13,7 @@ use sea_orm::{
 
 use lumi_db::entities::{downloader_module, downloader_repo, global, global_module_state};
 
-use crate::error::{LumiError, Result};
+use crate::{LumiError, Result};
 
 #[derive(Clone, Debug)]
 pub struct Downloader {
@@ -63,6 +68,50 @@ pub struct AutoUpdateConfig {
     pub interval_minutes: u64,
 }
 
+/// Reject names that could escape the addons directory when joined as a path.
+fn safe_component(name: &str) -> Result<&str> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." || trimmed.contains(['/', '\\', '\0'])
+    {
+        return Err(LumiError::Invalid(format!("'{name}' is not a valid name")));
+    }
+    Ok(trimmed)
+}
+
+/// Run `git` in `dir`, returning trimmed stdout or an error carrying stderr.
+async fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    let output = tokio::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .await
+        .map_err(LumiError::Io)?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(LumiError::Other(format!(
+            "git {} failed: {err}",
+            args.join(" ")
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Best-effort removal of a file or directory; missing paths are ignored.
+async fn remove_path(path: &Path) {
+    match tokio::fs::remove_dir_all(path).await {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            if let Err(err) = tokio::fs::remove_file(path).await {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(path = %path.display(), error = %err, "failed to remove path");
+                }
+            }
+        }
+    }
+}
+
 impl Downloader {
     pub fn new(db: DatabaseConnection, addons_dir: PathBuf) -> Self {
         Self { db, addons_dir }
@@ -72,33 +121,52 @@ impl Downloader {
         &self.addons_dir
     }
 
+    fn repo_dir(&self, name: &str) -> Result<PathBuf> {
+        Ok(self.addons_dir.join("repos").join(safe_component(name)?))
+    }
+
+    async fn find_repo(&self, name: &str) -> Result<downloader_repo::Model> {
+        downloader_repo::Entity::find()
+            .filter(downloader_repo::Column::Name.eq(name))
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| LumiError::NotFound(format!("repository '{name}'")))
+    }
+
+    async fn repo_names(&self) -> Result<HashMap<i32, String>> {
+        Ok(self
+            .list_repos()
+            .await?
+            .into_iter()
+            .map(|repo| (repo.id, repo.name))
+            .collect())
+    }
+
     pub async fn add_repo(
         &self,
         url: &str,
         name: Option<&str>,
         branch: Option<&str>,
     ) -> Result<downloader_repo::Model> {
-        let repo_name = match name {
-            Some(n) if !n.trim().is_empty() => n.trim().to_string(),
-            _ => {
-                let trimmed = url.trim_end_matches('/').trim_end_matches(".git");
-                let seg = trimmed.split('/').last().unwrap_or_default();
-                if seg.is_empty() {
-                    return Err(LumiError::Other(
-                        "could not derive repository name from URL".into(),
-                    ));
-                }
-                seg.to_string()
-            }
+        let derived = url
+            .trim_end_matches('/')
+            .trim_end_matches(".git")
+            .rsplit('/')
+            .next()
+            .unwrap_or_default();
+        let candidate = match name {
+            Some(n) if !n.trim().is_empty() => n,
+            _ => derived,
         };
+        let repo_name = safe_component(candidate)?.to_string();
 
-        let existing = downloader_repo::Entity::find()
+        if downloader_repo::Entity::find()
             .filter(downloader_repo::Column::Name.eq(&repo_name))
             .one(&self.db)
-            .await?;
-
-        if existing.is_some() {
-            return Err(LumiError::Other(format!(
+            .await?
+            .is_some()
+        {
+            return Err(LumiError::Invalid(format!(
                 "repository '{repo_name}' already exists"
             )));
         }
@@ -106,126 +174,57 @@ impl Downloader {
         let repos_dir = self.addons_dir.join("repos");
         tokio::fs::create_dir_all(&repos_dir).await?;
         let repo_dir = repos_dir.join(&repo_name);
+        remove_path(&repo_dir).await;
 
-        if repo_dir.exists() {
-            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
+        let repo_path = repo_dir.to_string_lossy().to_string();
+        let mut args = vec!["clone"];
+        if let Some(branch) = branch {
+            args.push("-b");
+            args.push(branch);
         }
+        args.push("--");
+        args.push(url);
+        args.push(&repo_path);
+        git(&repos_dir, &args).await?;
 
-        let repo_dir_clone = repo_dir.clone();
-        let url_string = url.to_string();
-        let branch_clone = branch.map(ToString::to_string);
-
-        let (actual_branch, commit_hash) =
-            tokio::task::spawn_blocking(move || -> Result<(String, Option<String>)> {
-                let mut clone_args = vec!["clone".to_string()];
-                if let Some(ref b) = branch_clone {
-                    clone_args.push("-b".to_string());
-                    clone_args.push(b.clone());
-                }
-                clone_args.push("--".to_string());
-                clone_args.push(url_string);
-                clone_args.push(repo_dir_clone.to_string_lossy().to_string());
-
-                let mut cmd = std::process::Command::new("git");
-                cmd.args(&clone_args);
-                cmd.env("GIT_TERMINAL_PROMPT", "0");
-                let output = cmd.output().map_err(LumiError::Io)?;
-                if !output.status.success() {
-                    let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                    return Err(LumiError::Other(format!("git clone failed: {err}")));
-                }
-
-                let mut branch_cmd = std::process::Command::new("git");
-                branch_cmd.args(["rev-parse", "--abbrev-ref", "HEAD"]);
-                branch_cmd.current_dir(&repo_dir_clone);
-                let branch_out = branch_cmd.output().map_err(LumiError::Io)?;
-                let resolved_branch = if branch_out.status.success() {
-                    let b = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
-                    if b.is_empty() {
-                        branch_clone.unwrap_or_else(|| "main".to_string())
-                    } else {
-                        b
-                    }
-                } else {
-                    branch_clone.unwrap_or_else(|| "main".to_string())
-                };
-
-                let mut rev_cmd = std::process::Command::new("git");
-                rev_cmd.args(["rev-parse", "HEAD"]);
-                rev_cmd.current_dir(&repo_dir_clone);
-                let rev_out = rev_cmd.output().map_err(LumiError::Io)?;
-                let resolved_commit = if rev_out.status.success() {
-                    let c = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
-                    if c.is_empty() {
-                        None
-                    } else {
-                        Some(c)
-                    }
-                } else {
-                    None
-                };
-
-                Ok((resolved_branch, resolved_commit))
-            })
+        let resolved_branch = git(&repo_dir, &["rev-parse", "--abbrev-ref", "HEAD"])
             .await
-            .map_err(|e| LumiError::Other(e.to_string()))??;
+            .ok()
+            .filter(|resolved| !resolved.is_empty())
+            .or_else(|| branch.map(str::to_string))
+            .unwrap_or_else(|| "main".to_string());
+        let commit_hash = git(&repo_dir, &["rev-parse", "HEAD"])
+            .await
+            .ok()
+            .filter(|commit| !commit.is_empty());
 
         let now = Utc::now().fixed_offset();
-        let new_repo = downloader_repo::ActiveModel {
+        let inserted = downloader_repo::ActiveModel {
             name: Set(repo_name),
             url: Set(url.to_string()),
-            branch: Set(actual_branch),
+            branch: Set(resolved_branch),
             commit: Set(commit_hash),
             signed_by: Set(None),
             created_at: Set(now),
             updated_at: Set(now),
             ..Default::default()
-        };
-
-        let inserted = new_repo.insert(&self.db).await?;
+        }
+        .insert(&self.db)
+        .await?;
         Ok(inserted)
     }
 
     pub async fn pull_repo(&self, name: &str) -> Result<String> {
-        let repo = downloader_repo::Entity::find()
-            .filter(downloader_repo::Column::Name.eq(name))
-            .one(&self.db)
-            .await?
-            .ok_or_else(|| LumiError::Other(format!("repository '{name}' not found")))?;
-
-        let repo_dir = self.addons_dir.join("repos").join(name);
+        let repo = self.find_repo(name).await?;
+        let repo_dir = self.repo_dir(name)?;
         if !repo_dir.exists() {
-            return Err(LumiError::Other(format!(
-                "repository directory for '{name}' does not exist"
+            return Err(LumiError::NotFound(format!(
+                "repository directory for '{name}'"
             )));
         }
 
-        let repo_dir_clone = repo_dir.clone();
-        let new_commit = tokio::task::spawn_blocking(move || -> Result<String> {
-            let mut pull_cmd = std::process::Command::new("git");
-            pull_cmd.args(["pull"]);
-            pull_cmd.current_dir(&repo_dir_clone);
-            pull_cmd.env("GIT_TERMINAL_PROMPT", "0");
-            let pull_out = pull_cmd.output().map_err(LumiError::Io)?;
-            if !pull_out.status.success() {
-                let err = String::from_utf8_lossy(&pull_out.stderr).trim().to_string();
-                return Err(LumiError::Other(format!("git pull failed: {err}")));
-            }
-
-            let mut rev_cmd = std::process::Command::new("git");
-            rev_cmd.args(["rev-parse", "HEAD"]);
-            rev_cmd.current_dir(&repo_dir_clone);
-            let rev_out = rev_cmd.output().map_err(LumiError::Io)?;
-            if rev_out.status.success() {
-                Ok(String::from_utf8_lossy(&rev_out.stdout).trim().to_string())
-            } else {
-                Err(LumiError::Other(
-                    "failed to resolve commit hash after pull".into(),
-                ))
-            }
-        })
-        .await
-        .map_err(|e| LumiError::Other(e.to_string()))??;
+        git(&repo_dir, &["pull"]).await?;
+        let new_commit = git(&repo_dir, &["rev-parse", "HEAD"]).await?;
 
         let mut active: downloader_repo::ActiveModel = repo.into();
         active.commit = Set(Some(new_commit.clone()));
@@ -236,52 +235,38 @@ impl Downloader {
     }
 
     pub async fn list_repos(&self) -> Result<Vec<downloader_repo::Model>> {
-        downloader_repo::Entity::find()
+        Ok(downloader_repo::Entity::find()
             .order_by_asc(downloader_repo::Column::Name)
             .all(&self.db)
-            .await
-            .map_err(LumiError::Db)
+            .await?)
     }
 
     pub async fn remove_repo(&self, name: &str) -> Result<bool> {
-        let repo = downloader_repo::Entity::find()
+        let Some(repo) = downloader_repo::Entity::find()
             .filter(downloader_repo::Column::Name.eq(name))
             .one(&self.db)
-            .await?;
-
-        let Some(repo) = repo else {
+            .await?
+        else {
             return Ok(false);
         };
 
-        let modules = downloader_module::Entity::find()
+        for module in downloader_module::Entity::find()
             .filter(downloader_module::Column::RepoId.eq(repo.id))
             .all(&self.db)
-            .await?;
-
-        for m in &modules {
-            let target_dir = self.addons_dir.join(&m.module_name);
-            if target_dir.exists() {
-                let _ = tokio::fs::remove_dir_all(&target_dir).await;
-            }
-            let target_file = self.addons_dir.join(format!("{}.rhai", m.module_name));
-            if target_file.exists() {
-                let _ = tokio::fs::remove_file(&target_file).await;
-            }
+            .await?
+        {
+            remove_path(&self.addons_dir.join(&module.module_name)).await;
+            remove_path(&self.addons_dir.join(format!("{}.rhai", module.module_name))).await;
         }
 
         downloader_module::Entity::delete_many()
             .filter(downloader_module::Column::RepoId.eq(repo.id))
             .exec(&self.db)
             .await?;
-
         downloader_repo::Entity::delete_by_id(repo.id)
             .exec(&self.db)
             .await?;
-
-        let repo_dir = self.addons_dir.join("repos").join(name);
-        if repo_dir.exists() {
-            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
-        }
+        remove_path(&self.repo_dir(name)?).await;
 
         Ok(true)
     }
@@ -291,34 +276,28 @@ impl Downloader {
         repo_name: &str,
         module_name: &str,
     ) -> Result<downloader_module::Model> {
-        let repo = downloader_repo::Entity::find()
-            .filter(downloader_repo::Column::Name.eq(repo_name))
-            .one(&self.db)
-            .await?
-            .ok_or_else(|| LumiError::Other(format!("repository '{repo_name}' not found")))?;
+        let repo_name = safe_component(repo_name)?;
+        let module_name = safe_component(module_name)?;
+        let repo = self.find_repo(repo_name).await?;
 
-        let repo_dir = self.addons_dir.join("repos").join(repo_name);
+        let repo_dir = self.repo_dir(repo_name)?;
         if !repo_dir.exists() {
-            return Err(LumiError::Other(format!(
-                "repository directory for '{repo_name}' does not exist"
+            return Err(LumiError::NotFound(format!(
+                "repository directory for '{repo_name}'"
             )));
         }
 
         let source_dir = repo_dir.join(module_name);
         let source_file = repo_dir.join(format!("{module_name}.rhai"));
-
         let is_dir = source_dir.is_dir();
-        let is_file = source_file.is_file();
-
-        if !is_dir && !is_file {
-            return Err(LumiError::Other(format!(
-                "module '{module_name}' not found in repository '{repo_name}'"
+        if !is_dir && !source_file.is_file() {
+            return Err(LumiError::NotFound(format!(
+                "module '{module_name}' in repository '{repo_name}'"
             )));
         }
 
         let addons_dir = self.addons_dir.clone();
         let mod_name = module_name.to_string();
-
         tokio::task::spawn_blocking(move || -> Result<()> {
             std::fs::create_dir_all(&addons_dir).map_err(LumiError::Io)?;
             if is_dir {
@@ -327,29 +306,15 @@ impl Downloader {
                     let _ = std::fs::remove_dir_all(&target_dir);
                 }
                 copy_dir_recursive(&source_dir, &target_dir).map_err(LumiError::Io)?;
-            } else if is_file {
-                let target_file = addons_dir.join(format!("{mod_name}.rhai"));
-                std::fs::copy(&source_file, &target_file).map_err(LumiError::Io)?;
+            } else {
+                std::fs::copy(&source_file, addons_dir.join(format!("{mod_name}.rhai")))
+                    .map_err(LumiError::Io)?;
             }
             Ok(())
         })
-        .await
-        .map_err(|e| LumiError::Other(e.to_string()))??;
+        .await??;
 
-        let manifest_path = repo_dir.join(module_name).join("manifest.json");
-        let version = if manifest_path.exists() {
-            tokio::fs::read_to_string(&manifest_path)
-                .await
-                .ok()
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                .and_then(|v| {
-                    v.get("version")
-                        .and_then(|ver| ver.as_str())
-                        .map(ToString::to_string)
-                })
-        } else {
-            None
-        };
+        let version = read_manifest_version(&repo_dir.join(module_name).join("manifest.json")).await;
 
         let existing = downloader_module::Entity::find()
             .filter(downloader_module::Column::RepoId.eq(repo.id))
@@ -358,14 +323,14 @@ impl Downloader {
             .await?;
 
         let now = Utc::now().fixed_offset();
-        let model = if let Some(m) = existing {
-            let mut active: downloader_module::ActiveModel = m.into();
+        let model = if let Some(module) = existing {
+            let mut active: downloader_module::ActiveModel = module.into();
             active.version = Set(version);
             active.commit = Set(repo.commit.clone());
             active.installed_at = Set(now);
             active.update(&self.db).await?
         } else {
-            let active = downloader_module::ActiveModel {
+            downloader_module::ActiveModel {
                 repo_id: Set(repo.id),
                 module_name: Set(module_name.to_string()),
                 version: Set(version),
@@ -373,47 +338,43 @@ impl Downloader {
                 signed_by: Set(None),
                 pinned: Set(false),
                 installed_at: Set(now),
-            };
-            active.insert(&self.db).await?
+            }
+            .insert(&self.db)
+            .await?
         };
 
         Ok(model)
     }
 
     pub async fn list_installed_modules(&self) -> Result<Vec<downloader_module::Model>> {
-        downloader_module::Entity::find()
+        Ok(downloader_module::Entity::find()
             .order_by_asc(downloader_module::Column::ModuleName)
             .all(&self.db)
-            .await
-            .map_err(LumiError::Db)
+            .await?)
     }
 
     pub async fn get_repo_by_id(&self, id: i32) -> Result<Option<downloader_repo::Model>> {
-        downloader_repo::Entity::find_by_id(id)
-            .one(&self.db)
-            .await
-            .map_err(LumiError::Db)
+        Ok(downloader_repo::Entity::find_by_id(id).one(&self.db).await?)
     }
 
     pub async fn get_repo_by_name(&self, name: &str) -> Result<Option<downloader_repo::Model>> {
-        downloader_repo::Entity::find()
+        Ok(downloader_repo::Entity::find()
             .filter(downloader_repo::Column::Name.eq(name))
             .one(&self.db)
-            .await
-            .map_err(LumiError::Db)
+            .await?)
     }
 
     /// Whether a module has been disabled globally. Defaults to enabled.
-    pub async fn is_module_enabled(&self, module_name: &str) -> anyhow::Result<bool> {
+    pub async fn is_module_enabled(&self, module_name: &str) -> Result<bool> {
         let row = global_module_state::Entity::find()
             .filter(global_module_state::Column::ModuleName.eq(module_name))
             .one(&self.db)
             .await?;
-        Ok(row.is_none_or(|m| m.enabled))
+        Ok(row.is_none_or(|module| module.enabled))
     }
 
     /// Lazily compare a repository's remote branch against its local checkout.
-    pub async fn check_repo_update(&self, name: &str) -> anyhow::Result<RepoUpdateCheck> {
+    pub async fn check_repo_update(&self, name: &str) -> Result<RepoUpdateCheck> {
         let Some(repo) = self.get_repo_by_name(name).await? else {
             return Ok(RepoUpdateCheck {
                 ok: false,
@@ -423,7 +384,7 @@ impl Downloader {
             });
         };
 
-        let repo_dir = self.addons_dir.join("repos").join(name);
+        let repo_dir = self.repo_dir(name)?;
         if !repo_dir.exists() {
             return Ok(RepoUpdateCheck {
                 ok: true,
@@ -433,29 +394,18 @@ impl Downloader {
             });
         }
 
-        let branch = repo.branch.clone();
-        let dir = repo_dir.clone();
-        let (local, remote, changelog) =
-            tokio::task::spawn_blocking(move || -> Result<(String, String, String)> {
-                // why: a failed fetch is tolerated; we then compare against stale refs.
-                let _ = git(&dir, &["fetch", "origin"]);
-                let local = git(&dir, &["rev-parse", "HEAD"])?;
-                let upstream =
-                    git(&dir, &["rev-parse", "--abbrev-ref", "@{u}"]).unwrap_or_default();
-                let target = if upstream.is_empty() || upstream.contains("@{u}") {
-                    format!("origin/{branch}")
-                } else {
-                    upstream
-                };
-                let remote = git(&dir, &["rev-parse", target.as_str()])?;
-                let range = format!("HEAD..{target}");
-                let changelog =
-                    git(&dir, &["log", "--oneline", range.as_str()]).unwrap_or_default();
-                Ok((local, remote, changelog))
-            })
+        // why: a failed fetch is tolerated; we then compare against stale refs.
+        let _ = git(&repo_dir, &["fetch", "origin"]).await;
+        let local = git(&repo_dir, &["rev-parse", "HEAD"]).await?;
+        let upstream = git(&repo_dir, &["rev-parse", "--abbrev-ref", "@{u}"])
             .await
-            .map_err(|e| anyhow::anyhow!(e.to_string()))??;
-
+            .unwrap_or_default();
+        let target = if upstream.is_empty() || upstream.contains("@{u}") {
+            format!("origin/{}", repo.branch)
+        } else {
+            upstream
+        };
+        let remote = git(&repo_dir, &["rev-parse", target.as_str()]).await?;
         if local == remote {
             return Ok(RepoUpdateCheck {
                 ok: true,
@@ -465,38 +415,28 @@ impl Downloader {
             });
         }
 
+        let changelog = git(&repo_dir, &["log", "--oneline", &format!("HEAD..{target}")])
+            .await
+            .unwrap_or_default();
         Ok(RepoUpdateCheck {
             ok: true,
             reason: String::new(),
             has_update: true,
-            changelog: if changelog.is_empty() {
-                None
-            } else {
-                Some(changelog)
-            },
+            changelog: (!changelog.is_empty()).then_some(changelog),
         })
     }
 
     /// Pull a repository and report what changed.
-    pub async fn update_repo(&self, name: &str) -> anyhow::Result<RepoUpdateResult> {
-        let repo = self
-            .get_repo_by_name(name)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("repository '{name}' not found"))?;
+    pub async fn update_repo(&self, name: &str) -> Result<RepoUpdateResult> {
+        let repo = self.find_repo(name).await?;
         let old_sha = repo.commit.clone();
         let new_sha = self.pull_repo(name).await?;
         let changed = old_sha.as_deref() != Some(new_sha.as_str());
 
         let diff_stat = match (changed, old_sha.clone()) {
             (true, Some(old)) => {
-                let repo_dir = self.addons_dir.join("repos").join(name);
                 let range = format!("{old}..{new_sha}");
-                tokio::task::spawn_blocking(move || {
-                    git(&repo_dir, &["diff", "--stat", range.as_str()]).ok()
-                })
-                .await
-                .ok()
-                .flatten()
+                git(&self.repo_dir(name)?, &["diff", "--stat", &range]).await.ok()
             }
             _ => None,
         };
@@ -509,12 +449,10 @@ impl Downloader {
         })
     }
 
-    /// Count repositories whose remote branch is ahead of the local checkout.
-    /// Names of tracked repositories that have a pending update.
-    pub async fn check_for_updates_detailed(&self) -> anyhow::Result<Vec<String>> {
+    /// Names of tracked repositories whose remote branch is ahead of the local checkout.
+    pub async fn check_for_updates_detailed(&self) -> Result<Vec<String>> {
         let modules = self.list_installed_modules().await?;
-        let repos = self.list_repos().await?;
-        let names: HashMap<i32, String> = repos.into_iter().map(|r| (r.id, r.name)).collect();
+        let names = self.repo_names().await?;
 
         let mut seen: HashSet<i32> = HashSet::new();
         let mut pending = Vec::new();
@@ -535,26 +473,24 @@ impl Downloader {
     }
 
     /// Remove a module's files and forget it. Returns whether it was tracked.
+    ///
+    /// shortcut: `anyhow::Result` to keep the existing `crates/lumi` match arms
+    /// type-checking; switch to kernel `Result` once lumi is updated.
     pub async fn uninstall_module(&self, module_name: &str) -> anyhow::Result<bool> {
-        let Some(model) = downloader_module::Entity::find()
+        let module_name = safe_component(module_name)?;
+        if downloader_module::Entity::find()
             .filter(downloader_module::Column::ModuleName.eq(module_name))
             .one(&self.db)
             .await?
-        else {
+            .is_none()
+        {
             return Ok(false);
-        };
+        }
 
-        let target_dir = self.addons_dir.join(module_name);
-        if target_dir.exists() {
-            let _ = tokio::fs::remove_dir_all(&target_dir).await;
-        }
-        let target_file = self.addons_dir.join(format!("{module_name}.rhai"));
-        if target_file.exists() {
-            let _ = tokio::fs::remove_file(&target_file).await;
-        }
+        remove_path(&self.addons_dir.join(module_name)).await;
+        remove_path(&self.addons_dir.join(format!("{module_name}.rhai"))).await;
 
         downloader_module::Entity::delete_many()
-            .filter(downloader_module::Column::RepoId.eq(model.repo_id))
             .filter(downloader_module::Column::ModuleName.eq(module_name))
             .exec(&self.db)
             .await?;
@@ -562,57 +498,48 @@ impl Downloader {
     }
 
     /// Enable or disable a module globally.
-    pub async fn toggle_module(&self, module_name: &str, enabled: bool) -> anyhow::Result<()> {
-        let now = Utc::now().fixed_offset();
-        let reason = Some("toggled via addons panel".to_string());
-        match global_module_state::Entity::find()
-            .filter(global_module_state::Column::ModuleName.eq(module_name))
-            .one(&self.db)
-            .await?
-        {
-            Some(existing) => {
-                let mut active: global_module_state::ActiveModel = existing.into();
-                active.enabled = Set(enabled);
-                active.reason = Set(reason);
-                active.updated_at = Set(now);
-                active.update(&self.db).await?;
-            }
-            None => {
-                global_module_state::ActiveModel {
-                    module_name: Set(module_name.to_string()),
-                    enabled: Set(enabled),
-                    reason: Set(reason),
-                    updated_at: Set(now),
-                }
-                .insert(&self.db)
-                .await?;
-            }
-        }
+    pub async fn toggle_module(&self, module_name: &str, enabled: bool) -> Result<()> {
+        global_module_state::Entity::insert(global_module_state::ActiveModel {
+            module_name: Set(module_name.to_string()),
+            enabled: Set(enabled),
+            reason: Set(Some("toggled via addons panel".to_string())),
+            updated_at: Set(Utc::now().fixed_offset()),
+        })
+        .on_conflict(
+            sea_orm::sea_query::OnConflict::column(global_module_state::Column::ModuleName)
+                .update_columns([
+                    global_module_state::Column::Enabled,
+                    global_module_state::Column::Reason,
+                    global_module_state::Column::UpdatedAt,
+                ])
+                .to_owned(),
+        )
+        .exec(&self.db)
+        .await?;
         Ok(())
     }
 
     /// Installed modules joined with their source repository name.
-    pub async fn get_installed_modules_detailed(&self) -> anyhow::Result<Vec<InstalledModule>> {
+    pub async fn get_installed_modules_detailed(&self) -> Result<Vec<InstalledModule>> {
         let modules = self.list_installed_modules().await?;
-        let repos = self.list_repos().await?;
-        let names: HashMap<i32, String> = repos.into_iter().map(|r| (r.id, r.name)).collect();
+        let names = self.repo_names().await?;
 
         Ok(modules
             .into_iter()
-            .filter_map(|m| {
+            .filter_map(|module| {
                 Some(InstalledModule {
-                    module_name: m.module_name,
-                    version: m.version,
-                    repo_name: names.get(&m.repo_id)?.clone(),
-                    installed_at: m.installed_at,
+                    module_name: module.module_name,
+                    version: module.version,
+                    repo_name: names.get(&module.repo_id)?.clone(),
+                    installed_at: module.installed_at,
                 })
             })
             .collect())
     }
 
     /// Scan a repository checkout for module manifests.
-    pub async fn get_modules_in_repo(&self, repo_name: &str) -> anyhow::Result<Vec<RepoModuleInfo>> {
-        let repo_dir = self.addons_dir.join("repos").join(repo_name);
+    pub async fn get_modules_in_repo(&self, repo_name: &str) -> Result<Vec<RepoModuleInfo>> {
+        let repo_dir = self.repo_dir(repo_name)?;
         if !repo_dir.is_dir() {
             return Ok(Vec::new());
         }
@@ -630,37 +557,28 @@ impl Downloader {
             let Ok(raw) = tokio::fs::read_to_string(entry.path().join("manifest.json")).await else {
                 continue;
             };
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
                 continue;
             };
             out.push(RepoModuleInfo {
-                name: v
+                name: value
                     .get("name")
                     .and_then(|x| x.as_str())
                     .map_or_else(|| dir_name.clone(), ToString::to_string),
-                version: v
+                version: value
                     .get("version")
                     .and_then(|x| x.as_str())
                     .unwrap_or("1.0.0")
                     .to_string(),
-                short: v.get("short").and_then(|x| x.as_str()).map(ToString::to_string),
-                description: v
-                    .get("description")
-                    .and_then(|x| x.as_str())
-                    .map(ToString::to_string),
-                author: v.get("author").and_then(render_author),
-                min_bot_version: v
-                    .get("min_bot_version")
-                    .and_then(|x| x.as_str())
-                    .map(ToString::to_string),
-                hidden: v
+                short: text_field(&value, "short"),
+                description: text_field(&value, "description"),
+                author: value.get("author").and_then(render_author),
+                min_bot_version: text_field(&value, "min_bot_version"),
+                hidden: value
                     .get("hidden")
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false),
-                end_user_data_statement: v
-                    .get("end_user_data_statement")
-                    .and_then(|x| x.as_str())
-                    .map(ToString::to_string),
+                end_user_data_statement: text_field(&value, "end_user_data_statement"),
             });
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -668,7 +586,7 @@ impl Downloader {
     }
 
     /// Read the auto-update settings from `global_config`.
-    pub async fn get_auto_update_config(&self) -> anyhow::Result<AutoUpdateConfig> {
+    pub async fn get_auto_update_config(&self) -> Result<AutoUpdateConfig> {
         let row = global::Entity::find()
             .order_by_asc(global::Column::Id)
             .one(&self.db)
@@ -678,47 +596,40 @@ impl Downloader {
                 enabled: false,
                 interval_minutes: 1440,
             },
-            |r| AutoUpdateConfig {
-                enabled: r.auto_update_enabled,
-                interval_minutes: u64::try_from(r.auto_update_interval_minutes).unwrap_or(1440),
+            |row| AutoUpdateConfig {
+                enabled: row.auto_update_enabled,
+                interval_minutes: u64::try_from(row.auto_update_interval_minutes).unwrap_or(1440),
             },
         ))
     }
 
     /// Write the auto-update settings to the existing `global_config` row.
-    pub async fn set_auto_update_config(&self, cfg: AutoUpdateConfig) -> anyhow::Result<()> {
+    pub async fn set_auto_update_config(&self, cfg: AutoUpdateConfig) -> Result<()> {
         let row = global::Entity::find()
             .order_by_asc(global::Column::Id)
             .one(&self.db)
             .await?;
-        if let Some(existing) = row {
-            let mut active: global::ActiveModel = existing.into();
-            active.auto_update_enabled = Set(cfg.enabled);
-            active.auto_update_interval_minutes =
-                Set(i32::try_from(cfg.interval_minutes).unwrap_or(i32::MAX));
-            active.updated_at = Set(Utc::now().fixed_offset());
-            active.update(&self.db).await?;
-        }
+        let Some(existing) = row else {
+            tracing::warn!("global config row missing; auto-update settings not persisted");
+            return Ok(());
+        };
+        let mut active: global::ActiveModel = existing.into();
+        active.auto_update_enabled = Set(cfg.enabled);
+        active.auto_update_interval_minutes = Set(i32::try_from(cfg.interval_minutes).unwrap_or(i32::MAX));
+        active.updated_at = Set(Utc::now().fixed_offset());
+        active.update(&self.db).await?;
         Ok(())
     }
 }
 
-/// Run `git` in `dir`, returning trimmed stdout or an error carrying stderr.
-fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .map_err(LumiError::Io)?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(LumiError::Other(format!(
-            "git {} failed: {err}",
-            args.join(" ")
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+fn text_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key).and_then(|x| x.as_str()).map(ToString::to_string)
+}
+
+async fn read_manifest_version(path: &Path) -> Option<String> {
+    let raw = tokio::fs::read_to_string(path).await.ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    text_field(&value, "version")
 }
 
 /// A manifest `author` is either a string or an array of strings.
@@ -752,4 +663,29 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_component_rejects_traversal() {
+        assert_eq!(safe_component("good-name").ok(), Some("good-name"));
+        assert!(safe_component("").is_err());
+        assert!(safe_component("..").is_err());
+        assert!(safe_component("a/b").is_err());
+        assert!(safe_component("a\\b").is_err());
+        assert!(safe_component(" a ").is_ok());
+    }
+
+    #[test]
+    fn render_author_accepts_string_and_array() {
+        assert_eq!(render_author(&serde_json::json!("A")), Some("A".into()));
+        assert_eq!(
+            render_author(&serde_json::json!(["A", "B"])),
+            Some("A, B".into())
+        );
+        assert_eq!(render_author(&serde_json::json!([])), None);
+    }
 }
