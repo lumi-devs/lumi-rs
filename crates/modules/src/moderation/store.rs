@@ -4,7 +4,7 @@ use sea_orm::{
     QuerySelect, Set,
 };
 
-use lumi_db::entities::{enums::CaseAction, mod_note, moderation_case};
+use lumi_db::entities::{enums::CaseAction, mod_note, moderation_case, warn_threshold};
 use lumi_kernel::Result;
 
 const CONFIG_MODULE: &str = "mod";
@@ -75,6 +75,44 @@ pub async fn update_case_reason(
     }
 }
 
+pub async fn delete_case(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    case_number: i32,
+) -> Result<Option<moderation_case::Model>> {
+    let case_opt = get_case(db, guild_id, case_number).await?;
+    if let Some(c) = case_opt {
+        moderation_case::Entity::delete_by_id(c.id).exec(db).await?;
+        Ok(Some(c))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn list_cases(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: Option<u64>,
+    action: Option<CaseAction>,
+    limit: u64,
+) -> Result<Vec<moderation_case::Model>> {
+    let mut query = moderation_case::Entity::find()
+        .filter(moderation_case::Column::GuildId.eq(guild_id.to_string()));
+
+    if let Some(uid) = user_id {
+        query = query.filter(moderation_case::Column::UserId.eq(uid.to_string()));
+    }
+    if let Some(act) = action {
+        query = query.filter(moderation_case::Column::Action.eq(act));
+    }
+
+    Ok(query
+        .order_by_desc(moderation_case::Column::CaseNumber)
+        .limit(limit)
+        .all(db)
+        .await?)
+}
+
 pub async fn list_user_cases(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -103,6 +141,17 @@ pub async fn count_warns(
         .all(db)
         .await?;
     Ok(cases.len() as u64)
+}
+
+pub async fn get_warn_thresholds(
+    db: &DatabaseConnection,
+    guild_id: u64,
+) -> Result<Vec<warn_threshold::Model>> {
+    Ok(warn_threshold::Entity::find()
+        .filter(warn_threshold::Column::GuildId.eq(guild_id.to_string()))
+        .order_by_asc(warn_threshold::Column::WarnCount)
+        .all(db)
+        .await?)
 }
 
 pub async fn add_note(
