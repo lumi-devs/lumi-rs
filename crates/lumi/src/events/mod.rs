@@ -32,6 +32,13 @@ impl serenity::EventHandler for Events {
                                 component,
                             )
                             .await
+                        } else if component.data.custom_id.starts_with("tempvc:") {
+                            lumi_modules::tempvc::handle_component(
+                                ctx,
+                                services.as_ref(),
+                                component,
+                            )
+                            .await
                         } else {
                             crate::commands::handle_component(ctx, 0, component).await
                         };

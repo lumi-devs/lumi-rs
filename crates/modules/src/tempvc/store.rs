@@ -193,6 +193,23 @@ pub async fn set_locked(
     }
 }
 
+pub async fn set_owner(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    channel_id: u64,
+    new_owner_id: u64,
+) -> Result<bool> {
+    let rec = get_record(db, guild_id, channel_id).await?;
+    if let Some(m) = rec {
+        let mut active: temp_vc_record::ActiveModel = m.into();
+        active.owner_id = Set(new_owner_id.to_string());
+        active.update(db).await?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 pub async fn set_name(
     db: &DatabaseConnection,
     guild_id: u64,
