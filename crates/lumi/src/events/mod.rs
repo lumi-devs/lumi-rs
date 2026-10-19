@@ -176,6 +176,7 @@ impl serenity::EventHandler for Events {
             }
             serenity::FullEvent::GuildMemberUpdate {
                 old_if_available,
+                new,
                 event,
                 ..
             } => {
@@ -189,6 +190,16 @@ impl serenity::EventHandler for Events {
                 .await
                 {
                     tracing::warn!(%error, "logging member update failed");
+                }
+                if let Err(error) = lumi_modules::security::events::on_member_update(
+                    ctx,
+                    services.as_ref(),
+                    old_if_available.as_ref(),
+                    new.as_ref(),
+                )
+                .await
+                {
+                    tracing::warn!(%error, "security member update handler failed");
                 }
             }
             serenity::FullEvent::GuildBanAddition {
@@ -223,6 +234,36 @@ impl serenity::EventHandler for Events {
                 .await
                 {
                     tracing::warn!(%error, "logging ban remove failed");
+                }
+            }
+            serenity::FullEvent::GuildRoleUpdate {
+                old_data_if_available,
+                new,
+                ..
+            } => {
+                let services = ctx.data::<lumi_kernel::bot::Data>();
+                if let Err(error) = lumi_modules::security::events::on_role_update(
+                    ctx,
+                    services.as_ref(),
+                    old_data_if_available.as_ref(),
+                    new,
+                )
+                .await
+                {
+                    tracing::warn!(%error, "security role update handler failed");
+                }
+            }
+            serenity::FullEvent::GuildAuditLogEntryCreate { entry, guild_id, .. } => {
+                let services = ctx.data::<lumi_kernel::bot::Data>();
+                if let Err(error) = lumi_modules::security::events::on_audit_log_entry(
+                    ctx,
+                    services.as_ref(),
+                    entry,
+                    *guild_id,
+                )
+                .await
+                {
+                    tracing::warn!(%error, "security audit log handler failed");
                 }
             }
             serenity::FullEvent::VoiceStateUpdate { old, new, .. } => {

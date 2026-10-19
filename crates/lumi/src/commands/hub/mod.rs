@@ -307,6 +307,8 @@ pub async fn caller_may_manage(
     if services.cfg.is_owner(component.user.id.get()) {
         return true;
     }
+    let is_quarantined =
+        lumi_modules::security::store::panic_locks_commands(services, guild_id.get()).await;
     let Some(guild) = ctx.cache.guild(guild_id) else {
         return false;
     };
@@ -323,7 +325,7 @@ pub async fn caller_may_manage(
         is_owner: false,
         is_guild_owner: guild.owner_id == component.user.id,
         is_manager: perms.administrator() || perms.manage_guild(),
-        is_quarantined: false,
+        is_quarantined,
         node: ADMIN_NODE,
     };
     services.permits.resolve(&check).allowed
@@ -340,6 +342,8 @@ async fn caller_may_manage_modal(
     let Some(guild_id) = modal.guild_id else {
         return false;
     };
+    let is_quarantined =
+        lumi_modules::security::store::panic_locks_commands(services, guild_id.get()).await;
     let Some(guild) = ctx.cache.guild(guild_id) else {
         return false;
     };
@@ -356,7 +360,7 @@ async fn caller_may_manage_modal(
         is_owner: false,
         is_guild_owner: guild.owner_id == modal.user.id,
         is_manager: perms.administrator() || perms.manage_guild(),
-        is_quarantined: false,
+        is_quarantined,
         node: ADMIN_NODE,
     };
     services.permits.resolve(&check).allowed

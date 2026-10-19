@@ -1,8 +1,36 @@
+use std::borrow::Cow;
+
 use poise::serenity_prelude as serenity;
-use serenity::all::{ChannelId, PermissionOverwrite, PermissionOverwriteType, Permissions};
+use serenity::all::{
+    ChannelId, EditGuild, PermissionOverwrite, PermissionOverwriteType, Permissions,
+};
 
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind};
+
+/// Toggle the `INVITES_DISABLED` guild feature. Returns whether the change
+/// applied so callers can record the real invite state.
+async fn set_invites_disabled(ctx: Context<'_>, guild_id: serenity::GuildId, disabled: bool) -> bool {
+    // Extract owned feature names so no cache guard lives across the await.
+    let mut features: Vec<Cow<'static, str>> = {
+        let Some(guild) = ctx.cache().guild(guild_id) else {
+            return false;
+        };
+        guild
+            .features
+            .iter()
+            .map(|feature| Cow::Owned(feature.as_str().to_string()))
+            .collect()
+    };
+    features.retain(|feature| feature.as_ref() != "INVITES_DISABLED");
+    if disabled {
+        features.push(Cow::Owned("INVITES_DISABLED".to_string()));
+    }
+    guild_id
+        .edit(ctx.http(), EditGuild::new().features(features))
+        .await
+        .is_ok()
+}
 
 /// Security lockdown and panic management.
 #[poise::command(
@@ -91,13 +119,18 @@ pub async fn on(ctx: Context<'_>) -> Result<(), Error> {
         }
     }
 
-    sec.activate_panic(&guild_id.to_string(), &actor_id.to_string(), true, locked.clone())
+    let invites_paused = set_invites_disabled(ctx, guild_id, true).await;
+
+    sec.activate_panic(&guild_id.to_string(), &actor_id.to_string(), invites_paused, locked.clone())
         .await?;
 
     let lines = vec![
         format!("Triggered by <@{}>.", actor_id),
         format!("**Locked Channels**: `{}`", locked.len()),
-        "Server invites are paused. Only administrators may send messages.".to_string(),
+        format!(
+            "Server invites are {}.",
+            if invites_paused { "paused" } else { "unchanged (could not disable invites)" }
+        ),
         "Use `/panic off` when the threat has been resolved.".to_string(),
     ];
     let card = Card::lines("🚨 Panic Lockdown Activated", lines).kind(CardKind::Error);
@@ -137,6 +170,10 @@ pub async fn off(ctx: Context<'_>) -> Result<(), Error> {
                 restored += 1;
             }
         }
+    }
+
+    if prior.invites_paused {
+        set_invites_disabled(ctx, guild_id, false).await;
     }
 
     let lines = vec![
