@@ -130,6 +130,43 @@ pub async fn award_xp(
     Ok(Some((updated, gained)))
 }
 
+pub async fn add_voice_minutes(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    minutes: i32,
+    xp: i64,
+) -> Result<level_account::Model> {
+    let txn = db.begin().await?;
+    let account = get_or_create_account(&txn, guild_id, user_id).await?;
+
+    let now = Utc::now().fixed_offset();
+    let new_total_xp = account.total_xp + xp;
+    let (new_level, new_xp, _) = calculate_level_up(account.level, account.xp + xp);
+
+    let mut active: level_account::ActiveModel = account.clone().into();
+    active.level = Set(new_level);
+    active.xp = Set(new_xp);
+    active.total_xp = Set(new_total_xp);
+    active.voice_minutes = Set(account.voice_minutes + minutes);
+    let updated = active.update(&txn).await?;
+
+    if xp > 0 {
+        let gain = level_xp_gain::ActiveModel {
+            guild_id: Set(guild_id.to_string()),
+            user_id: Set(user_id.to_string()),
+            amount: Set(xp),
+            source: Set("voice".to_string()),
+            created_at: Set(now),
+            ..Default::default()
+        };
+        gain.insert(&txn).await?;
+    }
+
+    txn.commit().await?;
+    Ok(updated)
+}
+
 pub async fn set_level_xp(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -145,6 +182,80 @@ pub async fn set_level_xp(
     active.level = Set(level);
     active.xp = Set(xp);
     active.total_xp = Set(total_xp);
+    let updated = active.update(&txn).await?;
+    txn.commit().await?;
+    Ok(updated)
+}
+
+pub async fn set_level_and_xp(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    level: i32,
+    xp: Option<i64>,
+) -> Result<level_account::Model> {
+    let level = level.clamp(START_LEVEL, MAX_LEVEL);
+    let max_xp = (xp_for_level(level) - 1).max(0);
+    let xp = xp.unwrap_or(0).clamp(0, max_xp);
+    set_level_xp(db, guild_id, user_id, level, xp).await
+}
+
+pub async fn add_xp_or_level(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    kind: &str,
+    amount: i64,
+) -> Result<level_account::Model> {
+    let txn = db.begin().await?;
+    let account = get_or_create_account(&txn, guild_id, user_id).await?;
+    let delta = i32::try_from(amount).unwrap_or(i32::MAX);
+
+    let mut active: level_account::ActiveModel = account.clone().into();
+    if kind == "level" {
+        let new_level = account.level.saturating_add(delta).min(MAX_LEVEL);
+        active.level = Set(new_level);
+        active.total_xp = Set(total_xp_for_level(new_level) + account.xp);
+    } else {
+        let (new_level, new_xp, _) =
+            calculate_level_up(account.level, account.xp.saturating_add(amount));
+        active.level = Set(new_level);
+        active.xp = Set(new_xp);
+        active.total_xp = Set(total_xp_for_level(new_level).saturating_add(new_xp));
+    }
+    let updated = active.update(&txn).await?;
+    txn.commit().await?;
+    Ok(updated)
+}
+
+pub async fn remove_xp_or_level(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    kind: &str,
+    amount: i64,
+) -> Result<level_account::Model> {
+    let txn = db.begin().await?;
+    let account = get_or_create_account(&txn, guild_id, user_id).await?;
+    let delta = i32::try_from(amount).unwrap_or(i32::MAX);
+
+    let mut active: level_account::ActiveModel = account.clone().into();
+    if kind == "level" {
+        let new_level = account.level.saturating_sub(delta).max(START_LEVEL);
+        active.level = Set(new_level);
+        active.total_xp = Set(total_xp_for_level(new_level) + account.xp);
+    } else {
+        let before = total_xp_for_level(account.level) + account.xp;
+        let total = before.saturating_sub(amount).max(0);
+        let mut level = account.level;
+        while level > START_LEVEL && total < total_xp_for_level(level) {
+            level -= 1;
+        }
+        let xp = total - total_xp_for_level(level);
+        active.level = Set(level);
+        active.xp = Set(xp);
+        active.total_xp = Set(total);
+    }
     let updated = active.update(&txn).await?;
     txn.commit().await?;
     Ok(updated)

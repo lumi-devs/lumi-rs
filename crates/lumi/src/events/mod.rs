@@ -208,6 +208,11 @@ impl serenity::EventHandler for Events {
                 {
                     tracing::warn!(%error, "tempvc voice state update handler failed");
                 }
+                if let Err(error) =
+                    lumi_modules::leveling::on_voice_state_update(ctx, services.as_ref(), old, new).await
+                {
+                    tracing::warn!(%error, "leveling voice state update handler failed");
+                }
             }
             _ => {}
         }
