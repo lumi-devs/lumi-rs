@@ -1,4 +1,5 @@
 use sea_orm::entity::prelude::*;
+use crate::ids::{GuildId, UserId};
 
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -6,8 +7,8 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    pub guild_id: String,
-    pub user_id: String,
+    pub guild_id: GuildId,
+    pub user_id: UserId,
     pub amount: i64,
     pub source: String,
     pub created_at: DateTimeWithTimeZone,

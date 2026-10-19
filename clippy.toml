@@ -1,0 +1,5 @@
+avoid-breaking-exported-api = false
+disallowed-methods = [
+    "serenity::builder::CreateMessage::embed",
+    "serenity::all::CreateMessage::embed",
+]

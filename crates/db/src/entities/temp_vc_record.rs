@@ -1,15 +1,16 @@
 use sea_orm::entity::prelude::*;
+use crate::ids::{ChannelId, GuildId, UserId};
 
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "tempvc_records")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub guild_id: String,
+    pub guild_id: GuildId,
     #[sea_orm(primary_key, auto_increment = false)]
-    pub channel_id: String,
-    pub owner_id: String,
-    pub generator_id: String,
+    pub channel_id: ChannelId,
+    pub owner_id: UserId,
+    pub generator_id: ChannelId,
     pub name: String,
     pub number: i32,
     pub locked: bool,

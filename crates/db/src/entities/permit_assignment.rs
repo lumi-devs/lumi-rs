@@ -1,4 +1,5 @@
 use sea_orm::entity::prelude::*;
+use crate::ids::{GuildId, SnowflakeId};
 use super::enums;
 
 #[sea_orm::model]
@@ -7,10 +8,13 @@ use super::enums;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
+    #[sea_orm(unique_key = "permit_assignments_permit_target")]
     pub permit_id: i32,
-    pub guild_id: String,
+    pub guild_id: GuildId,
+    #[sea_orm(unique_key = "permit_assignments_permit_target")]
     pub target_type: enums::PermitTargetType,
-    pub target_id: String,
+    #[sea_orm(unique_key = "permit_assignments_permit_target")]
+    pub target_id: SnowflakeId,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }

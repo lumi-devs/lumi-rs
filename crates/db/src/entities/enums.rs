@@ -60,65 +60,7 @@ pub enum CaseAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
-pub enum AppealStatus {
-    #[sea_orm(string_value = "pending")]
-    Pending,
-    #[sea_orm(string_value = "approved")]
-    Approved,
-    #[sea_orm(string_value = "denied")]
-    Denied,
-    #[sea_orm(string_value = "denied_blacklisted")]
-    DeniedBlacklisted,
-    #[sea_orm(string_value = "dismissed")]
-    Dismissed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIter, DeriveActiveEnum)]
-#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
-pub enum OverrideTargetType {
-    #[sea_orm(string_value = "channel")]
-    Channel,
-    #[sea_orm(string_value = "category")]
-    Category,
-    #[sea_orm(string_value = "role")]
-    Role,
-    #[sea_orm(string_value = "user")]
-    User,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIter, DeriveActiveEnum)]
-#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
-pub enum AuditPlatform {
-    #[sea_orm(string_value = "discord")]
-    Discord,
-    #[sea_orm(string_value = "web")]
-    Web,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIter, DeriveActiveEnum)]
-#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
-pub enum GdprExportJobStatus {
-    #[sea_orm(string_value = "pending")]
-    Pending,
-    #[sea_orm(string_value = "running")]
-    Running,
-    #[sea_orm(string_value = "done")]
-    Done,
-    #[sea_orm(string_value = "failed")]
-    Failed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIter, DeriveActiveEnum)]
-#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 pub enum EconomyTxnKind {
-    #[sea_orm(string_value = "deposit")]
-    Deposit,
-    #[sea_orm(string_value = "withdraw")]
-    Withdraw,
-    #[sea_orm(string_value = "transfer_out")]
-    TransferOut,
-    #[sea_orm(string_value = "transfer_in")]
-    TransferIn,
     #[sea_orm(string_value = "slots_bid")]
     SlotsBid,
     #[sea_orm(string_value = "slots_win")]
@@ -131,5 +73,8 @@ pub enum EconomyTxnKind {
     AdminRemove,
     #[sea_orm(string_value = "admin_set")]
     AdminSet,
+    #[sea_orm(string_value = "transfer_out")]
+    TransferOut,
+    #[sea_orm(string_value = "transfer_in")]
+    TransferIn,
 }
-

@@ -1,7 +1,11 @@
 pub mod entities;
+pub mod ids;
 pub mod migrations;
 
-use sea_orm::entity::prelude::ChronoUtc;
+use std::collections::HashMap;
+
+use sea_orm::entity::prelude::{ChronoUtc, DateTimeWithTimeZone};
+use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
@@ -11,6 +15,7 @@ use sea_orm_migration::MigratorTrait;
 use crate::entities::counter;
 use crate::entities::enums::{PermitKind, PermitTargetType};
 use crate::entities::{permit, permit_assignment};
+use crate::ids::{GuildId, SnowflakeId};
 use crate::migrations::Migrator;
 
 pub type Result<T> = std::result::Result<T, sea_orm::DbErr>;
@@ -24,10 +29,17 @@ pub async fn migrate(db: &DatabaseConnection) -> Result<()> {
     Ok(())
 }
 
-/// Atomically increments and returns the next value of a named per-guild
-/// counter (e.g. a moderation case number). Implemented with the ORM inside a
-/// `FOR UPDATE` transaction — modules never write SQL themselves.
-pub async fn next_counter(db: &DatabaseConnection, guild_id: i64, name: &str) -> Result<i64> {
+/// Current UTC timestamp in the form every `DateTimeWithTimeZone` column stores.
+pub fn now() -> DateTimeWithTimeZone {
+    ChronoUtc::now().fixed_offset()
+}
+
+/// Atomically increments and returns the next value of a named per-guild counter.
+///
+/// Implemented with the ORM inside a `FOR UPDATE` transaction — modules never write
+/// SQL themselves.
+pub async fn next_counter(db: &DatabaseConnection, guild_id: u64, name: &str) -> Result<i64> {
+    let guild_id = GuildId::from(guild_id);
     let txn = db.begin().await?;
     let existing = counter::Entity::find()
         .filter(counter::Column::GuildId.eq(guild_id))
@@ -36,103 +48,97 @@ pub async fn next_counter(db: &DatabaseConnection, guild_id: i64, name: &str) ->
         .one(&txn)
         .await?;
 
-    let value = match existing {
-        Some(model) => {
-            let next = model.value + 1;
-            let mut active: counter::ActiveModel = model.into();
-            active.value = Set(next);
-            active.update(&txn).await?;
-            next
-        }
-        None => {
-            let active = counter::ActiveModel {
-                guild_id: Set(guild_id),
-                name: Set(name.to_string()),
-                value: Set(1),
-            };
-            active.insert(&txn).await?;
-            1
-        }
+    let value = if let Some(model) = existing {
+        let next = model.value.checked_add(1).ok_or_else(|| {
+            sea_orm::DbErr::Custom(format!(
+                "counter `{name}` for guild {guild_id} overflowed i64"
+            ))
+        })?;
+        let mut active: counter::ActiveModel = model.into();
+        active.value = Set(next);
+        active.update(&txn).await?;
+        next
+    } else {
+        let active = counter::ActiveModel {
+            guild_id: Set(guild_id),
+            name: Set(name.to_owned()),
+            value: Set(1),
+        };
+        active.insert(&txn).await?;
+        1
     };
 
     txn.commit().await?;
     Ok(value)
 }
 
-/// Look up the prefix for a guild, falling back to global_config.default_prefix, then ",".
-pub async fn get_prefix(db: &DatabaseConnection, guild_id: Option<u64>) -> String {
+/// Look up the prefix for a guild, falling back to `global_config.default_prefix`, then ",".
+pub async fn get_prefix(db: &DatabaseConnection, guild_id: Option<u64>) -> Result<String> {
     if let Some(gid) = guild_id {
-        if let Ok(Some(guild)) = entities::guild::Entity::find_by_id(gid.to_string())
+        let prefix = entities::guild::Entity::find_by_id(GuildId::from(gid))
             .one(db)
-            .await
-        {
-            if let Some(prefix) = guild.prefix {
-                if !prefix.is_empty() {
-                    return prefix;
-                }
-            }
+            .await?
+            .and_then(|guild| guild.prefix)
+            .filter(|prefix| !prefix.is_empty());
+        if let Some(prefix) = prefix {
+            return Ok(prefix);
         }
     }
 
-    if let Ok(Some(global)) = entities::global::Entity::find().one(db).await {
-        if !global.default_prefix.is_empty() {
-            return global.default_prefix;
-        }
+    if let Some(global) = entities::global::Entity::find()
+        .one(db)
+        .await?
+        .filter(|g| !g.default_prefix.is_empty())
+    {
+        return Ok(global.default_prefix);
     }
 
-    ",".to_string()
+    Ok(",".to_owned())
 }
 
 /// Set a guild's command prefix, creating the guild row when it does not exist.
 pub async fn set_prefix(db: &DatabaseConnection, guild_id: u64, prefix: &str) -> Result<()> {
-    let id = guild_id.to_string();
-    let now = ChronoUtc::now().fixed_offset();
-
-    match entities::guild::Entity::find_by_id(id.clone()).one(db).await? {
-        Some(model) => {
-            let mut active: entities::guild::ActiveModel = model.into();
-            active.prefix = Set(Some(prefix.to_string()));
-            active.updated_at = Set(now);
-            active.update(db).await?;
-        }
-        None => {
-            let active = entities::guild::ActiveModel {
-                id: Set(id),
-                prefix: Set(Some(prefix.to_string())),
-                locale: Set("en-US".to_string()),
-                ignored: Set(false),
-                left_at: Set(None),
-                created_at: Set(now),
-                updated_at: Set(now),
-            };
-            active.insert(db).await?;
-        }
-    }
+    let timestamp = now();
+    entities::guild::Entity::insert(entities::guild::ActiveModel {
+        id: Set(GuildId::from(guild_id)),
+        prefix: Set(Some(prefix.to_owned())),
+        locale: Set("en-US".to_owned()),
+        ignored: Set(false),
+        left_at: Set(None),
+        created_at: Set(timestamp),
+        updated_at: Set(timestamp),
+    })
+    .on_conflict(
+        OnConflict::column(entities::guild::Column::Id)
+            .update_columns([
+                entities::guild::Column::Prefix,
+                entities::guild::Column::UpdatedAt,
+            ])
+            .to_owned(),
+    )
+    .exec(db)
+    .await?;
     Ok(())
 }
 
 /// Clear a guild's prefix override so it falls back to the global default.
 pub async fn reset_prefix(db: &DatabaseConnection, guild_id: u64) -> Result<()> {
-    if let Some(model) = entities::guild::Entity::find_by_id(guild_id.to_string())
-        .one(db)
-        .await?
-    {
-        let mut active: entities::guild::ActiveModel = model.into();
-        active.prefix = Set(None);
-        active.updated_at = Set(ChronoUtc::now().fixed_offset());
-        active.update(db).await?;
-    }
+    entities::guild::Entity::update_many()
+        .col_expr(entities::guild::Column::Prefix, Expr::value(Option::<String>::None))
+        .col_expr(entities::guild::Column::UpdatedAt, Expr::value(now()))
+        .filter(entities::guild::Column::Id.eq(GuildId::from(guild_id)))
+        .exec(db)
+        .await?;
     Ok(())
 }
 
 /// How many modules a guild has explicitly enabled.
-pub async fn count_enabled_modules(db: &DatabaseConnection, guild_id: u64) -> u64 {
+pub async fn count_enabled_modules(db: &DatabaseConnection, guild_id: u64) -> Result<u64> {
     entities::guild_module_state::Entity::find()
-        .filter(entities::guild_module_state::Column::GuildId.eq(guild_id.to_string()))
+        .filter(entities::guild_module_state::Column::GuildId.eq(GuildId::from(guild_id)))
         .filter(entities::guild_module_state::Column::Enabled.eq(true))
         .count(db)
         .await
-        .unwrap_or(0)
 }
 
 /// A guild's permits ordered by their display position.
@@ -141,7 +147,7 @@ pub async fn list_permits(
     guild_id: u64,
 ) -> Result<Vec<entities::permit::Model>> {
     entities::permit::Entity::find()
-        .filter(entities::permit::Column::GuildId.eq(guild_id.to_string()))
+        .filter(entities::permit::Column::GuildId.eq(GuildId::from(guild_id)))
         .order_by_asc(entities::permit::Column::Position)
         .all(db)
         .await
@@ -161,30 +167,39 @@ pub struct AssignmentRow {
     pub kind: PermitKind,
     pub builtin: bool,
     pub target_type: PermitTargetType,
-    pub target_id: String,
+    pub target_id: SnowflakeId,
 }
 
-/// Every assignment in a guild, ordered by permit position.
+/// Every assignment in a guild, grouped under its permit in permit position
+/// order. Two queries, grouped in memory, instead of a query per permit.
 pub async fn list_assignments(
     db: &DatabaseConnection,
     guild_id: u64,
 ) -> Result<Vec<AssignmentRow>> {
     let permits = list_permits(db, guild_id).await?;
     let assignments = permit_assignment::Entity::find()
-        .filter(permit_assignment::Column::GuildId.eq(guild_id.to_string()))
+        .filter(permit_assignment::Column::GuildId.eq(GuildId::from(guild_id)))
         .all(db)
         .await?;
 
-    let mut rows = Vec::new();
+    let mut by_permit: HashMap<i32, Vec<&permit_assignment::Model>> = HashMap::new();
+    for assignment in &assignments {
+        by_permit
+            .entry(assignment.permit_id)
+            .or_default()
+            .push(assignment);
+    }
+
+    let mut rows = Vec::with_capacity(assignments.len());
     for permit in &permits {
-        for a in assignments.iter().filter(|a| a.permit_id == permit.id) {
+        for assignment in by_permit.get(&permit.id).into_iter().flatten() {
             rows.push(AssignmentRow {
                 permit_id: permit.id,
                 permit_name: permit.name.clone(),
                 kind: permit.kind,
                 builtin: permit.builtin,
-                target_type: a.target_type,
-                target_id: a.target_id.clone(),
+                target_type: assignment.target_type,
+                target_id: assignment.target_id,
             });
         }
     }
@@ -198,7 +213,7 @@ pub async fn get_permit(
     permit_id: i32,
 ) -> Result<Option<permit::Model>> {
     permit::Entity::find_by_id(permit_id)
-        .filter(permit::Column::GuildId.eq(guild_id.to_string()))
+        .filter(permit::Column::GuildId.eq(GuildId::from(guild_id)))
         .one(db)
         .await
 }
@@ -209,31 +224,29 @@ pub async fn assign_permit(
     guild_id: u64,
     permit_id: i32,
     target_type: PermitTargetType,
-    target_id: &str,
+    target_id: SnowflakeId,
 ) -> Result<()> {
-    let guild = guild_id.to_string();
-    let exists = permit_assignment::Entity::find()
-        .filter(permit_assignment::Column::GuildId.eq(guild.clone()))
-        .filter(permit_assignment::Column::PermitId.eq(permit_id))
-        .filter(permit_assignment::Column::TargetType.eq(target_type))
-        .filter(permit_assignment::Column::TargetId.eq(target_id))
-        .one(db)
-        .await?;
-    if exists.is_some() {
-        return Ok(());
-    }
-
-    let now = ChronoUtc::now().fixed_offset();
-    let active = permit_assignment::ActiveModel {
+    let now = now();
+    permit_assignment::Entity::insert(permit_assignment::ActiveModel {
         permit_id: Set(permit_id),
-        guild_id: Set(guild),
+        guild_id: Set(GuildId::from(guild_id)),
         target_type: Set(target_type),
-        target_id: Set(target_id.to_string()),
+        target_id: Set(target_id),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
-    };
-    active.insert(db).await?;
+    })
+    .on_conflict(
+        OnConflict::columns([
+            permit_assignment::Column::PermitId,
+            permit_assignment::Column::TargetType,
+            permit_assignment::Column::TargetId,
+        ])
+        .do_nothing()
+        .to_owned(),
+    )
+    .exec(db)
+    .await?;
     Ok(())
 }
 
@@ -243,10 +256,10 @@ pub async fn unassign_permit(
     guild_id: u64,
     permit_id: i32,
     target_type: PermitTargetType,
-    target_id: &str,
+    target_id: SnowflakeId,
 ) -> Result<()> {
     permit_assignment::Entity::delete_many()
-        .filter(permit_assignment::Column::GuildId.eq(guild_id.to_string()))
+        .filter(permit_assignment::Column::GuildId.eq(GuildId::from(guild_id)))
         .filter(permit_assignment::Column::PermitId.eq(permit_id))
         .filter(permit_assignment::Column::TargetType.eq(target_type))
         .filter(permit_assignment::Column::TargetId.eq(target_id))
@@ -262,7 +275,7 @@ pub async fn list_permits_for_kind(
     kind: PermitKind,
 ) -> Result<Vec<permit::Model>> {
     permit::Entity::find()
-        .filter(permit::Column::GuildId.eq(guild_id.to_string()))
+        .filter(permit::Column::GuildId.eq(GuildId::from(guild_id)))
         .filter(permit::Column::Kind.eq(kind))
         .order_by_asc(permit::Column::Position)
         .all(db)
@@ -276,8 +289,14 @@ pub async fn move_permit(
     permit_id: i32,
     direction: &str,
 ) -> Result<()> {
-    let mut permits = list_permits(db, guild_id).await?;
-    let Some(index) = permits.iter().position(|p| p.id == permit_id) else {
+    let txn = db.begin().await?;
+    let mut permits = permit::Entity::find()
+        .filter(permit::Column::GuildId.eq(GuildId::from(guild_id)))
+        .order_by_asc(permit::Column::Position)
+        .all(&txn)
+        .await?;
+
+    let Some(index) = permits.iter().position(|permit| permit.id == permit_id) else {
         return Ok(());
     };
     let target = match direction {
@@ -287,15 +306,17 @@ pub async fn move_permit(
     };
     permits.swap(index, target);
 
-    let now = ChronoUtc::now().fixed_offset();
+    let timestamp = now();
     for (position, permit) in permits.iter().enumerate() {
-        let position = position as i32;
+        let position = i32::try_from(position)
+            .map_err(|_| sea_orm::DbErr::Custom("permit position overflowed i32".to_owned()))?;
         if permit.position != position {
-            let mut active: entities::permit::ActiveModel = permit.clone().into();
+            let mut active: permit::ActiveModel = permit.clone().into();
             active.position = Set(position);
-            active.updated_at = Set(now);
-            active.update(db).await?;
+            active.updated_at = Set(timestamp);
+            active.update(&txn).await?;
         }
     }
+    txn.commit().await?;
     Ok(())
 }

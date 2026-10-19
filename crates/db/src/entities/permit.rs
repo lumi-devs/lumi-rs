@@ -1,4 +1,5 @@
 use sea_orm::entity::prelude::*;
+use crate::ids::GuildId;
 use super::enums;
 
 #[sea_orm::model]
@@ -7,7 +8,9 @@ use super::enums;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    pub guild_id: String,
+    #[sea_orm(unique_key = "permits_guild_name")]
+    pub guild_id: GuildId,
+    #[sea_orm(unique_key = "permits_guild_name")]
     pub name: String,
     pub kind: enums::PermitKind,
     pub polarity: enums::PermitPolarity,
