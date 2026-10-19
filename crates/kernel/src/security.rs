@@ -91,7 +91,7 @@ impl Default for AntiNukeConfig {
         }
 
         Self {
-            enabled: true,
+            enabled: false,
             window_secs: DEFAULT_WINDOW_SECS,
             limits,
             responses,

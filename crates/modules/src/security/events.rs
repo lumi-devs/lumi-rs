@@ -1,7 +1,7 @@
 use poise::serenity_prelude as serenity;
 use serenity::all::{
-    EditMember, EditRole, GenericChannelId, GuildId, Member, Permissions, Role, RoleId, Timestamp,
-    UserId,
+    EditMember, EditRole, GenericChannelId, Guild, GuildId, Member, PartialGuild, Permissions, Role,
+    RoleId, Timestamp, UserId,
 };
 use serenity::model::guild::audit_log as audit;
 
@@ -26,8 +26,6 @@ const DANGEROUS_PERMISSIONS: [Permissions; 6] = [
 ];
 
 /// Map a Discord audit-log action to the destructive kind we score.
-// shortcut: vanity URL changes (`GuildUpdate`) are not scored yet; add a
-// GuildUpdate listener resolving the `vanity_url_code` change if needed.
 fn destructive_kind(action: audit::Action) -> Option<DestructiveActionKind> {
     match action {
         audit::Action::Member(audit::MemberAction::BanAdd) => Some(DestructiveActionKind::Ban),
@@ -101,6 +99,7 @@ pub async fn on_role_update(
         new.guild_id,
         audit::Action::Role(audit::RoleAction::Update),
         Some(new.id.get()),
+        None,
     )
     .await
     else {
@@ -130,7 +129,7 @@ pub async fn on_member_update(
         return Ok(());
     }
     let guild_id = new.guild_id;
-    let Some(role) = store::quarantine_role(&services.db, guild_id.get()).await? else {
+    let Some(role) = crate::moderation::store::quarantine_role(&services.db, guild_id.get()).await? else {
         return Ok(());
     };
 
@@ -161,6 +160,7 @@ pub async fn on_member_update(
         guild_id,
         audit::Action::Member(audit::MemberAction::RoleUpdate),
         Some(new.user.id.get()),
+        None,
     )
     .await
     else {
@@ -256,7 +256,7 @@ async fn respond(
     match violation.response {
         AntiNukeResponse::Log => {}
         AntiNukeResponse::Quarantine => {
-            if let Some(role) = store::quarantine_role(&services.db, guild_id.get()).await? {
+            if let Some(role) = crate::moderation::store::quarantine_role(&services.db, guild_id.get()).await? {
                 if let Err(error) = guild_id
                     .add_member_role(&ctx.http, executor, RoleId::new(role), Some(&reason))
                     .await
@@ -311,23 +311,60 @@ async fn respond(
 }
 
 /// Resolve the executor of the most recent matching audit entry, if fresh.
+/// `target` filters on the affected entity; `change_key` filters on a specific
+/// audit-log change field (e.g. `vanity_url_code`).
 async fn audit_executor(
     ctx: &serenity::Context,
     guild_id: GuildId,
     action: audit::Action,
     target: Option<u64>,
+    change_key: Option<&str>,
 ) -> Option<UserId> {
     let logs = guild_id
         .audit_logs(&ctx.http, Some(action), None, None, None, None)
         .await
         .ok()?;
-    let entry = logs.entries.first()?;
-    if target.is_some_and(|target| entry.target_id.map(|id| id.get()) != Some(target)) {
-        return None;
-    }
+    let entry = logs.entries.iter().find(|entry| {
+        target.is_none_or(|target| entry.target_id.map(|id| id.get()) == Some(target))
+            && change_key.is_none_or(|key| entry.changes.iter().any(|change| change.key() == key))
+    })?;
     let age = Timestamp::now().unix_timestamp() - entry.id.created_at().unix_timestamp();
     if age > AUDIT_GRACE_SECS {
         return None;
     }
     entry.user_id
+}
+
+/// Vanity URL change. Entry `GuildUpdate`.
+pub async fn on_guild_update(
+    ctx: &serenity::Context,
+    services: &Services,
+    old: Option<&Guild>,
+    new: &PartialGuild,
+) -> Result<(), Error> {
+    let Some(old) = old else {
+        return Ok(());
+    };
+    if old.vanity_url_code == new.vanity_url_code {
+        return Ok(());
+    }
+    let Some(executor) = audit_executor(
+        ctx,
+        new.id,
+        audit::Action::GuildUpdate,
+        None,
+        Some("vanity_url_code"),
+    )
+    .await
+    else {
+        return Ok(());
+    };
+    evaluate(
+        ctx,
+        services,
+        new.id,
+        executor,
+        DestructiveActionKind::VanityChange,
+    )
+    .await
 }

@@ -2,6 +2,11 @@
 //!
 //! The Modules tab reads and writes these; module metadata and the config
 //! schema stay in [`crate::module`].
+//!
+//! Guild config lives in exactly one table (`guild_module_config`). Modules
+//! never keep their own config store: read all keys with [`get_config`], one
+//! value with [`config_value`], a snowflake with [`config_u64`], and write with
+//! [`set_config_field`] / [`set_config_value`].
 
 use std::collections::HashMap;
 
@@ -142,6 +147,44 @@ pub async fn get_config(
         .into_iter()
         .map(|row| (row.config_key, row.value))
         .collect()
+}
+
+/// A single stored config value for a guild + module, or `None` if unset.
+/// Use this for one-off reads; [`get_config`] loads every key at once.
+pub async fn config_value(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    module: &str,
+    key: &str,
+) -> Result<Option<Value>> {
+    Ok(guild_module_config::Entity::find()
+        .filter(guild_module_config::Column::GuildId.eq(guild_id.to_string()))
+        .filter(guild_module_config::Column::ModuleName.eq(module))
+        .filter(guild_module_config::Column::ConfigKey.eq(key))
+        .one(db)
+        .await?
+        .map(|row| row.value))
+}
+
+/// Parse a JSON value as a snowflake, accepting a number or numeric string.
+pub fn parse_id(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+}
+
+/// A single config value parsed as a snowflake, accepting a JSON number or a
+/// numeric string. `None` when unset or unparsable.
+pub async fn config_u64(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    module: &str,
+    key: &str,
+) -> Result<Option<u64>> {
+    Ok(config_value(db, guild_id, module, key)
+        .await?
+        .as_ref()
+        .and_then(parse_id))
 }
 
 /// Upsert one config key for a guild + module.

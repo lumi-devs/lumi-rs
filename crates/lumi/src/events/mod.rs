@@ -236,6 +236,23 @@ impl serenity::EventHandler for Events {
                     tracing::warn!(%error, "logging ban remove failed");
                 }
             }
+            serenity::FullEvent::GuildUpdate {
+                old_data_if_available,
+                new_data,
+                ..
+            } => {
+                let services = ctx.data::<lumi_kernel::bot::Data>();
+                if let Err(error) = lumi_modules::security::events::on_guild_update(
+                    ctx,
+                    services.as_ref(),
+                    old_data_if_available.as_ref(),
+                    new_data,
+                )
+                .await
+                {
+                    tracing::warn!(%error, "security guild update handler failed");
+                }
+            }
             serenity::FullEvent::GuildRoleUpdate {
                 old_data_if_available,
                 new,

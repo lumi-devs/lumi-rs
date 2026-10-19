@@ -1,0 +1,9 @@
+name = "ping_addon"
+version = "0.1.0"
+author = "lumi-devs"
+description = "A lightweight sample Rhai addon that demonstrates safe custom logic."
+capabilities = ["msg", "db"]
+
+[[commands]]
+name = "addon_hello"
+description = "Say hello from a dynamic Rhai addon!"
