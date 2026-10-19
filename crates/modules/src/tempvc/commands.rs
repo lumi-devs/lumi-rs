@@ -1,7 +1,12 @@
 use poise::serenity_prelude as serenity;
-use serenity::all::{ButtonStyle, CreateActionRow, CreateButton, GenericChannelId};
+use serenity::all::{
+    ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow, CreateButton,
+    CreateInteractionResponse, CreateInteractionResponseMessage, GenericChannelId, MessageFlags,
+    PermissionOverwrite, PermissionOverwriteType, Permissions,
+};
 
 use lumi_kernel::bot::{Command, Context, Error};
+use lumi_kernel::Services;
 use lumi_ui::{Card, CardKind, CardOptions};
 
 use super::store;
@@ -147,6 +152,122 @@ pub async fn admin_setup(
 
     let card = generator_setup_card(channel.get(), &template_name, user_limit);
     ctx.send(card.reply()).await?;
+    Ok(())
+}
+
+pub async fn handle_component(
+    ctx: &serenity::Context,
+    services: &Services,
+    interaction: &ComponentInteraction,
+) -> Result<(), Error> {
+    let parts: Vec<&str> = interaction.data.custom_id.split(':').collect();
+    if parts.len() < 3 || parts[0] != "tempvc" {
+        return Ok(());
+    }
+    let action = parts[1];
+    let ch_id: u64 = parts[2].parse().unwrap_or(0);
+    let Some(guild_id) = interaction.guild_id else {
+        return Ok(());
+    };
+    let everyone = guild_id.everyone_role();
+    let caller_id = interaction.user.id.get();
+
+    let record = store::get_record(&services.db, guild_id.get(), ch_id).await?;
+    let Some(rec) = record else {
+        respond_ephemeral(ctx, interaction, "❌ This voice channel is no longer active or managed by TempVC.").await?;
+        return Ok(());
+    };
+
+    let owner_id: u64 = rec.owner_id.parse().unwrap_or(0);
+    let is_owner = caller_id == owner_id;
+
+    if action == "claim" {
+        let is_in_channel = ctx.cache.guild(guild_id).is_some_and(|g| {
+            g.voice_states
+                .get(&interaction.user.id)
+                .is_some_and(|vs| vs.channel_id.map_or(false, |c| c.get() == ch_id))
+        });
+        if !is_in_channel {
+            respond_ephemeral(ctx, interaction, "❌ You must be connected to this voice channel to claim ownership.").await?;
+            return Ok(());
+        }
+        store::set_owner(&services.db, guild_id.get(), ch_id, caller_id).await?;
+        respond_ephemeral(ctx, interaction, "👑 Ownership transferred to you!").await?;
+        return Ok(());
+    }
+
+    if !is_owner {
+        let is_admin = ctx.cache.guild(guild_id).is_some_and(|g| {
+            g.members.get(&interaction.user.id).is_some_and(|m| {
+                g.member_permissions(m).contains(Permissions::ADMINISTRATOR | Permissions::MANAGE_CHANNELS)
+            })
+        });
+        if !is_admin {
+            respond_ephemeral(ctx, interaction, "❌ Only the channel owner can use these controls.").await?;
+            return Ok(());
+        }
+    }
+
+    let channel = ChannelId::new(ch_id);
+    match action {
+        "lock" => {
+            store::set_locked(&services.db, guild_id.get(), ch_id, true).await?;
+            let overwrite = PermissionOverwrite {
+                allow: Permissions::empty(),
+                deny: Permissions::CONNECT,
+                kind: PermissionOverwriteType::Role(everyone),
+            };
+            let _ = channel.create_permission(&ctx.http, overwrite, Some("TempVC: Lock")).await;
+            respond_ephemeral(ctx, interaction, "🔒 Voice channel locked for @everyone.").await?;
+        }
+        "unlock" => {
+            store::set_locked(&services.db, guild_id.get(), ch_id, false).await?;
+            let _ = channel.delete_permission(&ctx.http, PermissionOverwriteType::Role(everyone), Some("TempVC: Unlock")).await;
+            respond_ephemeral(ctx, interaction, "🔓 Voice channel unlocked.").await?;
+        }
+        "hide" => {
+            let overwrite = PermissionOverwrite {
+                allow: Permissions::empty(),
+                deny: Permissions::VIEW_CHANNEL,
+                kind: PermissionOverwriteType::Role(everyone),
+            };
+            let _ = channel.create_permission(&ctx.http, overwrite, Some("TempVC: Hide")).await;
+            respond_ephemeral(ctx, interaction, "👁 Voice channel hidden for @everyone.").await?;
+        }
+        "unhide" => {
+            let _ = channel.delete_permission(&ctx.http, PermissionOverwriteType::Role(everyone), Some("TempVC: Unhide")).await;
+            respond_ephemeral(ctx, interaction, "👀 Voice channel is now visible.").await?;
+        }
+        "delete" => {
+            store::delete_record(&services.db, guild_id.get(), ch_id).await?;
+            let _ = ctx
+                .http
+                .delete_channel(GenericChannelId::new(ch_id), Some("TempVC: Deleted by owner"))
+                .await;
+            respond_ephemeral(ctx, interaction, "🗑 Voice channel deleted.").await?;
+        }
+        other => {
+            respond_ephemeral(ctx, interaction, &format!("Action `{other}` performed.")).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn respond_ephemeral(
+    ctx: &serenity::Context,
+    interaction: &ComponentInteraction,
+    message: &str,
+) -> Result<(), Error> {
+    interaction
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new()
+                    .content(message)
+                    .flags(MessageFlags::EPHEMERAL),
+            ),
+        )
+        .await?;
     Ok(())
 }
 
