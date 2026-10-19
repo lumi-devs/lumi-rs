@@ -1,15 +1,18 @@
 use poise::serenity_prelude as serenity;
 use serenity::all::{
-    ChannelId, ChannelType, CreateAllowedMentions, CreateMessage, EditMember, GenericChannelId,
-    PermissionOverwrite, PermissionOverwriteType, Permissions, RoleId, UserId,
+    ChannelId, ChannelType, Colour, CreateAllowedMentions, CreateMessage, EditMember,
+    GenericChannelId, PermissionOverwrite, PermissionOverwriteType, Permissions, RoleId, UserId,
 };
 
 use lumi_db::entities::enums::CaseAction;
 use lumi_kernel::bot::{Command, Context, Error};
+use lumi_ui::panels::confirm_row;
 use lumi_ui::{Card, CardKind};
 
 use super::store::{self, CreateCaseParams};
-use super::views::{case_card, mod_action_success_card, notes_list_card};
+use super::views::{
+    case_card, mod_action_success_card, mod_batch_success_card, notes_list_card,
+};
 
 async fn autocomplete_reason<'a>(
     _ctx: Context<'a>,
@@ -32,6 +35,162 @@ async fn autocomplete_reason<'a>(
         .collect();
 
     serenity::CreateAutocompleteResponse::new().set_choices(choices)
+}
+
+pub fn parse_target_list(single: Option<UserId>, extra: Option<&str>) -> Vec<UserId> {
+    let mut targets = Vec::new();
+    if let Some(s) = single {
+        targets.push(s);
+    }
+    if let Some(extra_str) = extra {
+        static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+        let re = RE.get_or_init(|| regex::Regex::new(r"<@!?(\d{17,20})>|(\d{17,20})").ok());
+        if let Some(re) = re {
+            for cap in re.captures_iter(extra_str) {
+                let id_str = cap.get(1).or_else(|| cap.get(2)).map(|m| m.as_str());
+                if let Some(s) = id_str {
+                    if let Ok(id) = s.parse::<u64>() {
+                        let uid = UserId::new(id);
+                        if !targets.contains(&uid) && targets.len() < 25 {
+                            targets.push(uid);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    targets
+}
+
+async fn confirm_moderation_prompt(
+    ctx: Context<'_>,
+    title: &str,
+    body: &str,
+    confirm_label: &str,
+) -> Result<bool, Error> {
+    let confirm_id = format!("mod_confirm_{}", uuid::Uuid::new_v4());
+    let cancel_id = format!("mod_cancel_{}", uuid::Uuid::new_v4());
+
+    let mut opts = lumi_ui::CardOptions::default();
+    opts.action_rows = vec![confirm_row(&confirm_id, &cancel_id, Some(confirm_label), Some("Cancel"))];
+
+    let card = Card::lines(title, vec![body.to_string()])
+        .kind(CardKind::Warning)
+        .options(opts);
+
+    let reply = ctx.send(card.into_reply().reply()).await?;
+    let msg = reply.message().await?;
+
+    let interaction = serenity::collector::ComponentInteractionCollector::new(ctx.serenity_context())
+        .message_id(msg.id)
+        .author_id(ctx.author().id)
+        .timeout(std::time::Duration::from_secs(30))
+        .await;
+
+    let Some(press) = interaction else {
+        let _ = reply.edit(ctx, poise::CreateReply::default().components(vec![])).await;
+        return Ok(false);
+    };
+
+    let _ = press
+        .create_response(
+            ctx.http(),
+            serenity::CreateInteractionResponse::Acknowledge,
+        )
+        .await;
+
+    let confirmed = press.data.custom_id == confirm_id;
+    let _ = reply.edit(ctx, poise::CreateReply::default().components(vec![])).await;
+    Ok(confirmed)
+}
+
+async fn check_and_apply_warn_escalation(
+    ctx: Context<'_>,
+    guild_id: u64,
+    target_id: u64,
+    total_warns: u64,
+) -> Result<Option<String>, Error> {
+    let thresholds = store::get_warn_thresholds(&ctx.data().db, guild_id).await?;
+    let matching = thresholds
+        .into_iter()
+        .filter(|t| t.warn_count as u64 <= total_warns)
+        .max_by_key(|t| t.warn_count);
+
+    let Some(rule) = matching else {
+        return Ok(None);
+    };
+
+    let guild = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
+    let bot_id = ctx.framework().bot_id().get();
+    let reason = format!("Auto: {total_warns} warns reached threshold ({}).", rule.warn_count);
+    let target = UserId::new(target_id);
+
+    match rule.action {
+        CaseAction::Mute => {
+            let duration_secs = rule.duration.unwrap_or(3600).max(60) as u64;
+            let until = serenity::all::Timestamp::from_unix_timestamp(
+                serenity::all::Timestamp::now().unix_timestamp() + duration_secs as i64,
+            );
+            if let Ok(until) = until {
+                guild
+                    .edit_member(
+                        ctx.http(),
+                        target,
+                        EditMember::new()
+                            .disable_communication_until(until)
+                            .audit_log_reason(&reason),
+                    )
+                    .await?;
+                store::create_case(
+                    &ctx.data().db,
+                    CreateCaseParams {
+                        guild_id,
+                        user_id: target_id,
+                        moderator_id: bot_id,
+                        action: CaseAction::Mute,
+                        reason: Some(&reason),
+                        duration_seconds: Some(duration_secs as i32),
+                    },
+                )
+                .await?;
+                return Ok(Some(format!("Automatically timed out for {}m (threshold reached)", duration_secs / 60)));
+            }
+        }
+        CaseAction::Kick => {
+            guild.kick(ctx.http(), target, Some(&reason)).await?;
+            store::create_case(
+                &ctx.data().db,
+                CreateCaseParams {
+                    guild_id,
+                    user_id: target_id,
+                    moderator_id: bot_id,
+                    action: CaseAction::Kick,
+                    reason: Some(&reason),
+                    duration_seconds: None,
+                },
+            )
+            .await?;
+            return Ok(Some("Automatically kicked (threshold reached)".to_string()));
+        }
+        CaseAction::Ban => {
+            guild.ban(ctx.http(), target, 0, Some(&reason)).await?;
+            store::create_case(
+                &ctx.data().db,
+                CreateCaseParams {
+                    guild_id,
+                    user_id: target_id,
+                    moderator_id: bot_id,
+                    action: CaseAction::Ban,
+                    reason: Some(&reason),
+                    duration_seconds: None,
+                },
+            )
+            .await?;
+            return Ok(Some("Automatically banned (threshold reached)".to_string()));
+        }
+        _ => {}
+    }
+    Ok(None)
 }
 
 /// Warn a guild member.
@@ -60,75 +219,190 @@ pub async fn warn(
     )
     .await?;
 
-    let card = mod_action_success_card(&CaseAction::Warn, user.get(), case.case_number, reason.as_deref());
-    ctx.send(card.reply()).await?;
+    let total_warns = store::count_warns(&ctx.data().db, guild_id, user.get()).await?;
+    let escalation = check_and_apply_warn_escalation(ctx, guild_id, user.get(), total_warns).await.ok().flatten();
+
+    let mut lines = Vec::new();
+    lines.push(format!("Successfully warned <@{}>.", user.get()));
+    lines.push(format!("**Case:** `#{}` · **Total Warns:** `{total_warns}`", case.case_number));
+    if let Some(r) = reason.as_deref() {
+        lines.push(format!("**Reason:** {r}"));
+    }
+    if let Some(esc) = escalation {
+        lines.push(format!("⚡ **Escalation Action:** {esc}"));
+    }
+
+    let card = Card::lines("⚠️ Member Warned", lines)
+        .accent(Some(Colour::new(0x00f5_9f00)));
+    ctx.send(card.into_reply().reply()).await?;
     Ok(())
 }
 
-/// Kick a guild member.
+/// Kick a guild member or multiple members.
 #[poise::command(slash_command, prefix_command, guild_only, default_member_permissions = "KICK_MEMBERS")]
 pub async fn kick(
     ctx: Context<'_>,
-    #[description = "The target user"] user: UserId,
+    #[description = "The target user"] user: Option<UserId>,
+    #[description = "Additional members/IDs/mentions (up to 25)"] members: Option<String>,
     #[description = "Reason for kick"]
     #[autocomplete = "autocomplete_reason"]
     reason: Option<String>,
 ) -> Result<(), Error> {
+    let targets = parse_target_list(user, members.as_deref());
+    if targets.is_empty() {
+        let card = Card::lines("❌ Missing Target", vec!["Please specify a member or list of members to kick.".to_string()])
+            .kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
+    }
+
+    let targets_display = targets.iter().map(|u| format!("<@{}>", u.get())).collect::<Vec<_>>().join(", ");
+    let prompt_body = format!("Are you sure you want to kick the following member(s)?\n\n{}\n\n**Reason**: {}", targets_display, reason.as_deref().unwrap_or("No reason provided"));
+    if !confirm_moderation_prompt(ctx, "⚠️ Confirm Kick", &prompt_body, "Confirm Kick").await? {
+        let card = Card::lines("Action Cancelled", vec!["Kick action was cancelled.".to_string()]);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
+    }
+
     ctx.defer().await?;
     let guild = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
     let mod_id = ctx.author().id.get();
 
-    // Execute Discord kick via guild.kick
-    guild.kick(ctx.http(), user, reason.as_deref()).await?;
+    let mut successful_kicks = Vec::new();
+    let mut case_nums = Vec::new();
+    let mut errors = Vec::new();
 
-    let case = store::create_case(
-        &ctx.data().db,
-        CreateCaseParams {
-            guild_id: guild.get(),
-            user_id: user.get(),
-            moderator_id: mod_id,
-            action: CaseAction::Kick,
-            reason: reason.as_deref(),
-            duration_seconds: None,
-        },
-    )
-    .await?;
+    for target in targets {
+        match guild.kick(ctx.http(), target, reason.as_deref()).await {
+            Ok(()) => {
+                if let Ok(case) = store::create_case(
+                    &ctx.data().db,
+                    CreateCaseParams {
+                        guild_id: guild.get(),
+                        user_id: target.get(),
+                        moderator_id: mod_id,
+                        action: CaseAction::Kick,
+                        reason: reason.as_deref(),
+                        duration_seconds: None,
+                    },
+                )
+                .await
+                {
+                    successful_kicks.push(target.get());
+                    case_nums.push(case.case_number);
+                }
+            }
+            Err(err) => {
+                errors.push(format!("<@{}>: {err}", target.get()));
+            }
+        }
+    }
 
-    let card = mod_action_success_card(&CaseAction::Kick, user.get(), case.case_number, reason.as_deref());
-    ctx.send(card.reply()).await?;
+    if successful_kicks.is_empty() {
+        let card = Card::lines("❌ Kick Failed", errors).kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
+    } else if successful_kicks.len() == 1 {
+        let card = mod_action_success_card(
+            &CaseAction::Kick,
+            successful_kicks[0],
+            case_nums[0],
+            reason.as_deref(),
+        );
+        ctx.send(card.reply()).await?;
+    } else {
+        let card = mod_batch_success_card(
+            &CaseAction::Kick,
+            &successful_kicks,
+            &case_nums,
+            reason.as_deref(),
+        );
+        ctx.send(card.reply()).await?;
+    }
     Ok(())
 }
 
-/// Ban a user from the guild.
+/// Ban a user or multiple users from the guild.
 #[poise::command(slash_command, prefix_command, guild_only, default_member_permissions = "BAN_MEMBERS")]
 pub async fn ban(
     ctx: Context<'_>,
-    #[description = "The target user"] user: UserId,
+    #[description = "The target user"] user: Option<UserId>,
+    #[description = "Additional users/IDs/mentions (up to 25)"] users: Option<String>,
+    #[description = "Number of days of messages to delete (0-7)"] delete_days: Option<u8>,
     #[description = "Reason for ban"]
     #[autocomplete = "autocomplete_reason"]
     reason: Option<String>,
 ) -> Result<(), Error> {
+    let targets = parse_target_list(user, users.as_deref());
+    if targets.is_empty() {
+        let card = Card::lines("❌ Missing Target", vec!["Please specify a user or list of users to ban.".to_string()])
+            .kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
+    }
+
+    let d_days = delete_days.unwrap_or(0).min(7);
+    let targets_display = targets.iter().map(|u| format!("<@{}>", u.get())).collect::<Vec<_>>().join(", ");
+    let prompt_body = format!("Are you sure you want to ban the following user(s)?\n\n{}\n\n**Delete Messages**: {d_days} day(s)\n**Reason**: {}", targets_display, reason.as_deref().unwrap_or("No reason provided"));
+    if !confirm_moderation_prompt(ctx, "⚠️ Confirm Ban", &prompt_body, "Confirm Ban").await? {
+        let card = Card::lines("Action Cancelled", vec!["Ban action was cancelled.".to_string()]);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
+    }
+
     ctx.defer().await?;
     let guild = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
     let mod_id = ctx.author().id.get();
 
-    guild.ban(ctx.http(), user, 0, reason.as_deref()).await?;
+    let mut successful_bans = Vec::new();
+    let mut case_nums = Vec::new();
+    let mut errors = Vec::new();
 
-    let case = store::create_case(
-        &ctx.data().db,
-        CreateCaseParams {
-            guild_id: guild.get(),
-            user_id: user.get(),
-            moderator_id: mod_id,
-            action: CaseAction::Ban,
-            reason: reason.as_deref(),
-            duration_seconds: None,
-        },
-    )
-    .await?;
+    for target in targets {
+        match guild.ban(ctx.http(), target, d_days.into(), reason.as_deref()).await {
+            Ok(()) => {
+                if let Ok(case) = store::create_case(
+                    &ctx.data().db,
+                    CreateCaseParams {
+                        guild_id: guild.get(),
+                        user_id: target.get(),
+                        moderator_id: mod_id,
+                        action: CaseAction::Ban,
+                        reason: reason.as_deref(),
+                        duration_seconds: None,
+                    },
+                )
+                .await
+                {
+                    successful_bans.push(target.get());
+                    case_nums.push(case.case_number);
+                }
+            }
+            Err(err) => {
+                errors.push(format!("<@{}>: {err}", target.get()));
+            }
+        }
+    }
 
-    let card = mod_action_success_card(&CaseAction::Ban, user.get(), case.case_number, reason.as_deref());
-    ctx.send(card.reply()).await?;
+    if successful_bans.is_empty() {
+        let card = Card::lines("❌ Ban Failed", errors).kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
+    } else if successful_bans.len() == 1 {
+        let card = mod_action_success_card(
+            &CaseAction::Ban,
+            successful_bans[0],
+            case_nums[0],
+            reason.as_deref(),
+        );
+        ctx.send(card.reply()).await?;
+    } else {
+        let card = mod_batch_success_card(
+            &CaseAction::Ban,
+            &successful_bans,
+            &case_nums,
+            reason.as_deref(),
+        );
+        ctx.send(card.reply()).await?;
+    }
     Ok(())
 }
 
@@ -165,6 +439,150 @@ pub async fn unban(
     Ok(())
 }
 
+/// View, modify, or delete moderation cases.
+#[poise::command(
+    slash_command,
+    prefix_command,
+    guild_only,
+    default_member_permissions = "MODERATE_MEMBERS",
+    subcommands("cases_view", "cases_modify", "cases_delete")
+)]
+pub async fn cases(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
+    let card = Card::lines(
+        "📋 Moderation Cases",
+        vec![
+            "Use the subcommands to interact with cases:".to_string(),
+            "• `/cases view [member] [number] [action]` - View case details or list member cases".to_string(),
+            "• `/cases modify <number> <reason>` - Update case reason".to_string(),
+            "• `/cases delete <number>` - Delete a case".to_string(),
+        ],
+    );
+    ctx.send(card.into_reply().reply()).await?;
+    Ok(())
+}
+
+/// View a specific moderation case or list cases for a user.
+#[poise::command(slash_command, prefix_command, rename = "view")]
+pub async fn cases_view(
+    ctx: Context<'_>,
+    #[description = "Specific case number"] number: Option<i32>,
+    #[description = "Filter by member"] member: Option<UserId>,
+    #[description = "Filter by action (warn, kick, ban, etc.)"] action: Option<String>,
+) -> Result<(), Error> {
+    ctx.defer().await?;
+    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+
+    if let Some(num) = number {
+        let case_opt = store::get_case(&ctx.data().db, guild_id, num).await?;
+        match case_opt {
+            Some(c) => {
+                let card = case_card(&c);
+                ctx.send(card.reply()).await?;
+            }
+            None => {
+                let card = Card::lines("🔍 Case Not Found", vec![format!("Case `#{num}` does not exist in this server.")])
+                    .kind(CardKind::Error);
+                ctx.send(card.into_reply().reply()).await?;
+            }
+        }
+        return Ok(());
+    }
+
+    let act_enum = action.as_deref().and_then(|a| match a.to_lowercase().as_str() {
+        "warn" => Some(CaseAction::Warn),
+        "kick" => Some(CaseAction::Kick),
+        "ban" => Some(CaseAction::Ban),
+        "unban" => Some(CaseAction::Unban),
+        "mute" => Some(CaseAction::Mute),
+        "unmute" => Some(CaseAction::Unmute),
+        "softban" => Some(CaseAction::Softban),
+        _ => None,
+    });
+
+    let cases = store::list_cases(
+        &ctx.data().db,
+        guild_id,
+        member.map(|u| u.get()),
+        act_enum,
+        50,
+    )
+    .await?;
+
+    if cases.is_empty() {
+        let card = Card::lines("📋 No Cases Found", vec!["No moderation cases match your query.".to_string()]);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
+    }
+
+    let mut lines = Vec::new();
+    for c in cases.iter().take(15) {
+        let act = format!("{:?}", c.action).to_uppercase();
+        let r = c.reason.as_deref().unwrap_or("No reason provided");
+        let ts = c.created_at.timestamp();
+        lines.push(format!("**#{}** `{act}` for <@{}>: {r} (<t:{ts}:R>)", c.case_number, c.user_id));
+    }
+
+    let mut opts = lumi_ui::CardOptions::default();
+    opts.footer = Some(format!("Showing up to 15 of {} matching case(s)", cases.len()));
+    let title = member.map_or_else(|| "📋 Server Moderation Cases".to_string(), |u| format!("📋 Cases for <@{}>", u.get()));
+    let card = Card::lines(title, lines).options(opts);
+    ctx.send(card.into_reply().reply()).await?;
+    Ok(())
+}
+
+/// Update the reason of an existing moderation case.
+#[poise::command(slash_command, prefix_command, rename = "modify")]
+pub async fn cases_modify(
+    ctx: Context<'_>,
+    #[description = "Case number"] number: i32,
+    #[description = "New reason"] reason: String,
+) -> Result<(), Error> {
+    ctx.defer().await?;
+    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+
+    let updated = store::update_case_reason(&ctx.data().db, guild_id, number, &reason).await?;
+    if updated {
+        let card = Card::lines("✅ Reason Updated", vec![format!("Updated reason for Case `#{}` to: **{}**", number, reason)])
+            .kind(CardKind::Success);
+        ctx.send(card.into_reply().reply()).await?;
+    } else {
+        let card = Card::lines("❌ Case Not Found", vec![format!("Case `#{number}` does not exist.")])
+            .kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
+    }
+    Ok(())
+}
+
+/// Delete an existing moderation case.
+#[poise::command(slash_command, prefix_command, rename = "delete")]
+pub async fn cases_delete(
+    ctx: Context<'_>,
+    #[description = "Case number to delete"] number: i32,
+) -> Result<(), Error> {
+    let prompt_body = format!("Are you sure you want to permanently delete Case `#{number}`?");
+    if !confirm_moderation_prompt(ctx, "⚠️ Confirm Case Deletion", &prompt_body, "Delete Case").await? {
+        let card = Card::lines("Action Cancelled", vec!["Case deletion was cancelled.".to_string()]);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
+    }
+
+    ctx.defer().await?;
+    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+
+    let deleted = store::delete_case(&ctx.data().db, guild_id, number).await?;
+    if deleted.is_some() {
+        let card = Card::lines("🗑️ Case Deleted", vec![format!("Moderation Case `#{number}` has been permanently deleted.")])
+            .kind(CardKind::Success);
+        ctx.send(card.into_reply().reply()).await?;
+    } else {
+        let card = Card::lines("❌ Case Not Found", vec![format!("Case `#{number}` does not exist.")])
+            .kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
+    }
+    Ok(())
+}
+
 /// Inspect a specific moderation case.
 #[poise::command(slash_command, prefix_command, guild_only, default_member_permissions = "MODERATE_MEMBERS")]
 pub async fn case(
@@ -181,7 +599,8 @@ pub async fn case(
             ctx.send(card.reply()).await?;
         }
         None => {
-            let card = Card::lines("🔍 Case Not Found", vec![format!("Case `#{}` does not exist in this server.", number)]);
+            let card = Card::lines("🔍 Case Not Found", vec![format!("Case `#{}` does not exist in this server.", number)])
+                .kind(CardKind::Error);
             ctx.send(card.into_reply().reply()).await?;
         }
     }
@@ -200,10 +619,12 @@ pub async fn reason(
 
     let updated = store::update_case_reason(&ctx.data().db, guild_id, number, &reason).await?;
     if updated {
-        let card = Card::lines("✅ Reason Updated", vec![format!("Updated reason for Case `#{}` to: **{}**", number, reason)]);
+        let card = Card::lines("✅ Reason Updated", vec![format!("Updated reason for Case `#{}` to: **{}**", number, reason)])
+            .kind(CardKind::Success);
         ctx.send(card.into_reply().reply()).await?;
     } else {
-        let card = Card::lines("❌ Case Not Found", vec![format!("Case `#{}` does not exist.", number)]);
+        let card = Card::lines("❌ Case Not Found", vec![format!("Case `#{}` does not exist.", number)])
+            .kind(CardKind::Error);
         ctx.send(card.into_reply().reply()).await?;
     }
     Ok(())
@@ -691,7 +1112,7 @@ mod tests {
 
 pub fn commands() -> Vec<Command> {
     vec![
-        warn(), kick(), ban(), unban(), mute(), unmute(), case(), reason(), note(), softban(),
+        warn(), kick(), ban(), unban(), mute(), unmute(), cases(), case(), reason(), note(), softban(),
         lock(), lockdown(), quarantine(), dm(), say(), sanitize(),
     ]
 }

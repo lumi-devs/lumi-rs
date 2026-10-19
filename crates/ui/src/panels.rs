@@ -115,3 +115,20 @@ pub fn pagination_row(
         .disabled(true);
     Some(action_row_of(vec![prev, indicator, next]))
 }
+
+/// A confirmation row with a Danger Confirm button and a Secondary Cancel button.
+pub fn confirm_row(
+    confirm_id: impl Into<String>,
+    cancel_id: impl Into<String>,
+    confirm_label: Option<&str>,
+    cancel_label: Option<&str>,
+) -> CreateActionRow<'static> {
+    action_row_of(vec![
+        CreateButton::new(confirm_id.into())
+            .label(confirm_label.unwrap_or("Confirm").to_string())
+            .style(ButtonStyle::Danger),
+        CreateButton::new(cancel_id.into())
+            .label(cancel_label.unwrap_or("Cancel").to_string())
+            .style(ButtonStyle::Secondary),
+    ])
+}

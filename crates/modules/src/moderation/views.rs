@@ -50,6 +50,38 @@ pub fn case_card(case: &moderation_case::Model) -> CardReply {
         .into_reply()
 }
 
+pub fn mod_batch_success_card(
+    action: &CaseAction,
+    target_ids: &[u64],
+    case_nums: &[i32],
+    reason: Option<&str>,
+) -> CardReply {
+    let action_name = format!("{:?}", action);
+    let title = format!("{} Batch {}", action_emoji(action), action_name);
+
+    let mut lines = Vec::new();
+    let targets = target_ids
+        .iter()
+        .map(|id| format!("<@{id}>"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let cases = case_nums
+        .iter()
+        .map(|num| format!("`#{num}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    lines.push(format!("Successfully applied **{}** to {}.", action_name.to_lowercase(), targets));
+    lines.push(format!("**Cases:** {cases}"));
+    if let Some(r) = reason {
+        lines.push(format!("**Reason:** {}", r));
+    }
+
+    Card::lines(title, lines)
+        .accent(Some(action_color(action)))
+        .into_reply()
+}
+
 pub fn mod_action_success_card(
     action: &CaseAction,
     target_id: u64,
