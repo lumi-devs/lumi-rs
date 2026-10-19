@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -5,7 +6,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
 };
 
-use lumi_db::entities::{downloader_module, downloader_repo};
+use lumi_db::entities::{downloader_module, downloader_repo, global, global_module_state};
 
 use crate::error::{LumiError, Result};
 
@@ -13,6 +14,53 @@ use crate::error::{LumiError, Result};
 pub struct Downloader {
     db: DatabaseConnection,
     addons_dir: PathBuf,
+}
+
+/// Outcome of a remote-vs-local update check for one repository.
+#[derive(Clone, Debug)]
+pub struct RepoUpdateCheck {
+    pub ok: bool,
+    pub reason: String,
+    pub has_update: bool,
+    pub changelog: Option<String>,
+}
+
+/// Outcome of pulling a repository.
+#[derive(Clone, Debug)]
+pub struct RepoUpdateResult {
+    pub changed: bool,
+    pub old_sha: Option<String>,
+    pub new_sha: String,
+    pub diff_stat: Option<String>,
+}
+
+/// An installed module joined with its source repository.
+#[derive(Clone, Debug)]
+pub struct InstalledModule {
+    pub module_name: String,
+    pub version: Option<String>,
+    pub repo_name: String,
+    pub installed_at: chrono::DateTime<chrono::FixedOffset>,
+}
+
+/// One module manifest discovered inside a repository checkout.
+#[derive(Clone, Debug)]
+pub struct RepoModuleInfo {
+    pub name: String,
+    pub version: String,
+    pub short: Option<String>,
+    pub description: Option<String>,
+    pub author: Option<String>,
+    pub min_bot_version: Option<String>,
+    pub hidden: bool,
+    pub end_user_data_statement: Option<String>,
+}
+
+/// Auto-update settings, persisted in `global_config`.
+#[derive(Clone, Debug)]
+pub struct AutoUpdateConfig {
+    pub enabled: bool,
+    pub interval_minutes: u64,
 }
 
 impl Downloader {
@@ -353,6 +401,339 @@ impl Downloader {
             .one(&self.db)
             .await
             .map_err(LumiError::Db)
+    }
+
+    /// Whether a module has been disabled globally. Defaults to enabled.
+    pub async fn is_module_enabled(&self, module_name: &str) -> anyhow::Result<bool> {
+        let row = global_module_state::Entity::find()
+            .filter(global_module_state::Column::ModuleName.eq(module_name))
+            .one(&self.db)
+            .await?;
+        Ok(row.is_none_or(|m| m.enabled))
+    }
+
+    /// Lazily compare a repository's remote branch against its local checkout.
+    pub async fn check_repo_update(&self, name: &str) -> anyhow::Result<RepoUpdateCheck> {
+        let Some(repo) = self.get_repo_by_name(name).await? else {
+            return Ok(RepoUpdateCheck {
+                ok: false,
+                reason: format!("Repository **{name}** was not found."),
+                has_update: false,
+                changelog: None,
+            });
+        };
+
+        let repo_dir = self.addons_dir.join("repos").join(name);
+        if !repo_dir.exists() {
+            return Ok(RepoUpdateCheck {
+                ok: true,
+                reason: String::new(),
+                has_update: true,
+                changelog: None,
+            });
+        }
+
+        let branch = repo.branch.clone();
+        let dir = repo_dir.clone();
+        let (local, remote, changelog) =
+            tokio::task::spawn_blocking(move || -> Result<(String, String, String)> {
+                // why: a failed fetch is tolerated; we then compare against stale refs.
+                let _ = git(&dir, &["fetch", "origin"]);
+                let local = git(&dir, &["rev-parse", "HEAD"])?;
+                let upstream =
+                    git(&dir, &["rev-parse", "--abbrev-ref", "@{u}"]).unwrap_or_default();
+                let target = if upstream.is_empty() || upstream.contains("@{u}") {
+                    format!("origin/{branch}")
+                } else {
+                    upstream
+                };
+                let remote = git(&dir, &["rev-parse", target.as_str()])?;
+                let range = format!("HEAD..{target}");
+                let changelog =
+                    git(&dir, &["log", "--oneline", range.as_str()]).unwrap_or_default();
+                Ok((local, remote, changelog))
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))??;
+
+        if local == remote {
+            return Ok(RepoUpdateCheck {
+                ok: true,
+                reason: "up to date".to_string(),
+                has_update: false,
+                changelog: None,
+            });
+        }
+
+        Ok(RepoUpdateCheck {
+            ok: true,
+            reason: String::new(),
+            has_update: true,
+            changelog: if changelog.is_empty() {
+                None
+            } else {
+                Some(changelog)
+            },
+        })
+    }
+
+    /// Pull a repository and report what changed.
+    pub async fn update_repo(&self, name: &str) -> anyhow::Result<RepoUpdateResult> {
+        let repo = self
+            .get_repo_by_name(name)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("repository '{name}' not found"))?;
+        let old_sha = repo.commit.clone();
+        let new_sha = self.pull_repo(name).await?;
+        let changed = old_sha.as_deref() != Some(new_sha.as_str());
+
+        let diff_stat = match (changed, old_sha.clone()) {
+            (true, Some(old)) => {
+                let repo_dir = self.addons_dir.join("repos").join(name);
+                let range = format!("{old}..{new_sha}");
+                tokio::task::spawn_blocking(move || {
+                    git(&repo_dir, &["diff", "--stat", range.as_str()]).ok()
+                })
+                .await
+                .ok()
+                .flatten()
+            }
+            _ => None,
+        };
+
+        Ok(RepoUpdateResult {
+            changed,
+            old_sha,
+            new_sha,
+            diff_stat,
+        })
+    }
+
+    /// Count repositories whose remote branch is ahead of the local checkout.
+    pub async fn check_for_updates(&self) -> anyhow::Result<u32> {
+        let modules = self.list_installed_modules().await?;
+        let repos = self.list_repos().await?;
+        let names: HashMap<i32, String> = repos.into_iter().map(|r| (r.id, r.name)).collect();
+
+        let mut seen: HashSet<i32> = HashSet::new();
+        let mut pending = 0u32;
+        for module in modules {
+            let Some(name) = names.get(&module.repo_id) else {
+                continue;
+            };
+            if !seen.insert(module.repo_id) {
+                continue;
+            }
+            if let Ok(check) = self.check_repo_update(name).await {
+                if check.ok && check.has_update {
+                    pending += 1;
+                }
+            }
+        }
+        Ok(pending)
+    }
+
+    /// Remove a module's files and forget it. Returns whether it was tracked.
+    pub async fn uninstall_module(&self, module_name: &str) -> anyhow::Result<bool> {
+        let Some(model) = downloader_module::Entity::find()
+            .filter(downloader_module::Column::ModuleName.eq(module_name))
+            .one(&self.db)
+            .await?
+        else {
+            return Ok(false);
+        };
+
+        let target_dir = self.addons_dir.join(module_name);
+        if target_dir.exists() {
+            let _ = tokio::fs::remove_dir_all(&target_dir).await;
+        }
+        let target_file = self.addons_dir.join(format!("{module_name}.rhai"));
+        if target_file.exists() {
+            let _ = tokio::fs::remove_file(&target_file).await;
+        }
+
+        downloader_module::Entity::delete_many()
+            .filter(downloader_module::Column::RepoId.eq(model.repo_id))
+            .filter(downloader_module::Column::ModuleName.eq(module_name))
+            .exec(&self.db)
+            .await?;
+        Ok(true)
+    }
+
+    /// Enable or disable a module globally.
+    pub async fn toggle_module(&self, module_name: &str, enabled: bool) -> anyhow::Result<()> {
+        let now = Utc::now().fixed_offset();
+        let reason = Some("toggled via addons panel".to_string());
+        match global_module_state::Entity::find()
+            .filter(global_module_state::Column::ModuleName.eq(module_name))
+            .one(&self.db)
+            .await?
+        {
+            Some(existing) => {
+                let mut active: global_module_state::ActiveModel = existing.into();
+                active.enabled = Set(enabled);
+                active.reason = Set(reason);
+                active.updated_at = Set(now);
+                active.update(&self.db).await?;
+            }
+            None => {
+                global_module_state::ActiveModel {
+                    module_name: Set(module_name.to_string()),
+                    enabled: Set(enabled),
+                    reason: Set(reason),
+                    updated_at: Set(now),
+                }
+                .insert(&self.db)
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Installed modules joined with their source repository name.
+    pub async fn get_installed_modules_detailed(&self) -> anyhow::Result<Vec<InstalledModule>> {
+        let modules = self.list_installed_modules().await?;
+        let repos = self.list_repos().await?;
+        let names: HashMap<i32, String> = repos.into_iter().map(|r| (r.id, r.name)).collect();
+
+        Ok(modules
+            .into_iter()
+            .filter_map(|m| {
+                Some(InstalledModule {
+                    module_name: m.module_name,
+                    version: m.version,
+                    repo_name: names.get(&m.repo_id)?.clone(),
+                    installed_at: m.installed_at,
+                })
+            })
+            .collect())
+    }
+
+    /// Scan a repository checkout for module manifests.
+    pub async fn get_modules_in_repo(&self, repo_name: &str) -> anyhow::Result<Vec<RepoModuleInfo>> {
+        let repo_dir = self.addons_dir.join("repos").join(repo_name);
+        if !repo_dir.is_dir() {
+            return Ok(Vec::new());
+        }
+
+        let mut out = Vec::new();
+        let mut entries = tokio::fs::read_dir(&repo_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            if !entry.file_type().await?.is_dir() {
+                continue;
+            }
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+            if dir_name.starts_with('.') || dir_name.starts_with('_') {
+                continue;
+            }
+            let Ok(raw) = tokio::fs::read_to_string(entry.path().join("manifest.json")).await else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            out.push(RepoModuleInfo {
+                name: v
+                    .get("name")
+                    .and_then(|x| x.as_str())
+                    .map_or_else(|| dir_name.clone(), ToString::to_string),
+                version: v
+                    .get("version")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("1.0.0")
+                    .to_string(),
+                short: v.get("short").and_then(|x| x.as_str()).map(ToString::to_string),
+                description: v
+                    .get("description")
+                    .and_then(|x| x.as_str())
+                    .map(ToString::to_string),
+                author: v.get("author").and_then(render_author),
+                min_bot_version: v
+                    .get("min_bot_version")
+                    .and_then(|x| x.as_str())
+                    .map(ToString::to_string),
+                hidden: v
+                    .get("hidden")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                end_user_data_statement: v
+                    .get("end_user_data_statement")
+                    .and_then(|x| x.as_str())
+                    .map(ToString::to_string),
+            });
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
+    /// Read the auto-update settings from `global_config`.
+    pub async fn get_auto_update_config(&self) -> anyhow::Result<AutoUpdateConfig> {
+        let row = global::Entity::find()
+            .order_by_asc(global::Column::Id)
+            .one(&self.db)
+            .await?;
+        Ok(row.map_or(
+            AutoUpdateConfig {
+                enabled: false,
+                interval_minutes: 1440,
+            },
+            |r| AutoUpdateConfig {
+                enabled: r.auto_update_enabled,
+                interval_minutes: u64::try_from(r.auto_update_interval_minutes).unwrap_or(1440),
+            },
+        ))
+    }
+
+    /// Write the auto-update settings to the existing `global_config` row.
+    pub async fn set_auto_update_config(&self, cfg: AutoUpdateConfig) -> anyhow::Result<()> {
+        let row = global::Entity::find()
+            .order_by_asc(global::Column::Id)
+            .one(&self.db)
+            .await?;
+        if let Some(existing) = row {
+            let mut active: global::ActiveModel = existing.into();
+            active.auto_update_enabled = Set(cfg.enabled);
+            active.auto_update_interval_minutes =
+                Set(i32::try_from(cfg.interval_minutes).unwrap_or(i32::MAX));
+            active.updated_at = Set(Utc::now().fixed_offset());
+            active.update(&self.db).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Run `git` in `dir`, returning trimmed stdout or an error carrying stderr.
+fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(LumiError::Io)?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(LumiError::Other(format!(
+            "git {} failed: {err}",
+            args.join(" ")
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// A manifest `author` is either a string or an array of strings.
+fn render_author(value: &serde_json::Value) -> Option<String> {
+    if let Some(s) = value.as_str() {
+        return Some(s.to_string());
+    }
+    let names: Vec<String> = value
+        .as_array()?
+        .iter()
+        .filter_map(|v| v.as_str().map(ToString::to_string))
+        .collect();
+    if names.is_empty() {
+        None
+    } else {
+        Some(names.join(", "))
     }
 }
 
