@@ -1,0 +1,76 @@
+Still going through the repo. Cloned it, mapped the workspace, and now checking unused deps and duplication hotspots. My dep check broke on a shell quirk, so I'm rerunning it properly.
+
+Quick status: the repo scan is done and I've got a solid list of cleanup targets. Now looking at what other Rust serenity/poise bots do so I can compare against them.
+
+Wrapping up: scan and comparison done, writing up the findings. Quick note to my memory first, then the full list.
+
+Cloned it, read the kernel, db, ui and module crates, and compared against TTS Bot and Ferrisbot (both from poise's own "bots using poise" list). This is static analysis only: I didn't build it, and the unused-dep check is grep-based, so confirm with `cargo machete` before deleting.
+
+Lumi is about 18.5k LOC across 7 crates plus xtask. Each lane below touches different files, so you can run them in parallel.
+
+**1. Dead deps and workspace cruft**
+- Looks unused in `src`: `tower` and `anyhow` (api), `thiserror` (db, modules), `async-trait`, `once_cell`, `arc-swap`, `humantime`, `croner` (kernel), `serde`/`serde_json` (script, ui, modules), `lumi-script` and `console-subscriber` (lumi).
+- No member crate seems to pull `tokio-util`, `rmp-serde`, `toml`, `strum` or `derive_more` from `[workspace.dependencies]`.
+- Swap `once_cell` in api for std `OnceLock`/`LazyLock`.
+- Use `serenity::async_trait` (TTS Bot does this) and drop the direct dep.
+
+**2. Typed per-module config (biggest win)**
+- Config is a JSON key/value table. `number`, `boolean`, `id_list` and `string_array` are copy-pasted in `security/store.rs` and `filter/store.rs`.
+- The `ConfigField` builder helpers are duplicated across the security, filter, logging and economy `mod.rs` files.
+- `parse_id` exists only because ids might be a number or a string.
+- Replace with a `#[derive(Deserialize, Default)]` struct per module, one jsonb row per (guild, module), and generate the dashboard schema with `schemars` if you still need one.
+
+**3. IDs**
+- 44 entity fields are `guild_id: String`, and there are 74 `.get().to_string()` call sites. `permits` mixes in `i64` as well.
+- Store snowflakes as BIGINT behind newtypes and convert to serenity ids at the edge. TTS Bot stores `i64` and converts. Check the sea-orm 2.0 docs for the exact value-type derive.
+
+**4. Errors and DB failure handling**
+- `LumiError` (thiserror) and `anyhow` are both in play. Pick anyhow at the edges and drop `LumiError`.
+- `get_config` uses `unwrap_or_default()`, so a DB blip returns an empty config. For security that means defaults, and anti-nuke defaults to off.
+- `is_enabled` uses `.ok().flatten()` and fails open.
+- I found no `on_error` hook in `FrameworkOptions`. Add one. TTS Bot stores deduped tracebacks in the DB, and Ferrisbot enables poise's `handle_panics`.
+
+**5. Module system doesn't match the "self-contained modules" rule**
+- The `Module` trait only has `commands` and `config_schema`. Events and component routing are hardcoded in `lumi/src/events/mod.rs` as a `starts_with("lumi:")`/`"tempvc:"`/`"econ:"` chain, so adding a module means touching three files.
+- Give `Module` an `on_event` method and a component prefix, and have the dispatcher loop over the registry.
+- The only caller of `module_state::is_enabled` I found is the hub UI, so I don't see module toggles gating anything. Verify that.
+
+**6. Helper dedupe**
+- `cut()` is defined 5 times: logging, filter, `module_state`, `hub/addons` and `hub/modules`.
+- The `ctx.guild_id().ok_or_else(|| anyhow!("guild only"))` pattern appears 46 times, even though `guild_only` is already set 59 times. Add a `ctx.guild()` helper or a guild-context extractor.
+- `get_or_create_account` and `get_leaderboard` exist twice, in economy and leveling.
+- The confirm-prompt collector in moderation should become a generic `ui::confirm()`.
+- Split `moderation/commands.rs` (1118 lines, 26 commands).
+- Move ping data collection out of `ui/ping.rs` (702 lines) into one place.
+
+**7. Statics and regex**
+- There are five `OnceLock<Option<Regex>>` with `.ok()`, so a bad pattern silently disables the feature. Use `lazy-regex`, which checks patterns at compile time.
+- `VOICE_SESSIONS` is a global `DashMap`. Move it into `Services`.
+- The filter has its own static moka cache. Fold it into the central cache and type that cache, since it currently stores `serde_json::Value`.
+
+**8. Downloader and Rhai (decide: kill or finish)**
+- `downloader.rs`, `hub/addons.rs` and `script` come to roughly 1.8k lines, and the `lumi` crate never uses `lumi-script`.
+- The downloader shells out to `git`. If you keep it, use `gix`.
+- The SSRF check is hand-rolled octet matching. Use `std::net` helpers or `ipnet`, and check the IPv6 side.
+- If you cut it, the `addons/` dir, the apalis queue (if nothing else uses it) and the related commands go too.
+
+**9. DB and migrations**
+- It's pre-release, so collapse `m0001` through `m0004` into one baseline. Two of them just drop tables the baseline created.
+- Audit the 41 entities against `todo/01-table-usage.md` and drop the unused ones.
+
+**10. Repo hygiene**
+- `AGENTS.md` is stale. It describes a single crate with `src/`, and it says `dead_code` and `unused` are deny while `Cargo.toml` sets warn.
+- Collapse `todo.md`, `TODO.md`, `todo/` (about 87 KB), `progress.md` and `session.txt` (31 bytes).
+- There's no CI, `clippy.toml`, `rustfmt.toml` or `deny.toml`.
+- Copy TTS Bot's trick of banning `CreateMessage::embed` via `disallowed-methods`. It enforces your "no embeds" rule, and you currently have 0 `CreateEmbed` uses.
+
+**11. Permits**
+- `command_check` rebuilds role and permission context by hand and keys off `required_node(&root.name)`. Put the node in poise's `custom_data` on the command instead.
+
+**Compile times:**
+- `modules` is 8.4k LOC in one crate, and `resvg` and the leveling images live in it. Split the heavy features into their own crates.
+- Use mold, sccache and `cargo-hakari`.
+
+**Other bots:** TTS Bot (about 9k LOC) and Ferrisbot (about 6.7k LOC) are smaller than Lumi and use plain `sqlx`, not an ORM. Ferrisbot uses `snafu`, `strum` and `figment`, which you already have except `snafu`. Their structure is simple, so lanes 4, 5, 6 and 10 are where they're most useful as a reference.
+
+Want me to turn these into per-lane prompt files for your agent setup?
