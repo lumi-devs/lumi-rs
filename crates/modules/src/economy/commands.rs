@@ -357,6 +357,56 @@ pub async fn slots(
     Ok(())
 }
 
+/// Show the richest members on this server.
+#[poise::command(slash_command, prefix_command, guild_only, aliases("lb", "top"))]
+pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
+    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let entries = store::get_leaderboard(&ctx.data().db, guild_id, 10).await?;
+
+    if entries.is_empty() {
+        let card = Card::lines(
+            "🏆 Economy Leaderboard",
+            vec![
+                "Nobody has an economy account on this server yet.".to_string(),
+                "Claim `/daily` or have staff grant currency to get started.".to_string(),
+            ],
+        )
+        .kind(CardKind::Gold);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
+    }
+
+    let caller_id = ctx.author().id.get();
+    let mut lines = Vec::new();
+    for (idx, entry) in entries.iter().enumerate() {
+        let rank = idx + 1;
+        let medal = match rank {
+            1 => "🥇",
+            2 => "🥈",
+            3 => "🥉",
+            _ => "▫️",
+        };
+        let is_you = if entry.user_id == caller_id.to_string() { " ⬅️ (You)" } else { "" };
+        let total = entry.wallet + entry.bank;
+        lines.push(format!(
+            "{medal} **#{rank}** <@{}> — **{total}** coins (`{}` wallet, `{}` bank){is_you}",
+            entry.user_id, entry.wallet, entry.bank
+        ));
+    }
+
+    let guild_name = ctx.guild().map_or_else(|| "Server".to_string(), |g| g.name.to_string());
+    let mut opts = lumi_ui::CardOptions::default();
+    opts.footer = Some(format!("Top {} richest members", entries.len()));
+
+    let card = Card::lines(format!("🏆 Richest in {guild_name}"), lines)
+        .kind(CardKind::Gold)
+        .options(opts);
+
+    ctx.send(card.into_reply().reply()).await?;
+    Ok(())
+}
+
 pub fn commands() -> Vec<Command> {
-    vec![balance(), daily(), pay(), bank(), slots()]
+    vec![balance(), daily(), pay(), bank(), slots(), leaderboard()]
 }
