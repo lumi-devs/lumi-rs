@@ -1,5 +1,5 @@
 use poise::serenity_prelude as serenity;
-use serenity::all::{GetMessages, MessageId, UserId};
+use serenity::all::{EditMember, GetMessages, Message, MessageId, UserId};
 
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind, CardOptions};
@@ -23,6 +23,35 @@ pub async fn avatar(
     let card = Card::lines(title, vec![format!("[Direct Image Link]({avatar_url})")])
         .kind(CardKind::Info)
         .options(opts);
+
+    ctx.send(card.into_reply().reply()).await?;
+    Ok(())
+}
+
+/// Fetch and display banner of a user or yourself.
+#[poise::command(slash_command, prefix_command, aliases("b"))]
+pub async fn banner(
+    ctx: Context<'_>,
+    #[description = "User to inspect"] user: Option<UserId>,
+) -> Result<(), Error> {
+    ctx.defer().await?;
+    let target_id = user.unwrap_or_else(|| ctx.author().id);
+    let target_user = ctx.http().get_user(target_id).await?;
+
+    let card = if let Some(banner_url) = target_user.banner_url() {
+        let title = format!("🖼️ Banner for {}", target_user.name);
+        let mut opts = CardOptions::default();
+        opts.thumbnail_url = Some(banner_url.clone());
+        Card::lines(title, vec![format!("[Direct Image Link]({banner_url})")])
+            .kind(CardKind::Info)
+            .options(opts)
+    } else {
+        Card::lines(
+            "🖼️ No Banner",
+            vec![format!("<@{target_id}> has no banner set.")],
+        )
+        .kind(CardKind::Info)
+    };
 
     ctx.send(card.into_reply().reply()).await?;
     Ok(())
@@ -117,28 +146,80 @@ pub async fn serverinfo(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Bulk delete up to 100 messages in the current channel.
-#[poise::command(slash_command, prefix_command, guild_only, default_member_permissions = "MANAGE_MESSAGES")]
-pub async fn purge(
+/// Change or reset a member's nickname.
+#[poise::command(slash_command, prefix_command, guild_only, default_member_permissions = "MANAGE_NICKNAMES")]
+pub async fn nick(
     ctx: Context<'_>,
-    #[description = "Number of messages to delete (1-100)"] amount: u8,
+    #[description = "Member to rename"] member: UserId,
+    #[description = "New nickname; omit to reset"] nickname: Option<String>,
+) -> Result<(), Error> {
+    ctx.defer().await?;
+    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
+
+    let new_nick = nickname
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let builder = match &new_nick {
+        Some(n) => EditMember::new().nickname(n.as_str()),
+        None => EditMember::new().nickname(""),
+    };
+    guild_id.edit_member(ctx.http(), member, builder).await?;
+
+    let card = match new_nick {
+        Some(n) => Card::new(
+            "✏️ Nickname Changed",
+            format!("Set <@{member}>'s nickname to **{n}**."),
+        )
+        .kind(CardKind::Success),
+        None => Card::new(
+            "✏️ Nickname Reset",
+            format!("Reset <@{member}>'s nickname."),
+        )
+        .kind(CardKind::Success),
+    };
+
+    ctx.send(card.into_reply().reply()).await?;
+    Ok(())
+}
+
+/// Discord bulk delete only removes messages younger than 14 days.
+const BULK_DELETE_MAX_AGE_SECS: i64 = 14 * 86_400;
+
+/// Fetch and delete up to `amount` recent messages matching `keep`.
+async fn run_purge(
+    ctx: Context<'_>,
+    amount: u16,
+    keep: impl Fn(&Message) -> bool,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
     let channel_id = ctx.channel_id();
+    let limit = u8::try_from(amount.clamp(1, 100)).unwrap_or(100);
 
-    let count = amount.clamp(1, 100);
     let messages = channel_id
-        .messages(ctx.http(), GetMessages::new().limit(count))
+        .messages(ctx.http(), GetMessages::new().limit(limit))
         .await?;
 
-    let message_ids: Vec<MessageId> = messages.into_iter().map(|m| m.id).collect();
-    let deleted_count = message_ids.len();
+    let now = chrono::Utc::now().timestamp();
+    let message_ids: Vec<MessageId> = messages
+        .into_iter()
+        .filter(|m| now - m.timestamp.unix_timestamp() < BULK_DELETE_MAX_AGE_SECS && keep(m))
+        .map(|m| m.id)
+        .collect();
 
-    channel_id.delete_messages(ctx.http(), &message_ids, Some("Purge command")).await?;
+    let mut deleted_count = 0;
+    for chunk in message_ids.chunks(100) {
+        channel_id
+            .delete_messages(ctx.http(), chunk, Some("Purge command"))
+            .await?;
+        deleted_count += chunk.len();
+    }
 
-    let card = Card::lines(
+    let card = Card::new(
         "🧹 Purge Complete",
-        vec![format!("Successfully deleted `{}` messages.", deleted_count)],
+        format!("Successfully deleted `{deleted_count}` messages."),
     )
     .kind(CardKind::Success);
 
@@ -146,6 +227,146 @@ pub async fn purge(
     Ok(())
 }
 
+fn parse_duration_secs(input: &str) -> Option<i64> {
+    let input = input.trim();
+    let idx = input.find(|c: char| !c.is_ascii_digit())?;
+    let num: i64 = input[..idx].parse().ok()?;
+    if num <= 0 {
+        return None;
+    }
+    let unit = input[idx..].to_lowercase();
+    match unit.as_str() {
+        "m" | "min" => Some(num * 60),
+        "h" | "hr" => Some(num * 3600),
+        "d" | "day" => Some(num * 86_400),
+        _ => None,
+    }
+}
+
+/// Bulk delete messages in this channel, with optional filters.
+#[poise::command(
+    slash_command,
+    prefix_command,
+    guild_only,
+    default_member_permissions = "MANAGE_MESSAGES",
+    subcommands(
+        "purge_messages",
+        "purge_user",
+        "purge_bots",
+        "purge_links",
+        "purge_regex",
+        "purge_duration"
+    )
+)]
+pub async fn purge(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
+    let card = Card::info(
+        "🧹 Purge",
+        "Choose a filter: `messages`, `user`, `bots`, `links`, `regex`, or `duration`.",
+    );
+    ctx.send(card.into_reply().reply()).await?;
+    Ok(())
+}
+
+/// Delete the most recent messages.
+#[poise::command(slash_command, prefix_command, rename = "messages", guild_only)]
+pub async fn purge_messages(
+    ctx: Context<'_>,
+    #[description = "Number of messages to delete (1-500)"] amount: u16,
+) -> Result<(), Error> {
+    run_purge(ctx, amount, |_| true).await
+}
+
+/// Delete recent messages from a specific member.
+#[poise::command(slash_command, prefix_command, rename = "user", guild_only)]
+pub async fn purge_user(
+    ctx: Context<'_>,
+    #[description = "Member to target"] user: UserId,
+    #[description = "How many matching messages to delete (default 100)"] amount: Option<u16>,
+) -> Result<(), Error> {
+    run_purge(ctx, amount.unwrap_or(100), move |m| m.author.id == user).await
+}
+
+/// Delete recent messages sent by bots.
+#[poise::command(slash_command, prefix_command, rename = "bots", guild_only)]
+pub async fn purge_bots(
+    ctx: Context<'_>,
+    #[description = "How many matching messages to delete (default 100)"] amount: Option<u16>,
+) -> Result<(), Error> {
+    run_purge(ctx, amount.unwrap_or(100), |m| m.author.bot).await
+}
+
+/// Delete recent messages containing a link.
+#[poise::command(slash_command, prefix_command, rename = "links", guild_only)]
+pub async fn purge_links(
+    ctx: Context<'_>,
+    #[description = "How many matching messages to delete (default 100)"] amount: Option<u16>,
+) -> Result<(), Error> {
+    let re = regex::Regex::new(r"https?://\S+")
+        .map_err(|e| anyhow::anyhow!("link pattern: {e}"))?;
+    run_purge(ctx, amount.unwrap_or(100), move |m| {
+        re.is_match(m.content.as_str())
+    })
+    .await
+}
+
+/// Delete recent messages matching a regular expression.
+#[poise::command(slash_command, prefix_command, rename = "regex", guild_only)]
+pub async fn purge_regex(
+    ctx: Context<'_>,
+    #[description = "Regular expression to test message content against"] pattern: String,
+    #[description = "How many matching messages to delete (default 100)"] amount: Option<u16>,
+) -> Result<(), Error> {
+    let re = regex::Regex::new(&pattern)
+        .map_err(|e| anyhow::anyhow!("Invalid pattern `{pattern}`: {e}"))?;
+    run_purge(ctx, amount.unwrap_or(100), move |m| {
+        re.is_match(m.content.as_str())
+    })
+    .await
+}
+
+/// Delete recent messages newer than a given age.
+#[poise::command(slash_command, prefix_command, rename = "duration", guild_only)]
+pub async fn purge_duration(
+    ctx: Context<'_>,
+    #[description = "How far back to reach, e.g. 10m, 2h, 1d"]
+    #[autocomplete = "autocomplete_duration"]
+    duration: String,
+    #[description = "How many matching messages to delete (default 100)"] amount: Option<u16>,
+) -> Result<(), Error> {
+    let secs = parse_duration_secs(&duration).ok_or_else(|| {
+        anyhow::anyhow!("Invalid duration `{duration}`. Try something like `10m`, `2h`, or `1d`.")
+    })?;
+    let cutoff = chrono::Utc::now().timestamp() - secs;
+    run_purge(ctx, amount.unwrap_or(100), move |m| {
+        m.timestamp.unix_timestamp() >= cutoff
+    })
+    .await
+}
+
+async fn autocomplete_duration<'a>(
+    _ctx: Context<'a>,
+    partial: &'a str,
+) -> serenity::CreateAutocompleteResponse<'a> {
+    const PRESETS: &[&str] = &[
+        "5m", "10m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "7d", "14d",
+    ];
+    let choices: Vec<serenity::AutocompleteChoice> = PRESETS
+        .iter()
+        .filter(|p| p.starts_with(partial))
+        .map(|p| serenity::AutocompleteChoice::new(*p, *p))
+        .collect();
+
+    serenity::CreateAutocompleteResponse::new().set_choices(choices)
+}
+
 pub fn commands() -> Vec<Command> {
-    vec![avatar(), whois(), serverinfo(), purge()]
+    vec![
+        avatar(),
+        whois(),
+        serverinfo(),
+        banner(),
+        nick(),
+        purge(),
+    ]
 }

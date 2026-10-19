@@ -13,6 +13,7 @@ lumi-kernel = { workspace = true }
 lumi-ui     = { workspace = true }
 serenity    = { workspace = true }
 poise       = { workspace = true }
+regex       = { workspace = true }
 sea-orm     = { workspace = true }
 chrono      = { workspace = true }
 tokio       = { workspace = true }
