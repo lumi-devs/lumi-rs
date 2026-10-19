@@ -18,6 +18,9 @@ aho-corasick = { workspace = true }
 unicode-normalization = { workspace = true }
 moka        = { workspace = true }
 redis       = { workspace = true }
+reqwest     = { workspace = true }
+resvg       = "0.45"
+base64      = "0.22"
 sea-orm     = { workspace = true }
 chrono      = { workspace = true }
 tokio       = { workspace = true }

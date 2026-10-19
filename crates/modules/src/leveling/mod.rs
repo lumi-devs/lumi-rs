@@ -2,6 +2,7 @@ use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
 pub mod commands;
 pub mod events;
+pub mod images;
 pub mod store;
 pub mod views;
 
