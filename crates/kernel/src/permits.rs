@@ -360,6 +360,161 @@ impl PermitResolver {
     }
 }
 
+/// The target of a permit explain walk, as much as the caller can cheaply gather.
+#[derive(Clone, Debug)]
+pub struct ExplainSubject {
+    pub user_id: u64,
+    pub channel_id: Option<u64>,
+    pub role_ids: Vec<u64>,
+    pub is_owner: bool,
+    pub is_guild_owner: bool,
+    pub is_manager: bool,
+}
+
+/// Walk every tier that decides `node` for `subject`, mirroring the TS
+/// `explainPermit`. The first deciding tier wins.
+pub async fn explain_permit(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    node: &str,
+    subject: &ExplainSubject,
+) -> Result<Vec<TierExplanation>> {
+    let permits: HashMap<i32, permit::Model> = lumi_db::list_permits(db, guild_id)
+        .await?
+        .into_iter()
+        .map(|p| (p.id, p))
+        .collect();
+    let assignments = lumi_db::list_assignments(db, guild_id).await?;
+
+    let mut rows = Vec::new();
+    if subject.is_owner {
+        rows.push(TierExplanation { tier: "owner".into(), verdict: Verdict::Allow, detail: Some("bot owner".into()) });
+        return Ok(rows);
+    }
+    if subject.is_guild_owner {
+        rows.push(TierExplanation { tier: "owner".into(), verdict: Verdict::Allow, detail: Some("server owner".into()) });
+        return Ok(rows);
+    }
+    rows.push(tier_row("owner", Verdict::Pass, None));
+    if subject.is_manager {
+        rows.push(TierExplanation {
+            tier: "manager".into(),
+            verdict: Verdict::Allow,
+            detail: Some("Administrator or ManageGuild".into()),
+        });
+        return Ok(rows);
+    }
+    rows.push(tier_row("manager", Verdict::Pass, None));
+
+    let mut decided = false;
+    let user = subject.user_id.to_string();
+
+    push_tier(
+        &mut rows,
+        &mut decided,
+        "enforced:user",
+        tier_verdict(&permits, &assignments, PermitKind::Enforced, node, |a| {
+            a.target_type == PermitTargetType::User && a.target_id == user
+        }),
+    );
+    if decided {
+        return Ok(rows);
+    }
+
+    push_tier(
+        &mut rows,
+        &mut decided,
+        "custom:user",
+        tier_verdict(&permits, &assignments, PermitKind::Custom, node, |a| {
+            a.target_type == PermitTargetType::User && a.target_id == user
+        }),
+    );
+    if decided {
+        return Ok(rows);
+    }
+
+    if let Some(channel_id) = subject.channel_id {
+        let channel = channel_id.to_string();
+        push_tier(
+            &mut rows,
+            &mut decided,
+            "custom:channel",
+            tier_verdict(&permits, &assignments, PermitKind::Custom, node, |a| {
+                a.target_type == PermitTargetType::Channel && a.target_id == channel
+            }),
+        );
+        if decided {
+            return Ok(rows);
+        }
+    }
+
+    for role_id in &subject.role_ids {
+        let role = role_id.to_string();
+        push_tier(
+            &mut rows,
+            &mut decided,
+            &format!("custom:role:{role_id}"),
+            tier_verdict(&permits, &assignments, PermitKind::Custom, node, |a| {
+                a.target_type == PermitTargetType::Role && a.target_id == role
+            }),
+        );
+        if decided {
+            return Ok(rows);
+        }
+    }
+
+    Ok(rows)
+}
+
+/// Deny wins inside one bucket, then grant, else the tier passes.
+fn tier_verdict(
+    permits: &HashMap<i32, permit::Model>,
+    assignments: &[lumi_db::AssignmentRow],
+    kind: PermitKind,
+    node: &str,
+    target: impl Fn(&lumi_db::AssignmentRow) -> bool,
+) -> (Verdict, Option<String>) {
+    let mut grant = None;
+    let mut deny = None;
+    for assignment in assignments.iter().filter(|a| a.kind == kind && target(a)) {
+        let Some(permit) = permits.get(&assignment.permit_id) else {
+            continue;
+        };
+        if let Some(pattern) = permit.nodes.iter().find(|p| node_matches(p, node)) {
+            match permit.polarity {
+                PermitPolarity::Deny => deny = Some(pattern.clone()),
+                PermitPolarity::Grant => {
+                    if grant.is_none() {
+                        grant = Some(pattern.clone());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(pattern) = deny {
+        (Verdict::Deny, Some(format!("deny {pattern}")))
+    } else if let Some(pattern) = grant {
+        (Verdict::Allow, Some(format!("grant {pattern}")))
+    } else {
+        (Verdict::Pass, None)
+    }
+}
+
+fn tier_row(tier: &str, verdict: Verdict, detail: Option<String>) -> TierExplanation {
+    TierExplanation { tier: tier.into(), verdict, detail }
+}
+
+fn push_tier(rows: &mut Vec<TierExplanation>, decided: &mut bool, tier: &str, verdict: (Verdict, Option<String>)) {
+    if *decided {
+        return;
+    }
+    let (verdict, detail) = verdict;
+    if verdict != Verdict::Pass {
+        *decided = true;
+    }
+    rows.push(tier_row(tier, verdict, detail));
+}
+
 fn consider(rows: &mut Vec<TierExplanation>, decided: &mut bool, allowed: &mut bool, row: TierExplanation) {
     if *decided {
         return;

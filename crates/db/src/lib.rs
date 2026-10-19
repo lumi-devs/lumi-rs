@@ -9,6 +9,8 @@ use sea_orm::{
 use sea_orm_migration::MigratorTrait;
 
 use crate::entities::counter;
+use crate::entities::enums::{PermitKind, PermitTargetType};
+use crate::entities::{permit, permit_assignment};
 use crate::migrations::Migrator;
 
 pub type Result<T> = std::result::Result<T, sea_orm::DbErr>;
@@ -149,6 +151,122 @@ pub async fn list_permits(
 pub async fn delete_permit(db: &DatabaseConnection, id: i32) -> Result<u64> {
     let result = entities::permit::Entity::delete_by_id(id).exec(db).await?;
     Ok(result.rows_affected)
+}
+
+/// A permit assignment joined with its permit's display fields.
+#[derive(Clone, Debug)]
+pub struct AssignmentRow {
+    pub permit_id: i32,
+    pub permit_name: String,
+    pub kind: PermitKind,
+    pub builtin: bool,
+    pub target_type: PermitTargetType,
+    pub target_id: String,
+}
+
+/// Every assignment in a guild, ordered by permit position.
+pub async fn list_assignments(
+    db: &DatabaseConnection,
+    guild_id: u64,
+) -> Result<Vec<AssignmentRow>> {
+    let permits = list_permits(db, guild_id).await?;
+    let assignments = permit_assignment::Entity::find()
+        .filter(permit_assignment::Column::GuildId.eq(guild_id.to_string()))
+        .all(db)
+        .await?;
+
+    let mut rows = Vec::new();
+    for permit in &permits {
+        for a in assignments.iter().filter(|a| a.permit_id == permit.id) {
+            rows.push(AssignmentRow {
+                permit_id: permit.id,
+                permit_name: permit.name.clone(),
+                kind: permit.kind,
+                builtin: permit.builtin,
+                target_type: a.target_type,
+                target_id: a.target_id.clone(),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+/// Fetch a single permit scoped to its guild.
+pub async fn get_permit(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    permit_id: i32,
+) -> Result<Option<permit::Model>> {
+    permit::Entity::find_by_id(permit_id)
+        .filter(permit::Column::GuildId.eq(guild_id.to_string()))
+        .one(db)
+        .await
+}
+
+/// Bind a permit to a target, doing nothing when the binding already exists.
+pub async fn assign_permit(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    permit_id: i32,
+    target_type: PermitTargetType,
+    target_id: &str,
+) -> Result<()> {
+    let guild = guild_id.to_string();
+    let exists = permit_assignment::Entity::find()
+        .filter(permit_assignment::Column::GuildId.eq(guild.clone()))
+        .filter(permit_assignment::Column::PermitId.eq(permit_id))
+        .filter(permit_assignment::Column::TargetType.eq(target_type))
+        .filter(permit_assignment::Column::TargetId.eq(target_id))
+        .one(db)
+        .await?;
+    if exists.is_some() {
+        return Ok(());
+    }
+
+    let now = ChronoUtc::now().fixed_offset();
+    let active = permit_assignment::ActiveModel {
+        permit_id: Set(permit_id),
+        guild_id: Set(guild),
+        target_type: Set(target_type),
+        target_id: Set(target_id.to_string()),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    active.insert(db).await?;
+    Ok(())
+}
+
+/// Remove a permit binding if present.
+pub async fn unassign_permit(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    permit_id: i32,
+    target_type: PermitTargetType,
+    target_id: &str,
+) -> Result<()> {
+    permit_assignment::Entity::delete_many()
+        .filter(permit_assignment::Column::GuildId.eq(guild_id.to_string()))
+        .filter(permit_assignment::Column::PermitId.eq(permit_id))
+        .filter(permit_assignment::Column::TargetType.eq(target_type))
+        .filter(permit_assignment::Column::TargetId.eq(target_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+/// Permits of a single kind, in display order.
+pub async fn list_permits_for_kind(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    kind: PermitKind,
+) -> Result<Vec<permit::Model>> {
+    permit::Entity::find()
+        .filter(permit::Column::GuildId.eq(guild_id.to_string()))
+        .filter(permit::Column::Kind.eq(kind))
+        .order_by_asc(permit::Column::Position)
+        .all(db)
+        .await
 }
 
 /// Move a permit one step up/down within its guild by re-normalising `position`.
