@@ -3,9 +3,12 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set,
 };
+use serde_json::Value;
 
-use lumi_db::entities::{enums::CaseAction, mod_note, moderation_case};
+use lumi_db::entities::{enums::CaseAction, guild_config, mod_note, moderation_case};
 use lumi_kernel::Result;
+
+const CONFIG_MODULE: &str = "mod";
 
 #[derive(Clone, Debug)]
 pub struct CreateCaseParams<'a> {
@@ -132,4 +135,28 @@ pub async fn list_notes(
         .order_by_desc(mod_note::Column::CreatedAt)
         .all(db)
         .await?)
+}
+
+async fn get_config(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    key: &str,
+) -> Result<Option<Value>> {
+    Ok(guild_config::Entity::find()
+        .filter(guild_config::Column::GuildId.eq(guild_id as i64))
+        .filter(guild_config::Column::Module.eq(CONFIG_MODULE))
+        .filter(guild_config::Column::Key.eq(key))
+        .one(db)
+        .await?
+        .map(|model| model.value))
+}
+
+/// The configured quarantine role id, or `None` when quarantine is unconfigured.
+pub async fn quarantine_role(
+    db: &DatabaseConnection,
+    guild_id: u64,
+) -> Result<Option<u64>> {
+    Ok(get_config(db, guild_id, "quarantine_role_id")
+        .await?
+        .and_then(|v| v.as_u64()))
 }

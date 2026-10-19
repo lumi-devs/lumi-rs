@@ -15,7 +15,7 @@ Goal: A production-ready, highly-scalable Rust Discord bot built with Serenity N
 | :--- | :--- | :--- | :--- |
 | **afk** | `/afk`, `/afkstats`, `/afklist`, `/afkclean` | `/afk`, `/afklist`, `/afkstats` | Missing `/afkclean`, guild-owner permission gating on stats/list |
 | **logging** | None (Event-driven) | None (Event-driven) | Complete |
-| **moderation** | `/ban`, `/cases`, `/dm`, `/kick`, `/lock`, `/lockdown`, `/notes`, `/quarantine`, `/sanitize`, `/say`, `/softban`, `/timeout`, `/vcmute`, `/warn`, context menu | `/warn`, `/kick`, `/ban`, `/unban`, `/mute`, `/unmute`, `/case`, `/reason`, `/note` | Missing `/dm`, `/lock`, `/lockdown`, `/quarantine`, `/softban`, `/vcmute`, `/cases delete` |
+| **moderation** | `/ban`, `/cases`, `/dm`, `/kick`, `/lock`, `/lockdown`, `/notes`, `/quarantine`, `/sanitize`, `/say`, `/softban`, `/timeout`, `/vcmute`, `/warn`, context menu | `/warn`, `/kick`, `/ban`, `/unban`, `/mute`, `/unmute`, `/case`, `/reason`, `/note`, `/softban`, `/lock`, `/lockdown`, `/quarantine`, `/dm`, `/say`, `/sanitize` | Missing `/vcmute`, `/cases delete` |
 | **utility** | `/avatar`, `/banner`, `/nick`, `/purge` (subcommands: messages, user, bots, links, regex, duration), `/serverinfo`, `/whois` | `/avatar`, `/whois`, `/serverinfo`, `/purge` (flat amount) | Missing `/banner`, `/nick`, specialized `/purge` subcommands |
 | **tempvc** | `/tempvc panel`, `/tempvc admin` (interactive UI deck) | `/tempvc panel`, `/tempvc admin setup\|delete\|list` | Core features matched; admin uses typed subcommands |
 | **economy** | `/balance`, `/bank` (deposit, withdraw, set, add, remove), `/leaderboard`, `/pay`, `/payday`, `/slots` | `/balance`, `/daily`, `/pay`, `/bank deposit\|withdraw` | Missing `/slots`, admin `/bank` adjustments (`set`/`add`/`remove`) |
@@ -59,8 +59,9 @@ Goal: A production-ready, highly-scalable Rust Discord bot built with Serenity N
 1. **Permissions Precondition Hook**:
    - Add a `pre_command` hook in `poise::FrameworkOptions` that evaluates `ctx.data().permits.resolve(...)` against required permit nodes before command execution.
 2. **Missing Moderation Commands**:
-   - Implement `/softban` (ban + unban with message purge).
-   - Implement `/quarantine add|remove` with role persistence.
+   - [x] Implement `/softban` (ban + unban with message purge).
+   - [x] Implement `/quarantine add|remove` with role persistence.
+   - [x] Implement `/lock`, `/lockdown`, `/dm`, `/say`, `/sanitize`.
 3. **Missing Leveling & Economy Staff Commands**:
    - Implement `/level add|remove|set` in `crates/modules/src/leveling/commands.rs`.
    - Implement `/bank set|add|remove` in `crates/modules/src/economy/commands.rs`.

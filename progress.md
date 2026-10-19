@@ -22,7 +22,7 @@
   - Command directory autocomplete (`help [command]`).
 
 ### Core Feature Ports
-- **Moderation**: `/warn`, `/kick`, `/ban`, `/unban`, `/mute` (with duration parsing and Discord timeout), `/unmute`, `/case`, `/reason`, `/note`.
+- **Moderation**: `/warn`, `/kick`, `/ban`, `/unban`, `/mute` (with duration parsing and Discord timeout), `/unmute`, `/case`, `/reason`, `/note`, `/softban`, `/lock`, `/lockdown`, `/quarantine`, `/dm`, `/say`, `/sanitize`.
 - **TempVC**: Automatic channel creation upon joining a generator, automatic moving, and automatic channel deletion when empty via `VoiceStateUpdate`. Interactive channel control deck (`/tempvc panel`) and generator configuration (`/tempvc admin`).
 - **Leveling**: Message XP calculation and persistence via `leveling::events::on_message`, `/rank`, and `/leaderboard`.
 - **Economy**: `/balance`, `/daily`, `/pay`, `/bank deposit`, `/bank withdraw`.
@@ -37,8 +37,7 @@
 
 1. **Permissions & Preconditions**:
    - Enforce hierarchical `PermitResolver` in Poise pre-command hooks.
-2. **Missing Moderation Flows**:
-   - `/softban`, `/quarantine`, `/lock`, `/lockdown`.
+2. **Missing Moderation Flows**: None — `/softban`, `/quarantine`, `/lock`, `/lockdown`, `/dm`, `/say`, `/sanitize` implemented (still pending: `/vcmute`, `/cases delete`).
 3. **Staff Management Commands**:
    - `/level add|remove|set` (admin XP adjustments).
    - `/bank set|add|remove` (admin currency adjustments).
