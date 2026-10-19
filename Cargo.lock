@@ -2406,7 +2406,6 @@ version = "0.1.0"
 dependencies = [
  "sea-orm",
  "sea-orm-migration",
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5805,6 +5804,10 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "lumi-db",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -1,4 +1,5 @@
 use sea_orm::entity::prelude::*;
+use crate::ids::{GuildId, UserId};
 use super::enums;
 
 #[sea_orm::model]
@@ -7,8 +8,8 @@ use super::enums;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    pub guild_id: String,
-    pub user_id: String,
+    pub guild_id: GuildId,
+    pub user_id: UserId,
     pub kind: enums::EconomyTxnKind,
     pub amount: i64,
     pub balance_after: i64,

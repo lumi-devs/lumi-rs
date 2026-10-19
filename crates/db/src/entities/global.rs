@@ -1,4 +1,5 @@
 use sea_orm::entity::prelude::*;
+use crate::ids::GuildId;
 
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -11,9 +12,9 @@ pub struct Model {
     pub maintenance_mode: bool,
     pub maintenance_message: Option<String>,
     pub invite_url: Option<String>,
-    pub support_guild_id: Option<String>,
+    pub support_guild_id: Option<GuildId>,
     pub server_lock_enabled: bool,
-    pub server_lock_guild_ids: Vec<String>,
+    pub server_lock_guild_ids: Vec<i64>,
     pub auto_update_enabled: bool,
     pub auto_update_interval_minutes: i32,
     pub auto_update_last_checked_at: Option<DateTimeWithTimeZone>,

@@ -1,4 +1,5 @@
 use sea_orm::entity::prelude::*;
+use crate::ids::GuildId;
 use super::enums;
 
 #[sea_orm::model]
@@ -6,7 +7,7 @@ use super::enums;
 #[sea_orm(table_name = "warn_thresholds")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub guild_id: String,
+    pub guild_id: GuildId,
     #[sea_orm(primary_key, auto_increment = false)]
     pub warn_count: i32,
     pub action: enums::CaseAction,
