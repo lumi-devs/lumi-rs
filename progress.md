@@ -45,6 +45,15 @@
   amounts across every economy reply.
 - **Addons dashboard**: lists the names of repos with pending updates and shows the
   Bot-Owner access hint for non-owners.
+- **Economy config**: full numeric config (`starting_wallet`/`starting_bank`/`max_balance`/
+  `payday_amount`/`payday_cooldown_seconds`/`transfer_tax_percent`/`slot_min_bid`/
+  `slot_max_bid`/`slot_cooldown_seconds`/`slot_payout_triple`/`slot_payout_pair`) wired
+  through the store; cooldowns centralized on `Cache::claim_cooldown`.
+- **Leaderboard**: economy `/leaderboard` paginates 10/page with prev/next buttons
+  (`econ:lb` component handler). The leveling XP board is renamed `/levelboard`
+  (`xplb`/`xpboard`) because two `/leaderboard` names broke global command sync.
+- **Panels**: pagination indicator `N / M`, ⬅️/➡️ emoji, `← Back` label, and the
+  permissions footer now reads "N assignment(s)".
 - **Moderation/Hub**: multi-target kick/ban with confirm prompts, `/cases` manager, warn
   escalation, and sectioned module-config card (merged from earlier round).
 
