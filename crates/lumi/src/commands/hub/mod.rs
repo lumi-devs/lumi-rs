@@ -378,11 +378,12 @@ async fn respond_outcome(
         }
         HubOutcome::Ephemeral(card) => {
             component
-                .create_response(
+                .create_followup(
                     &ctx.http,
-                    CreateInteractionResponse::Message(
-                        v2_message(card.components).flags(MessageFlags::EPHEMERAL),
-                    ),
+                    serenity::CreateInteractionResponseFollowup::new()
+                        .components(card.components)
+                        .flags(MessageFlags::IS_COMPONENTS_V2)
+                        .ephemeral(true),
                 )
                 .await?;
         }
