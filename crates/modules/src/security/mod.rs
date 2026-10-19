@@ -6,39 +6,26 @@
 pub mod events;
 pub mod store;
 
-use serde_json::json;
+use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
-use lumi_kernel::module::{ConfigField, ConfigFieldKind, Module, ModuleMeta};
+use crate::config;
 
 #[derive(Debug)]
 pub struct SecurityModule;
 
 fn number(key: &str, label: &str, description: &str, default: i64, group: &str) -> ConfigField {
-    ConfigField {
-        key: key.to_string(),
-        label: label.to_string(),
-        description: description.to_string(),
-        kind: ConfigFieldKind::Integer,
-        default: json!(default),
-        subfields: Vec::new(),
-        group: Some(group.to_string()),
-    }
+    config::int_field(key, label, description, default, group)
 }
 
 fn response(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
-    ConfigField {
-        key: key.to_string(),
-        label: label.to_string(),
-        description: description.to_string(),
-        kind: ConfigFieldKind::Enum(vec![
-            "log".to_string(),
-            "quarantine".to_string(),
-            "ban".to_string(),
-        ]),
-        default: json!("quarantine"),
-        subfields: Vec::new(),
-        group: Some(group.to_string()),
-    }
+    config::enum_field(
+        key,
+        label,
+        description,
+        &["log", "quarantine", "ban"],
+        "quarantine",
+        group,
+    )
 }
 
 impl Module for SecurityModule {
@@ -61,15 +48,13 @@ impl Module for SecurityModule {
         let limits = "Nuke Limits";
         let panic = "Panic Mode";
         vec![
-            ConfigField {
-                key: "antinuke_enabled".to_string(),
-                label: "Anti-Nuke".to_string(),
-                description: "Watch the audit log for mass destructive actions.".to_string(),
-                kind: ConfigFieldKind::Boolean,
-                default: json!(false),
-                subfields: Vec::new(),
-                group: Some(anti.to_string()),
-            },
+            config::bool_field(
+                "antinuke_enabled",
+                "Anti-Nuke",
+                "Watch the audit log for mass destructive actions.",
+                false,
+                anti,
+            ),
             number(
                 "window_seconds",
                 "Detection Window",
@@ -77,24 +62,18 @@ impl Module for SecurityModule {
                 60,
                 anti,
             ),
-            ConfigField {
-                key: "trusted_role_ids".to_string(),
-                label: "Trusted Roles".to_string(),
-                description: "Role IDs exempt from anti-nuke.".to_string(),
-                kind: ConfigFieldKind::StringArray,
-                default: json!([]),
-                subfields: Vec::new(),
-                group: Some(anti.to_string()),
-            },
-            ConfigField {
-                key: "log_channel_id".to_string(),
-                label: "Security Log Channel".to_string(),
-                description: "Channel for anti-nuke alerts.".to_string(),
-                kind: ConfigFieldKind::Channel,
-                default: json!(null),
-                subfields: Vec::new(),
-                group: Some(anti.to_string()),
-            },
+            config::string_array_field(
+                "trusted_role_ids",
+                "Trusted Roles",
+                "Role IDs exempt from anti-nuke.",
+                anti,
+            ),
+            config::channel_field(
+                "log_channel_id",
+                "Security Log Channel",
+                "Channel for anti-nuke alerts.",
+                anti,
+            ),
             number("max_bans", "Max Bans", "Bans allowed per executor within the window.", 5, limits),
             response("response_bans", "Response - Bans", "Action taken when the ban threshold trips.", limits),
             number("max_kicks", "Max Kicks", "Kicks allowed per executor within the window.", 5, limits),
@@ -159,15 +138,13 @@ impl Module for SecurityModule {
                 1,
                 limits,
             ),
-            ConfigField {
-                key: "panic_lock_mod_commands".to_string(),
-                label: "Lock Mod Commands During Panic".to_string(),
-                description: "While panic mode is active, only managers may run permission-gated commands.".to_string(),
-                kind: ConfigFieldKind::Boolean,
-                default: json!(true),
-                subfields: Vec::new(),
-                group: Some(panic.to_string()),
-            },
+            config::bool_field(
+                "panic_lock_mod_commands",
+                "Lock Mod Commands During Panic",
+                "While panic mode is active, only managers may run permission-gated commands.",
+                true,
+                panic,
+            ),
         ]
     }
 }

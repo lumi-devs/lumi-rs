@@ -1,17 +1,16 @@
 use std::collections::HashMap;
 
+use sea_orm::DatabaseConnection;
 use serde_json::{Map, Value};
 
-use chrono::Utc;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
-
-use lumi_db::entities::enums::CaseAction;
-use lumi_db::entities::moderation_case;
+use lumi_db::entities::{enums::CaseAction, moderation_case};
 use lumi_kernel::module_state;
 use lumi_kernel::security::{
     AntiNukeConfig, AntiNukeResponse, DestructiveActionKind, DEFAULT_WINDOW_SECS,
 };
 use lumi_kernel::{Result, Services};
+
+use crate::config;
 
 const MODULE: &str = "security";
 
@@ -24,23 +23,8 @@ pub struct AntiNukeSettings {
     pub log_channel: Option<u64>,
 }
 
-fn number(map: &Map<String, Value>, key: &str, fallback: u64) -> u64 {
-    map.get(key).and_then(module_state::parse_id).unwrap_or(fallback)
-}
-
-fn boolean(map: &Map<String, Value>, key: &str, fallback: bool) -> bool {
-    map.get(key).and_then(Value::as_bool).unwrap_or(fallback)
-}
-
-fn id_list(map: &Map<String, Value>, key: &str) -> Vec<u64> {
-    map.get(key)
-        .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(module_state::parse_id).collect())
-        .unwrap_or_default()
-}
-
 fn response(map: &Map<String, Value>, key: &str) -> AntiNukeResponse {
-    match map.get(key).and_then(Value::as_str) {
+    match config::value(map, key).and_then(Value::as_str) {
         Some("log") => AntiNukeResponse::Log,
         Some("ban") => AntiNukeResponse::Ban,
         _ => AntiNukeResponse::Quarantine,
@@ -87,7 +71,8 @@ pub async fn anti_nuke_settings(
             None,
         ),
     ] {
-        limits.insert(kind, number(&map, limit_key, u64::from(kind.default_limit())) as u32);
+        let limit = config::unsigned(&map, limit_key, u64::from(kind.default_limit())).max(1);
+        limits.insert(kind, u32::try_from(limit).unwrap_or(u32::MAX));
         responses.insert(
             kind,
             response_key.map_or(AntiNukeResponse::Quarantine, |key| response(&map, key)),
@@ -96,13 +81,13 @@ pub async fn anti_nuke_settings(
 
     Ok(AntiNukeSettings {
         config: AntiNukeConfig {
-            enabled: boolean(&map, "antinuke_enabled", false),
-            window_secs: number(&map, "window_seconds", DEFAULT_WINDOW_SECS),
+            enabled: config::boolean(&map, "antinuke_enabled", false),
+            window_secs: config::unsigned(&map, "window_seconds", DEFAULT_WINDOW_SECS).max(1),
             limits,
             responses,
         },
-        trusted_roles: id_list(&map, "trusted_role_ids"),
-        log_channel: map.get("log_channel_id").and_then(module_state::parse_id),
+        trusted_roles: config::id_list(&map, "trusted_role_ids"),
+        log_channel: config::id(&map, "log_channel_id"),
     })
 }
 
@@ -120,10 +105,13 @@ pub async fn panic_locks_commands(services: &Services, guild_id: u64) -> bool {
         return false;
     }
     let map = module_state::get_config(&services.db, guild_id, MODULE).await;
-    boolean(&map, "panic_lock_mod_commands", true)
+    config::boolean(&map, "panic_lock_mod_commands", true)
 }
 
 /// Record an anti-nuke alert as a moderation case.
+///
+/// Case rows are written through the moderation store so numbering, expiry and
+/// column defaults stay in one place.
 pub async fn create_alert_case(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -131,20 +119,16 @@ pub async fn create_alert_case(
     moderator_id: u64,
     reason: &str,
 ) -> Result<moderation_case::Model> {
-    let case_num = lumi_db::next_counter(db, guild_id as i64, "cases").await?;
-    let row = moderation_case::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        case_number: Set(case_num as i32),
-        user_id: Set(user_id.to_string()),
-        moderator_id: Set(moderator_id.to_string()),
-        action: Set(CaseAction::AntinukeAlert),
-        custom_action: Set(None),
-        reason: Set(Some(reason.to_string())),
-        duration: Set(None),
-        expires_at: Set(None),
-        active: Set(true),
-        created_at: Set(Utc::now().fixed_offset()),
-        ..Default::default()
-    };
-    Ok(row.insert(db).await?)
+    crate::moderation::store::create_case(
+        db,
+        crate::moderation::store::CreateCaseParams {
+            guild_id,
+            user_id,
+            moderator_id,
+            action: CaseAction::AntinukeAlert,
+            reason: Some(reason),
+            duration_seconds: None,
+        },
+    )
+    .await
 }

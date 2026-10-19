@@ -3,11 +3,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use super::store::FilterRules;
-
-/// Constant invite-link pattern (mirrors lumi's `InviteRe`).
-const INVITE_PATTERN: &str = r"(?i)(?:discord\.(?:gg|com/invite)|discordapp\.com/invite)/([\w-]+)";
-/// Constant URL pattern (mirrors lumi's `UrlRe`).
-const URL_PATTERN: &str = r#"(?i)https?://([^\s/<>"']+)"#;
+use crate::patterns::{INVITE_PATTERN, URL_PATTERN};
 
 /// Which rule a message tripped, with the matched detail.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,12 +194,12 @@ fn caps_percent(content: &str) -> f64 {
 
 fn invite_regex() -> Option<&'static Regex> {
     static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(INVITE_PATTERN).ok()).as_ref()
+    crate::regex::cached(&RE, INVITE_PATTERN)
 }
 
 fn url_regex() -> Option<&'static Regex> {
     static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(URL_PATTERN).ok()).as_ref()
+    crate::regex::cached(&RE, URL_PATTERN)
 }
 
 #[cfg(test)]
