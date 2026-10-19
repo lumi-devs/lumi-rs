@@ -267,6 +267,23 @@ pub fn format_field_value(field: &ConfigField, value: Option<&Value>) -> String 
         },
         ConfigFieldKind::Channel => id_value(value, |id| format!("<#{id}>")),
         ConfigFieldKind::Role => id_value(value, |id| format!("<@&{id}>")),
+        ConfigFieldKind::RoleArray => {
+            let ids: Vec<String> = value
+                .as_array()
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(parse_id)
+                        .map(|id| format!("<@&{id}>"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if ids.is_empty() {
+                "-# *(not set)*".to_string()
+            } else {
+                cut(&ids.join(" "), 120)
+            }
+        }
         ConfigFieldKind::User => id_value(value, |id| format!("<@{id}>")),
         ConfigFieldKind::StringArray => {
             let items: Vec<String> = value

@@ -37,6 +37,7 @@ pub enum ConfigFieldKind {
     Boolean,
     Channel,
     Role,
+    RoleArray,
     User,
     Duration,
     ObjectArray,

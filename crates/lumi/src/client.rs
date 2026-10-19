@@ -77,6 +77,7 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
     let mut registry = lumi_kernel::ModuleRegistry::new();
     registry.register(Box::new(lumi_modules::afk::AfkModule));
     registry.register(Box::new(lumi_modules::logging::LoggingModule));
+    registry.register(Box::new(lumi_modules::filter::FilterModule));
     registry.register(Box::new(lumi_modules::moderation::ModerationModule));
     registry.register(Box::new(lumi_modules::security::SecurityModule));
     registry.register(Box::new(lumi_modules::tempvc::TempVcModule));
@@ -85,7 +86,6 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
     registry.register(Box::new(lumi_modules::leveling::LevelingModule));
 
     let security = Arc::new(lumi_kernel::SecurityManager::new(db.clone()));
-    let filter = Arc::new(lumi_kernel::ContentFilter::default());
     let downloader = Arc::new(lumi_kernel::Downloader::new(
         db.clone(),
         std::path::PathBuf::from(&cfg.custom_dir),
@@ -100,7 +100,6 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
         permits,
         registry,
         security,
-        filter,
         downloader,
     });
 
