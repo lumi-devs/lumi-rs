@@ -6,7 +6,7 @@ pub mod store;
 pub mod views;
 
 pub use commands::commands;
-pub use events::on_message;
+pub use events::{on_message, on_voice_state_update};
 
 #[derive(Debug)]
 pub struct LevelingModule;

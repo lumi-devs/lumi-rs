@@ -11,6 +11,7 @@ pub mod scheduler;
 pub mod security;
 pub mod services;
 pub use services::Services;
+pub use dashmap;
 
 pub use bot::{Command, Context, Data, Error as BotError};
 pub use cache::Cache;
