@@ -7,6 +7,7 @@ use lumi_kernel::Services;
 use lumi_ui::{Card, CardKind};
 
 use super::enforce;
+use super::heat;
 use super::store::{self, FilterRules};
 
 /// Screen a created message. Returns `true` when it was enforced (deleted), so
@@ -40,12 +41,28 @@ async fn screen(ctx: &serenity::Context, services: &Services, message: &Message)
     }
 
     let mention_count = (message.mentions.len() + message.mention_roles.len()) as u64;
+    heat::check_mention_flood(ctx, services, message, mention_count, &rules).await;
+
     let verdict = enforce::evaluate(&rules, message.content.as_str(), mention_count);
-    if !verdict.delete {
-        return false;
+    let hit = verdict.delete;
+    if hit {
+        apply(ctx, message, &rules, &verdict).await;
     }
-    apply(ctx, message, &rules, &verdict).await;
-    true
+
+    if rules.heat_enabled {
+        heat::check_heat(
+            ctx,
+            services,
+            message,
+            message.author.id,
+            mention_count,
+            hit,
+            &rules,
+        )
+        .await;
+    }
+
+    hit
 }
 
 /// Manage Messages holders and configured exempt roles bypass all rules.

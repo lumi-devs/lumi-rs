@@ -17,6 +17,7 @@ regex       = { workspace = true }
 aho-corasick = { workspace = true }
 unicode-normalization = { workspace = true }
 moka        = { workspace = true }
+redis       = { workspace = true }
 sea-orm     = { workspace = true }
 chrono      = { workspace = true }
 tokio       = { workspace = true }

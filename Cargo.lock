@@ -2327,6 +2327,7 @@ dependencies = [
  "lumi-ui",
  "moka",
  "poise",
+ "redis 0.28.2",
  "regex",
  "sea-orm",
  "serde",

@@ -154,7 +154,9 @@ mod tests {
             return;
         }
 
-        let host = AddonHost::load(addon_dir).expect("failed to load addons");
+        let Ok(host) = AddonHost::load(addon_dir) else {
+            panic!("failed to load addons");
+        };
         assert!(host.count() > 0, "should have loaded at least one addon");
 
         let responses: Vec<String> = host.call_function("handle_hello", "Alice".to_string());

@@ -3,6 +3,7 @@
 
 pub mod enforce;
 pub mod events;
+pub mod heat;
 pub mod store;
 
 use serde_json::json;
@@ -67,6 +68,8 @@ impl Module for FilterModule {
         let links = "Invites & Links";
         let spam = "Spam Limits";
         let punish = "Punishment";
+        let heat = "Heat Engine";
+        let lockdown = "Auto-Lockdown";
         vec![
             string_array(
                 "terms",
@@ -180,6 +183,117 @@ impl Module for FilterModule {
                 subfields: Vec::new(),
                 group: Some(punish.to_string()),
             },
+            boolean(
+                "heat_enabled",
+                "Enable Heat Engine",
+                "Track member activity heat to detect rapid-fire spam and raids.",
+                heat,
+            ),
+            number(
+                "heat_per_message",
+                "Heat Per Message",
+                "Points added per message sent.",
+                1,
+                heat,
+            ),
+            number(
+                "heat_per_mention",
+                "Heat Per Mention",
+                "Points added per user/role mention.",
+                2,
+                heat,
+            ),
+            number(
+                "heat_per_filter_hit",
+                "Heat Per Filter Hit",
+                "Points added when a message trips any filter rule.",
+                5,
+                heat,
+            ),
+            number(
+                "heat_per_attachment",
+                "Heat Per Attachment",
+                "Points added per file attachment.",
+                2,
+                heat,
+            ),
+            number(
+                "heat_per_emoji",
+                "Heat Per Emoji",
+                "Points added per emoji in the message.",
+                1,
+                heat,
+            ),
+            number(
+                "heat_per_link",
+                "Heat Per Link",
+                "Points added if message contains any link.",
+                2,
+                heat,
+            ),
+            number(
+                "heat_per_zalgo",
+                "Heat Per Zalgo",
+                "Points added if message is heavily composed of zalgo/combining characters.",
+                3,
+                heat,
+            ),
+            number(
+                "heat_decay_per_minute",
+                "Heat Decay / Min",
+                "Points subtracted per minute of inactivity.",
+                5,
+                heat,
+            ),
+            number(
+                "heat_warn",
+                "Warn Threshold",
+                "Heat level that triggers an automated warning. 0 disables.",
+                15,
+                heat,
+            ),
+            number(
+                "heat_timeout",
+                "Timeout Threshold",
+                "Heat level that triggers a timeout. 0 disables.",
+                30,
+                heat,
+            ),
+            number(
+                "heat_timeout_minutes",
+                "Heat Timeout Duration (m)",
+                "Duration in minutes for heat-triggered timeouts.",
+                10,
+                heat,
+            ),
+            number(
+                "heat_quarantine",
+                "Quarantine Threshold",
+                "Heat level that triggers quarantine. 0 disables.",
+                50,
+                heat,
+            ),
+            number(
+                "lockdown_mention_threshold",
+                "Mention Flood Threshold",
+                "Mentions within the window that trigger a server-wide channel lockdown. 0 disables.",
+                0,
+                lockdown,
+            ),
+            number(
+                "lockdown_window_seconds",
+                "Mention Window (s)",
+                "Window in seconds to aggregate mentions.",
+                10,
+                lockdown,
+            ),
+            number(
+                "lockdown_duration_minutes",
+                "Lockdown Duration (m)",
+                "How long text channels stay locked before auto-unlocking.",
+                10,
+                lockdown,
+            ),
         ]
     }
 }

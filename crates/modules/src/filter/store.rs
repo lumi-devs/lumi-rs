@@ -48,13 +48,31 @@ pub struct FilterRules {
     pub link_timeout_minutes: i64,
     pub warn_message: String,
     pub log_channel: Option<u64>,
+    pub heat_enabled: bool,
+    pub heat_per_message: i64,
+    pub heat_per_mention: i64,
+    pub heat_per_filter_hit: i64,
+    pub heat_per_attachment: i64,
+    pub heat_per_emoji: i64,
+    pub heat_per_link: i64,
+    pub heat_per_zalgo: i64,
+    pub heat_decay_per_minute: i64,
+    pub heat_warn: i64,
+    pub heat_timeout: i64,
+    pub heat_timeout_minutes: i64,
+    pub heat_quarantine: i64,
+    pub lockdown_mention_threshold: i64,
+    pub lockdown_window_seconds: i64,
+    pub lockdown_duration_minutes: i64,
 }
 
 impl FilterRules {
     /// Whether any rule could possibly fire; an unconfigured guild is skipped.
     #[must_use]
     pub fn active(&self) -> bool {
-        self.term_matcher.is_some()
+        self.heat_enabled
+            || self.lockdown_mention_threshold > 0
+            || self.term_matcher.is_some()
             || !self.regexes.is_empty()
             || self.block_invites
             || self.block_links
@@ -121,6 +139,22 @@ impl FilterRules {
             link_timeout_minutes: number(map, "link_timeout_minutes", 0),
             warn_message,
             log_channel: map.get("log_channel_id").and_then(module_state::parse_id),
+            heat_enabled: boolean(map, "heat_enabled", false),
+            heat_per_message: number(map, "heat_per_message", 1),
+            heat_per_mention: number(map, "heat_per_mention", 2),
+            heat_per_filter_hit: number(map, "heat_per_filter_hit", 5),
+            heat_per_attachment: number(map, "heat_per_attachment", 2),
+            heat_per_emoji: number(map, "heat_per_emoji", 1),
+            heat_per_link: number(map, "heat_per_link", 2),
+            heat_per_zalgo: number(map, "heat_per_zalgo", 3),
+            heat_decay_per_minute: number(map, "heat_decay_per_minute", 5),
+            heat_warn: number(map, "heat_warn", 15),
+            heat_timeout: number(map, "heat_timeout", 30),
+            heat_timeout_minutes: number(map, "heat_timeout_minutes", 10),
+            heat_quarantine: number(map, "heat_quarantine", 50),
+            lockdown_mention_threshold: number(map, "lockdown_mention_threshold", 0),
+            lockdown_window_seconds: number(map, "lockdown_window_seconds", 10),
+            lockdown_duration_minutes: number(map, "lockdown_duration_minutes", 10),
         }
     }
 }

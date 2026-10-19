@@ -52,6 +52,10 @@ impl Cache {
         })
     }
 
+    pub fn redis(&self) -> ConnectionManager {
+        self.redis.clone()
+    }
+
     pub async fn get_json(&self, key: &str) -> Result<Option<Value>> {
         if let Some(value) = self.local.get(key).await {
             return Ok(Some(value));

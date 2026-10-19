@@ -15,9 +15,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("failed to install rustls crypto provider");
+    let _ = rustls::crypto::ring::default_provider().install_default();
     init_tracing();
 
     let cli = Cli::parse();

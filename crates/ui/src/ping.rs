@@ -246,14 +246,14 @@ fn detail_card(subtitle: &str, data: &PingData) -> Container {
 /// Pagination row: ◀️ (disabled) · Close · ▶️ (disabled when single page).
 fn overview_nav_row(user_id: u64, page: usize, total: usize) -> CreateActionRow<'static> {
     let prev = CreateButton::new(ping_custom_id("p_-1", user_id))
-        .emoji(component_emoji("◀️").unwrap())
+        .emoji('◀')
         .style(ButtonStyle::Secondary)
         .disabled(page == 0);
     let close = CreateButton::new(ping_custom_id("close", user_id))
         .label("Close")
         .style(ButtonStyle::Danger);
     let next = CreateButton::new(ping_custom_id("p_1", user_id))
-        .emoji(component_emoji("▶️").unwrap())
+        .emoji('▶')
         .style(ButtonStyle::Secondary)
         .disabled(page + 1 >= total);
     action_row_of(vec![prev, close, next])
