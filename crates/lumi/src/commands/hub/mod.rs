@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default, clippy::assigning_clones)]
+
 use poise::serenity_prelude as serenity;
 use serenity::all::{
     ComponentInteraction, CreateAllowedMentions,
@@ -67,38 +69,13 @@ pub struct GuildCtx {
     pub icon: Option<String>,
 }
 
-/// A parsed `lumi:` custom id.
-#[derive(Debug)]
-pub struct HubId {
-    pub action: String,
-    pub tail: Vec<String>,
-}
-
-impl HubId {
-    pub fn parse(custom_id: &str) -> Option<Self> {
-        let mut parts = custom_id.split(':');
-        if parts.next()? != PREFIX {
-            return None;
-        }
-        let action = parts.next()?.to_string();
-        Some(Self {
-            action,
-            tail: parts.map(str::to_string).collect(),
-        })
-    }
-
-    pub fn sub(&self) -> Option<&str> {
-        self.tail.first().map(String::as_str)
-    }
-
-    pub fn rest(&self, from: usize) -> String {
-        self.tail[from.min(self.tail.len())..].join(":")
-    }
-}
+/// A parsed `lumi:` custom id (shared scheme from `lumi_ui::ids`).
+pub use lumi_ui::ids::CustomId as HubId;
 
 /// Build a `lumi:` custom id from segments.
+#[must_use]
 pub fn cid(parts: &[&str]) -> String {
-    format!("{PREFIX}:{}", parts.join(":"))
+    lumi_ui::ids::build(PREFIX, parts)
 }
 
 /// What a dispatched action produced.
@@ -179,23 +156,24 @@ pub async fn handle_component(
     services: &Services,
     component: &ComponentInteraction,
 ) -> Result<(), Error> {
-    let Some(parsed) = HubId::parse(&component.data.custom_id) else {
+    let Some(parsed) = HubId::parse(&component.data.custom_id, PREFIX) else {
         return Ok(());
     };
     let Some(raw_guild_id) = component.guild_id else {
         return Ok(());
     };
-    if parsed.action == "indicator" {
+    if parsed.last() == Some("indicator") {
         return Ok(());
     }
     let guild = guild_ctx(ctx, raw_guild_id);
 
-    // Prefix and addon modals open without a permission round-trip; the modal
+    // Prefix, config field and addon modals open without a permission round-trip; the modal
     // submission re-checks. Everything else requires `admin.*`.
     let opens_modal =
-        (parsed.action == "prefix" && parsed.sub() == Some("set"))
-            || (parsed.action == "addon"
-                && matches!(parsed.sub(), Some("add_repo" | "rm_repo" | "install" | "uninstall")));
+        (parsed.head() == Some("prefix") && parsed.get(1) == Some("set"))
+            || (parsed.head() == Some("cfg") && parsed.get(1) == Some("modal"))
+            || (parsed.head() == Some("addon")
+                && matches!(parsed.get(1), Some("add_repo" | "rm_repo" | "install" | "uninstall")));
 
     if opens_modal {
         if !caller_may_manage(ctx, services, component).await {
@@ -227,24 +205,28 @@ pub async fn handle_modal(
         if !caller_may_manage_modal(ctx, services, modal).await {
             return deny_modal(ctx, modal).await;
         }
-        let guild = modal.guild_id.map_or(
-            GuildCtx { id: 0, name: "this server".to_string(), icon: None },
+        let guild = modal.guild_id.map_or_else(
+            || GuildCtx { id: 0, name: "this server".to_string(), icon: None },
             |id| guild_ctx(ctx, id),
         );
         let outcome = settings::handle_prefix_modal(services, &guild, modal).await?;
         return respond_modal(ctx, modal, outcome).await;
     }
-    if let Some(parsed) = HubId::parse(&modal.data.custom_id) {
-        if parsed.action == "addonmodal" {
+    if let Some(parsed) = HubId::parse(&modal.data.custom_id, PREFIX) {
+        if parsed.head() == Some("cfgmodal") {
+            let outcome = modules::handle_modal(services, &guild_ctx_from_modal(ctx, modal), modal).await?;
+            return respond_modal(ctx, modal, outcome).await;
+        }
+        if parsed.head() == Some("addonmodal") {
             if !services.cfg.is_owner(modal.user.id.get()) {
                 return deny_modal(ctx, modal).await;
             }
-            let guild = modal.guild_id.map_or(
-                GuildCtx { id: 0, name: "this server".to_string(), icon: None },
+            let guild = modal.guild_id.map_or_else(
+                || GuildCtx { id: 0, name: "this server".to_string(), icon: None },
                 |id| guild_ctx(ctx, id),
             );
             let outcome =
-                addons::handle_modal(services, &guild, modal, parsed.sub().unwrap_or_default()).await?;
+                addons::handle_modal(services, &guild, modal, parsed.get(1).unwrap_or_default()).await?;
             return respond_modal(ctx, modal, outcome).await;
         }
     }
@@ -258,7 +240,7 @@ async fn dispatch(
     data: &serenity::ComponentInteractionData,
     user_id: u64,
 ) -> Result<HubOutcome, Error> {
-    match (id.action.as_str(), id.sub()) {
+    match (id.head().unwrap_or_default(), id.get(1)) {
         ("home", _) | ("tab", Some("home")) => Ok(HubOutcome::Update(home::card(services, guild).await?)),
         ("tab", Some("modules")) => Ok(HubOutcome::Update(modules::list_card(services, guild, 0, user_id).await?)),
         ("tab", Some("permissions")) => Ok(HubOutcome::Update(permissions::list_card(services, guild, 0, user_id).await?)),
@@ -275,8 +257,8 @@ async fn dispatch_ext(
     data: &serenity::ComponentInteractionData,
     user_id: u64,
 ) -> Result<HubOutcome, Error> {
-    match id.action.as_str() {
-        "prefix" => match id.sub() {
+    match id.head().unwrap_or_default() {
+        "prefix" => match id.get(1) {
             Some("set") => Ok(HubOutcome::Modal(settings::prefix_modal())),
             Some("reset") => {
                 lumi_db::reset_prefix(&services.db, guild.id).await?;
@@ -284,10 +266,10 @@ async fn dispatch_ext(
             }
             _ => Ok(HubOutcome::Done),
         },
-        _ if id.action.starts_with("perm") || id.action == "permit" => {
+        _ if id.head().is_some_and(|a| a.starts_with("perm")) || id.head() == Some("permit") => {
             permissions::dispatch(services, guild, id, data, user_id).await
         }
-        _ if id.action == "addon" || id.action == "update_all" => {
+        _ if id.head() == Some("addon") || id.head() == Some("update_all") => {
             addons::dispatch(services, guild, id, data, user_id).await
         }
         "cfg" | "cfgmodal" => modules::dispatch(services, guild, id, data, user_id).await,
@@ -485,12 +467,11 @@ async fn deny_modal(ctx: &serenity::Context, modal: &ModalInteraction) -> Result
 /// Read a labeled input value out of a modal submission.
 pub fn read_input(components: &[serenity::ModalComponent], custom_id: &str) -> Option<String> {
     for component in components {
-        if let serenity::ModalComponent::Label(label) = component {
-            if let serenity::LabelComponent::InputText(input) = &label.component {
-                if input.custom_id == custom_id {
-                    return Some(input.value.to_string());
-                }
-            }
+        if let serenity::ModalComponent::Label(label) = component
+            && let serenity::LabelComponent::InputText(input) = &label.component
+            && input.custom_id == custom_id
+        {
+            return Some(input.value.to_string());
         }
     }
     None
@@ -506,10 +487,22 @@ pub fn v2_message(
         .allowed_mentions(CreateAllowedMentions::new())
 }
 
+/// Guild context for a modal submission, falling back to a placeholder.
+fn guild_ctx_from_modal(ctx: &serenity::Context, modal: &ModalInteraction) -> GuildCtx {
+    modal.guild_id.map_or_else(
+        || GuildCtx {
+            id: 0,
+            name: "this server".to_string(),
+            icon: None,
+        },
+        |id| guild_ctx(ctx, id),
+    )
+}
+
 /// Guild display context from the cache, falling back to a placeholder.
 pub fn guild_ctx(ctx: &serenity::Context, guild_id: GuildId) -> GuildCtx {
-    ctx.cache.guild(guild_id).map_or(
-        GuildCtx {
+    ctx.cache.guild(guild_id).map_or_else(
+        || GuildCtx {
             id: guild_id.get(),
             name: "this server".to_string(),
             icon: None,

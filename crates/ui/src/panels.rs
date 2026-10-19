@@ -1,8 +1,16 @@
+//! Action rows, selects, pagination and the central row clamp.
+//! Ported from lumi's `src/lib/ui/Panels.ts`.
+
 use serenity::all::{
     ButtonStyle, CreateActionRow, CreateButton, CreateSelectMenu, CreateSelectMenuKind,
     CreateSelectMenuOption, CreateSection, CreateSectionAccessory, CreateSectionComponent,
     CreateTextDisplay, ReactionType,
 };
+
+/// Discord's maximum action rows per message.
+pub const MAX_ACTION_ROWS: usize = 5;
+/// Discord's maximum components per action row.
+pub const MAX_ROW_COMPONENTS: usize = 5;
 
 /// Parse an emoji string into a component emoji.
 pub fn component_emoji(name: &str) -> Option<ReactionType> {
@@ -12,6 +20,40 @@ pub fn component_emoji(name: &str) -> Option<ReactionType> {
 /// An action row of buttons.
 pub fn action_row_of(buttons: Vec<CreateButton<'static>>) -> CreateActionRow<'static> {
     CreateActionRow::buttons(buttons)
+}
+
+/// Clamp one row to Discord's per-row component limit.
+pub fn clamp_action_row(row: CreateActionRow<'static>) -> CreateActionRow<'static> {
+    match row {
+        CreateActionRow::Buttons(buttons) if buttons.len() > MAX_ROW_COMPONENTS => {
+            tracing::warn!(
+                found = buttons.len(),
+                max = MAX_ROW_COMPONENTS,
+                "action-row component limit exceeded; truncating"
+            );
+            let mut buttons = buttons.into_owned();
+            buttons.truncate(MAX_ROW_COMPONENTS);
+            CreateActionRow::buttons(buttons)
+        }
+        row => row,
+    }
+}
+
+/// Clamp rows to Discord's limits, mirroring TS `buildSafeActionRows`: at most
+/// [`MAX_ACTION_ROWS`] rows, and at most [`MAX_ROW_COMPONENTS`] buttons in each.
+#[must_use]
+pub fn clamp_action_rows(rows: Vec<CreateActionRow<'static>>) -> Vec<CreateActionRow<'static>> {
+    if rows.len() > MAX_ACTION_ROWS {
+        tracing::warn!(
+            found = rows.len(),
+            max = MAX_ACTION_ROWS,
+            "action-row limit exceeded; truncating"
+        );
+    }
+    rows.into_iter()
+        .take(MAX_ACTION_ROWS)
+        .map(clamp_action_row)
+        .collect()
 }
 
 /// Text with a trailing button accessory.
@@ -80,7 +122,44 @@ pub fn role_select(
     )
 }
 
-/// A single secondary "Back" button row.
+/// A channel-select action row (clearing the selection is allowed).
+pub fn channel_select(
+    custom_id: impl Into<String>,
+    placeholder: impl Into<String>,
+) -> CreateActionRow<'static> {
+    CreateActionRow::SelectMenu(
+        CreateSelectMenu::new(
+            custom_id.into(),
+            CreateSelectMenuKind::Channel {
+                channel_types: None,
+                default_channels: None,
+            },
+        )
+        .placeholder(placeholder.into())
+        .min_values(0),
+    )
+}
+
+/// A role-select action row allowing up to `max_values` picks.
+pub fn role_select_multi(
+    custom_id: impl Into<String>,
+    placeholder: impl Into<String>,
+    max_values: u8,
+) -> CreateActionRow<'static> {
+    CreateActionRow::SelectMenu(
+        CreateSelectMenu::new(
+            custom_id.into(),
+            CreateSelectMenuKind::Role {
+                default_roles: None,
+            },
+        )
+        .placeholder(placeholder.into())
+        .min_values(0)
+        .max_values(max_values),
+    )
+}
+
+/// A single secondary "← Back" button row.
 pub fn back_button(custom_id: impl Into<String>) -> CreateActionRow<'static> {
     action_row_of(vec![
         CreateButton::new(custom_id.into())
@@ -105,15 +184,16 @@ pub fn pagination_row(
     if let Some(emoji) = component_emoji("\u{2b05}\u{fe0f}") {
         prev = prev.emoji(emoji);
     }
-    let mut next = CreateButton::new(format!("{custom_id_prefix}:{}", page + 1))
-        .label("Next")
-        .style(ButtonStyle::Secondary)
-        .disabled(page + 1 >= total_pages);
+    let mut next =
+        CreateButton::new(format!("{custom_id_prefix}:{}", page.saturating_add(1)))
+            .label("Next")
+            .style(ButtonStyle::Secondary)
+            .disabled(page.saturating_add(1) >= total_pages);
     if let Some(emoji) = component_emoji("\u{27a1}\u{fe0f}") {
         next = next.emoji(emoji);
     }
     let indicator = CreateButton::new(format!("{custom_id_prefix}:indicator"))
-        .label(format!("{} / {}", page + 1, total_pages))
+        .label(format!("{} / {}", page.saturating_add(1), total_pages))
         .style(ButtonStyle::Secondary)
         .disabled(true);
     Some(action_row_of(vec![prev, indicator, next]))
@@ -134,4 +214,37 @@ pub fn confirm_row(
             .label(cancel_label.unwrap_or("Cancel").to_string())
             .style(ButtonStyle::Secondary),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_truncates_rows_and_components() {
+        let rows: Vec<CreateActionRow<'static>> = (0..MAX_ACTION_ROWS + 2)
+            .map(|i| {
+                action_row_of(
+                    (0..MAX_ROW_COMPONENTS + 2)
+                        .map(|j| CreateButton::new(format!("b{i}-{j}")))
+                        .collect(),
+                )
+            })
+            .collect();
+        let clamped = clamp_action_rows(rows);
+        assert_eq!(clamped.len(), MAX_ACTION_ROWS);
+        for row in &clamped {
+            let CreateActionRow::Buttons(buttons) = row else {
+                panic!("expected a button row");
+            };
+            assert!(buttons.len() <= MAX_ROW_COMPONENTS);
+        }
+    }
+
+    #[test]
+    fn pagination_none_for_single_page() {
+        assert!(pagination_row("pfx", 0, 1).is_none());
+        assert!(pagination_row("pfx", 0, 0).is_none());
+        assert!(pagination_row("pfx", 0, 2).is_some());
+    }
 }

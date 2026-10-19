@@ -1,13 +1,16 @@
 use serenity::all::{
-    Colour, CreateActionRow, CreateContainer, CreateContainerComponent, CreateMediaGallery,
+    CreateActionRow, CreateContainer, CreateContainerComponent, CreateMediaGallery,
     CreateSection, CreateSectionAccessory, CreateSectionComponent, CreateSeparator,
     CreateTextDisplay, CreateThumbnail, CreateUnfurledMediaItem, SeparatorSpacingSize,
 };
+
+use crate::panels::{clamp_action_row, MAX_ACTION_ROWS};
 
 /// Thin composition helper over `CreateContainer`, mirroring lumi's `ContainerBuilder`.
 #[derive(Clone, Debug)]
 pub struct Container {
     inner: CreateContainer<'static>,
+    action_rows: usize,
 }
 
 impl Default for Container {
@@ -21,13 +24,8 @@ impl Container {
     pub fn new() -> Self {
         Self {
             inner: CreateContainer::new(Vec::new()),
+            action_rows: 0,
         }
-    }
-
-    #[must_use]
-    pub fn accent(mut self, colour: Colour) -> Self {
-        self.inner = self.inner.accent_colour(colour);
-        self
     }
 
     #[must_use]
@@ -56,11 +54,20 @@ impl Container {
         self
     }
 
+    /// Add an action row, enforcing Discord's global row and component clamp.
     #[must_use]
     pub fn action_row(mut self, row: CreateActionRow<'static>) -> Self {
+        if self.action_rows >= MAX_ACTION_ROWS {
+            tracing::warn!(
+                max = MAX_ACTION_ROWS,
+                "action-row limit exceeded; dropping extra row"
+            );
+            return self;
+        }
+        self.action_rows += 1;
         self.inner = self
             .inner
-            .add_component(CreateContainerComponent::ActionRow(row));
+            .add_component(CreateContainerComponent::ActionRow(clamp_action_row(row)));
         self
     }
 
@@ -93,11 +100,4 @@ pub fn section_with_thumbnail(
             url.into(),
         ))),
     )
-}
-
-/// A `Small`-spaced separator.
-pub fn separator_small(divider: bool) -> CreateSeparator {
-    CreateSeparator::new()
-        .divider(divider)
-        .spacing(SeparatorSpacingSize::Small)
 }

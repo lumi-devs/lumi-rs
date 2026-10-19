@@ -10,7 +10,7 @@ use lumi_kernel::bot::Error;
 use lumi_kernel::downloader::AutoUpdateConfig;
 use lumi_kernel::Services;
 use lumi_ui::panels::{action_row_of, back_button, pagination_row, setting_row, string_select};
-use lumi_ui::{Card, CardKind, CardOptions, CardReply};
+use lumi_ui::{cut_text, Card, CardKind, CardOptions, CardReply};
 
 use super::{cid, read_input, tab_row, GuildCtx, HubId, HubOutcome, HubView};
 
@@ -85,8 +85,7 @@ async fn repos_card(services: &Services) -> Result<CardReply, Error> {
         let sha = repo
             .commit
             .as_deref()
-            .map(|c| c.chars().take(7).collect::<String>())
-            .unwrap_or_else(|| "unknown".to_string());
+            .map_or_else(|| "unknown".to_string(), |c| c.chars().take(7).collect::<String>());
         let update = CreateButton::new(cid(&["addon", "update_repo", repo.name.as_str()]))
             .label("Update")
             .style(ButtonStyle::Secondary);
@@ -299,8 +298,9 @@ async fn repo_modules_card(
 
     let total_pages = modules.len().div_ceil(PER_PAGE).max(1);
     let safe_page = page.min(total_pages - 1);
-    let start = safe_page * PER_PAGE;
-    let shown = &modules[start..(start + PER_PAGE).min(modules.len())];
+    let start = safe_page.saturating_mul(PER_PAGE).min(modules.len());
+    let end = start.saturating_add(PER_PAGE).min(modules.len());
+    let shown = &modules[start..end];
 
     let mut body = Vec::new();
     let mut select_options = Vec::new();
@@ -317,7 +317,7 @@ async fn repo_modules_card(
             .or_else(|| module.description.clone())
             .unwrap_or_default();
         if !desc.is_empty() {
-            body.push(format!("-# {}", cut(&desc, 90)));
+            body.push(format!("-# {}", cut_text(&desc, 90)));
         }
         let act = if is_installed { "uninstall" } else { "install" };
         select_options.push((
@@ -419,7 +419,7 @@ async fn module_info_card(
 fn update_confirm_card(repo_name: &str, changelog: Option<&str>) -> CardReply {
     let body = changelog.filter(|c| !c.is_empty()).map_or_else(
         || "New commits are available on the tracked branch.".to_string(),
-        |c| format!("```\n{}\n```", cut(c, 820)),
+        |c| format!("```\n{}\n```", cut_text(c, 820)),
     );
 
     let confirm = CreateButton::new(cid(&["addon", "update_repo_confirm", repo_name]))
@@ -492,11 +492,9 @@ pub async fn dispatch(
         ));
     }
 
-    match (id.action.as_str(), id.sub()) {
+    match (id.head().unwrap_or_default(), id.get(1)) {
         ("update_all", _) => update_all(services).await,
-        ("addon", Some("repos" | "modules")) => {
-            Ok(HubOutcome::Update(repos_card(services).await?))
-        }
+        ("addon", Some("repos")) => Ok(HubOutcome::Update(repos_card(services).await?)),
         ("addon", Some("installed")) => Ok(HubOutcome::Update(installed_card(services).await?)),
         ("addon", Some("autoupdate")) => {
             Ok(HubOutcome::Update(autoupdate_card(services).await?))
@@ -513,22 +511,22 @@ pub async fn dispatch(
             Ok(HubOutcome::Update(autoupdate_card(services).await?))
         }
         ("addon", Some("autoupdate_interval")) => {
-            if let Some(minutes) = select_value(data).and_then(|v| v.parse::<u64>().ok()) {
-                if minutes > 0 {
-                    let cfg = services.downloader.get_auto_update_config().await?;
-                    services
-                        .downloader
-                        .set_auto_update_config(AutoUpdateConfig {
-                            enabled: cfg.enabled,
-                            interval_minutes: minutes,
-                        })
-                        .await?;
-                }
+            if let Some(minutes) = select_value(data).and_then(|v| v.parse::<u64>().ok())
+                && minutes > 0
+            {
+                let cfg = services.downloader.get_auto_update_config().await?;
+                services
+                    .downloader
+                    .set_auto_update_config(AutoUpdateConfig {
+                        enabled: cfg.enabled,
+                        interval_minutes: minutes,
+                    })
+                    .await?;
             }
             Ok(HubOutcome::Update(autoupdate_card(services).await?))
         }
         ("addon", Some("toggle")) => {
-            let module = id.rest(1);
+            let module = id.tail(2);
             if module.is_empty() {
                 return Ok(HubOutcome::Done);
             }
@@ -541,7 +539,7 @@ pub async fn dispatch(
             Ok(HubOutcome::Update(installed_card(services).await?))
         }
         ("addon", Some("update_repo")) => {
-            let repo = id.rest(1);
+            let repo = id.tail(2);
             if repo.is_empty() {
                 return Ok(HubOutcome::Done);
             }
@@ -566,7 +564,7 @@ pub async fn dispatch(
             )))
         }
         ("addon", Some("update_repo_confirm")) => {
-            let repo = id.rest(1);
+            let repo = id.tail(2);
             if repo.is_empty() {
                 return Ok(HubOutcome::Done);
             }
@@ -591,7 +589,7 @@ pub async fn dispatch(
                     };
                     let mut body = vec![format!("**{repo}** was updated."), sha_line];
                     if let Some(stat) = result.diff_stat.filter(|s| !s.is_empty()) {
-                        body.push(format!("```diff\n{}\n```", cut(&stat, 900)));
+                        body.push(format!("```diff\n{}\n```", cut_text(&stat, 900)));
                     }
                     Card::success("Repository Updated", body.join("\n\n")).into_reply()
                 }
@@ -603,10 +601,9 @@ pub async fn dispatch(
             Ok(HubOutcome::Update(repos_card(services).await?))
         }
         ("addon", Some("browsepage")) => {
-            let repo = id.tail.get(1).cloned().unwrap_or_default();
+            let repo = id.get(2).unwrap_or_default().to_string();
             let page = id
-                .tail
-                .get(3)
+                .get(4)
                 .and_then(|p| p.parse::<usize>().ok())
                 .unwrap_or(0);
             if repo.is_empty() {
@@ -617,9 +614,9 @@ pub async fn dispatch(
             ))
         }
         ("addon", Some("modact")) => {
-            let act = id.tail.get(1).map(String::as_str).unwrap_or_default();
-            let repo = id.tail.get(2).map(String::as_str).unwrap_or_default();
-            let module = id.rest(3);
+            let act = id.get(2).unwrap_or_default();
+            let repo = id.get(3).unwrap_or_default();
+            let module = id.tail(4);
             if act.is_empty() || repo.is_empty() || module.is_empty() {
                 return Ok(HubOutcome::Done);
             }
@@ -633,8 +630,8 @@ pub async fn dispatch(
             ))
         }
         ("addon", Some("modinfo")) => {
-            let repo = id.tail.get(1).cloned().unwrap_or_default();
-            let module = id.rest(2);
+            let repo = id.get(2).unwrap_or_default().to_string();
+            let module = id.tail(3);
             if repo.is_empty() || module.is_empty() {
                 return Ok(HubOutcome::Done);
             }
@@ -862,14 +859,4 @@ fn optional(value: &str) -> Option<&str> {
     } else {
         Some(trimmed)
     }
-}
-
-/// Truncate to `max` chars, appending `…` when cut.
-fn cut(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let mut truncated: String = text.chars().take(max.saturating_sub(1)).collect();
-    truncated.push('…');
-    truncated
 }
