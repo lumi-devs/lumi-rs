@@ -14,7 +14,7 @@ pub async fn card(services: &Services, guild: &GuildCtx) -> Result<CardReply, Er
     let hints = [
         "⚙️ **Modules** - enable, disable, and configure every feature",
         "🛡️ **Permissions** - permit grants and per-command overrides",
-        "🏰 **Settings** - server language and command prefix",
+        "🏰 **Settings** - server command prefix",
         "📦 **Addons** - extend Lumi with add-on modules",
     ]
     .join("\n");
