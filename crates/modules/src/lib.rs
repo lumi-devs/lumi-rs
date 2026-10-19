@@ -5,6 +5,7 @@ pub mod leveling;
 pub mod logging;
 pub mod moderation;
 pub mod security;
+pub mod shared;
 pub mod tempvc;
 pub mod utility;
 

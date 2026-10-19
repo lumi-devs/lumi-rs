@@ -1,7 +1,9 @@
-use lumi_kernel::module_state;
 use lumi_kernel::Result;
+use lumi_kernel::module_state;
 use sea_orm::DatabaseConnection;
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+use crate::shared::group_digits;
 
 #[derive(Clone, Debug)]
 pub struct EconomyConfig {
@@ -43,70 +45,103 @@ impl Default for EconomyConfig {
 }
 
 impl EconomyConfig {
+    /// Load the whole module config in one query, then apply values in memory.
     pub async fn load(db: &DatabaseConnection, guild_id: u64) -> Result<Self> {
+        let values = module_state::get_config(db, guild_id, "economy").await;
         let mut cfg = Self::default();
-        let get = |key: &'static str| module_state::config_value(db, guild_id, "economy", key);
-        if let Some(v) = non_empty(get("currency_name").await?) {
+
+        if let Some(v) = string_value(&values, "currency_name") {
             cfg.currency_name = v;
         }
-        if let Some(v) = non_empty(get("currency_emoji").await?) {
+        if let Some(v) = string_value(&values, "currency_emoji") {
             cfg.currency_emoji = v;
         }
-        if let Some(v) = non_empty(get("bank_name").await?) {
+        if let Some(v) = string_value(&values, "bank_name") {
             cfg.bank_name = v;
         }
-        set_i64(&mut cfg.starting_wallet, get("starting_wallet").await?, 0, i64::MAX);
-        set_i64(&mut cfg.starting_bank, get("starting_bank").await?, 0, i64::MAX);
-        set_i64(&mut cfg.max_balance, get("max_balance").await?, 1, i64::MAX);
-        set_i64(&mut cfg.payday_amount, get("payday_amount").await?, 0, i64::MAX);
+        set_i64(&values, "starting_wallet", &mut cfg.starting_wallet, 0, i64::MAX);
+        set_i64(&values, "starting_bank", &mut cfg.starting_bank, 0, i64::MAX);
+        set_i64(&values, "max_balance", &mut cfg.max_balance, 1, i64::MAX);
+        set_i64(&values, "payday_amount", &mut cfg.payday_amount, 0, i64::MAX);
         set_i64(
+            &values,
+            "payday_cooldown_seconds",
             &mut cfg.payday_cooldown_seconds,
-            get("payday_cooldown_seconds").await?,
             0,
             86_400,
         );
-        set_i64(&mut cfg.transfer_tax_percent, get("transfer_tax_percent").await?, 0, 100);
-        set_i64(&mut cfg.slot_min_bid, get("slot_min_bid").await?, 1, i64::MAX);
-        set_i64(&mut cfg.slot_max_bid, get("slot_max_bid").await?, 1, i64::MAX);
         set_i64(
+            &values,
+            "transfer_tax_percent",
+            &mut cfg.transfer_tax_percent,
+            0,
+            100,
+        );
+        set_i64(&values, "slot_min_bid", &mut cfg.slot_min_bid, 1, i64::MAX);
+        set_i64(&values, "slot_max_bid", &mut cfg.slot_max_bid, 1, i64::MAX);
+        set_i64(
+            &values,
+            "slot_cooldown_seconds",
             &mut cfg.slot_cooldown_seconds,
-            get("slot_cooldown_seconds").await?,
             0,
             86_400,
         );
-        set_i64(&mut cfg.slot_payout_triple, get("slot_payout_triple").await?, 1, 1000);
-        set_i64(&mut cfg.slot_payout_pair, get("slot_payout_pair").await?, 1, 1000);
-        if cfg.slot_max_bid < cfg.slot_min_bid {
-            cfg.slot_max_bid = cfg.slot_min_bid;
-        }
+        set_i64(
+            &values,
+            "slot_payout_triple",
+            &mut cfg.slot_payout_triple,
+            1,
+            1000,
+        );
+        set_i64(
+            &values,
+            "slot_payout_pair",
+            &mut cfg.slot_payout_pair,
+            1,
+            1000,
+        );
+        cfg.slot_max_bid = cfg.slot_max_bid.max(cfg.slot_min_bid);
+        cfg.starting_wallet = cfg.starting_wallet.min(cfg.max_balance);
+        cfg.starting_bank = cfg.starting_bank.min(cfg.max_balance);
         Ok(cfg)
     }
 
     pub fn format_amount(&self, amount: i64) -> String {
-        format!("{} {} {}", self.currency_emoji, group_digits(amount), self.currency_name)
+        format!(
+            "{} {} {}",
+            self.currency_emoji,
+            group_digits(amount),
+            self.currency_name
+        )
     }
 
     /// Tax (in whole units) withheld from a transfer of `amount`.
     pub fn transfer_tax(&self, amount: i64) -> i64 {
-        if self.transfer_tax_percent <= 0 {
-            0
-        } else {
-            (amount * self.transfer_tax_percent / 100).max(0)
+        if self.transfer_tax_percent <= 0 || amount <= 0 {
+            return 0;
         }
+        let tax = i128::from(amount) * i128::from(self.transfer_tax_percent) / 100;
+        i64::try_from(tax).unwrap_or(i64::MAX)
+    }
+
+    /// Milliseconds for a cooldown, never negative.
+    pub fn cooldown_ms(&self, seconds: i64) -> u64 {
+        u64::try_from(seconds.max(0).saturating_mul(1000)).unwrap_or(u64::MAX)
     }
 }
 
-fn non_empty(value: Option<Value>) -> Option<String> {
-    value
-        .as_ref()
+fn string_value(values: &Map<String, Value>, key: &str) -> Option<String> {
+    values
+        .get(key)
         .and_then(Value::as_str)
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
 }
 
 /// Read a JSON number or numeric string, clamping to `[min, max]`.
-fn set_i64(slot: &mut i64, value: Option<Value>, min: i64, max: i64) {
-    let Some(n) = value.as_ref().and_then(value_as_i64) else {
+fn set_i64(values: &Map<String, Value>, key: &str, slot: &mut i64, min: i64, max: i64) {
+    let Some(n) = values.get(key).and_then(value_as_i64) else {
         return;
     };
     *slot = n.clamp(min, max);
@@ -118,43 +153,32 @@ fn value_as_i64(value: &Value) -> Option<i64> {
         .or_else(|| value.as_str().and_then(|s| s.trim().parse().ok()))
 }
 
-fn group_digits(n: i64) -> String {
-    let digits = n.unsigned_abs().to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    if n < 0 {
-        format!("-{out}")
-    } else {
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{group_digits, EconomyConfig};
+    use super::EconomyConfig;
 
     #[test]
-    fn groups_thousands() {
-        assert_eq!(group_digits(0), "0");
-        assert_eq!(group_digits(999), "999");
-        assert_eq!(group_digits(1000), "1,000");
-        assert_eq!(group_digits(1234567), "1,234,567");
-        assert_eq!(group_digits(-42000), "-42,000");
-    }
-
-    #[test]
-    fn transfer_tax_rounds_down() {
+    fn transfer_tax_rounds_down_and_cannot_overflow() {
         let cfg = EconomyConfig {
             transfer_tax_percent: 5,
             ..EconomyConfig::default()
         };
         assert_eq!(cfg.transfer_tax(1000), 50);
         assert_eq!(cfg.transfer_tax(99), 4);
+        assert_eq!(cfg.transfer_tax(-5), 0);
         assert_eq!(EconomyConfig::default().transfer_tax(1000), 0);
+
+        let extreme = EconomyConfig {
+            transfer_tax_percent: 100,
+            ..EconomyConfig::default()
+        };
+        assert_eq!(extreme.transfer_tax(i64::MAX), i64::MAX);
+    }
+
+    #[test]
+    fn cooldown_ms_is_non_negative() {
+        let cfg = EconomyConfig::default();
+        assert_eq!(cfg.cooldown_ms(-1), 0);
+        assert_eq!(cfg.cooldown_ms(3), 3_000);
     }
 }

@@ -78,13 +78,21 @@ pub fn svg_to_png(svg: &str) -> Result<Vec<u8>, anyhow::Error> {
     pixmap.encode_png().map_err(|e| anyhow::anyhow!("{e}"))
 }
 
+fn http_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(4))
+                .build()
+                .ok()
+        })
+        .as_ref()
+}
+
 pub async fn fetch_avatar_base64(url: Option<&str>) -> Option<String> {
     let url = url?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(4))
-        .build()
-        .ok()?;
-    let bytes = client.get(url).send().await.ok()?.bytes().await.ok()?;
+    let bytes = http_client()?.get(url).send().await.ok()?.bytes().await.ok()?;
     Some(format!("data:image/png;base64,{}", BASE64.encode(&bytes)))
 }
 
@@ -97,7 +105,7 @@ pub async fn render_rank_card(data: RankCardData<'_>) -> Result<Vec<u8>, anyhow:
         1.0
     };
     let bar_width = 560;
-    let fill_width = (bar_width as f64 * progress).max(8.0).round() as u32;
+    let fill_width = (bar_width as f64 * progress).round().clamp(0.0, f64::from(bar_width)) as u32;
 
     let clean_name = if data.username.chars().count() > 22 {
         let truncated: String = data.username.chars().take(21).collect();
@@ -173,7 +181,9 @@ pub fn render_leaderboard_card(
     let mut rows_svg = String::new();
     for (i, row) in rows.iter().enumerate() {
         let y = header_h + i * row_h;
-        let fill = (bar_max as f64 * row.progress.clamp(0.0, 1.0)).max(6.0).round() as u32;
+        let fill = (bar_max as f64 * row.progress.clamp(0.0, 1.0))
+            .round()
+            .clamp(0.0, f64::from(bar_max)) as u32;
         let clean_name = if row.username.chars().count() > 22 {
             let truncated: String = row.username.chars().take(21).collect();
             format!("{truncated}…")

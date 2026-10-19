@@ -11,6 +11,10 @@ use lumi_kernel::module_state;
 use lumi_ui::panels::action_row_of;
 use lumi_ui::{Card, CardKind, CardOptions};
 
+use crate::shared::{
+    claim_cooldown, cooldown_key, format_seconds, require_guild, secs_ceil, truncate_chars,
+};
+
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MediaType {
@@ -114,24 +118,29 @@ async fn media_request(
 ) -> Result<(), Error> {
     let target_id = user.unwrap_or_else(|| ctx.author().id);
     let is_self = target_id == ctx.author().id;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let guild_id = require_guild(ctx)?.get();
 
     let cooldown_seconds =
         module_state::config_u64(&ctx.data().db, guild_id, "utility", "cooldown_seconds")
             .await?
             .unwrap_or(10);
-    let key = format!("lumi:media:{guild_id}:{}", ctx.author().id);
-    if !ctx
-        .data()
-        .cache
-        .claim_cooldown(&key, cooldown_seconds * 1000)
-        .await?
+    let key = cooldown_key("media", guild_id, ctx.author().id.get());
+    if let Some(remaining) = claim_cooldown(
+        &ctx.data().cache,
+        &key,
+        cooldown_seconds.saturating_mul(1000),
+    )
+    .await?
     {
-        let remaining = ctx.data().cache.cooldown_remaining_ms(&key).await?;
-        let secs = format!("{:.1}", remaining as f64 / 1000.0);
-        let card = Card::new("⏳ Slow Down", format!("Try again in **{secs}s**."))
-            .kind(CardKind::Error)
-            .ephemeral();
+        let card = Card::new(
+            "⏳ Slow Down",
+            format!(
+                "Try again in **{}**.",
+                format_seconds(secs_ceil(remaining))
+            ),
+        )
+        .kind(CardKind::Error)
+        .ephemeral();
         ctx.send(card.into_reply().reply()).await?;
         return Ok(());
     }
@@ -148,14 +157,14 @@ pub async fn handle_component(
     _services: &lumi_kernel::Services,
     interaction: &ComponentInteraction,
 ) -> Result<(), Error> {
-    let parts: Vec<&str> = interaction.data.custom_id.split(':').collect();
-    if parts.len() != 4 || parts[0] != "media" || parts[1] != "view" {
+    let mut parts = interaction.data.custom_id.split(':');
+    if parts.next() != Some("media") || parts.next() != Some("view") {
         return Ok(());
     }
-    let Some(kind) = MediaType::parse(parts[2]) else {
+    let Some(kind) = parts.next().and_then(MediaType::parse) else {
         return Ok(());
     };
-    let Ok(user_id) = parts[3].parse::<u64>() else {
+    let Some(user_id) = parts.next().and_then(|id| id.parse::<u64>().ok()) else {
         return Ok(());
     };
 
@@ -322,60 +331,48 @@ pub async fn whois(
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn serverinfo(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-    let (name, owner_id, guild_created, guild_id_val, member_count, boost_tier, boost_count, text_channels, voice_channels, category_channels, total_channels, role_count, emoji_count, verification, icon_opt) = {
+
+    let (title, lines, icon) = {
         let guild = ctx.guild().ok_or_else(|| anyhow::anyhow!("guild only"))?;
-        let text = guild.channels.iter().filter(|c| c.base.kind == ChannelType::Text || c.base.kind == ChannelType::News).count();
-        let voice = guild.channels.iter().filter(|c| c.base.kind == ChannelType::Voice || c.base.kind == ChannelType::Stage).count();
-        let cat = guild.channels.iter().filter(|c| c.base.kind == ChannelType::Category).count();
-        let total_c = guild.channels.len();
-        let b_count = guild.premium_subscription_count.map_or(0, |c| c.get());
-        let b_tier = format!("{:?}", guild.premium_tier);
-        let verif = format!("{:?}", guild.verification_level);
-        (
-            guild.name.clone(),
-            guild.owner_id,
-            guild.id.created_at().timestamp(),
-            guild.id,
-            guild.member_count,
-            b_tier,
-            b_count,
-            text,
-            voice,
-            cat,
-            total_c,
-            guild.roles.len(),
-            guild.emojis.len(),
-            verif,
-            guild.icon_url(),
-        )
+        let count = |kind: ChannelType| {
+            guild
+                .channels
+                .iter()
+                .filter(|channel| channel.base.kind == kind)
+                .count()
+        };
+        let text = count(ChannelType::Text) + count(ChannelType::News);
+        let voice = count(ChannelType::Voice) + count(ChannelType::Stage);
+        let categories = count(ChannelType::Category);
+        let created = guild.id.created_at().timestamp();
+        let boosts = guild.premium_subscription_count.map_or(0, |c| c.get());
+
+        let lines = vec![
+            format!("**Owner**: <@{}> (`{}`)", guild.owner_id, guild.owner_id),
+            format!("**Created**: <t:{created}:F> (<t:{created}:R>)"),
+            format!("**Guild ID**: `{}`", guild.id),
+            "### 👥 Members & Boosts".to_string(),
+            format!("**Total Members**: `{}`", guild.member_count),
+            format!("**Server Boosts**: `{boosts}` (Tier {:?})", guild.premium_tier),
+            "### 🌐 Channels".to_string(),
+            format!(
+                "**Text**: `{text}` · **Voice**: `{voice}` · **Categories**: `{categories}` · **Total**: `{}`",
+                guild.channels.len()
+            ),
+            "### ⚙️ Server Configuration".to_string(),
+            format!(
+                "**Roles**: `{}` · **Emojis**: `{}` · **Verification**: {:?}",
+                guild.roles.len(),
+                guild.emojis.len(),
+                guild.verification_level
+            ),
+        ];
+        (format!("🏰 {}", guild.name), lines, guild.icon_url())
     };
-
-    let title = format!("🏰 {name}");
-    let mut lines = Vec::new();
-
-    lines.push(format!("**Owner**: <@{owner_id}> (`{owner_id}`)"));
-    lines.push(format!(
-        "**Created**: <t:{guild_created}:F> (<t:{guild_created}:R>)"
-    ));
-    lines.push(format!("**Guild ID**: `{guild_id_val}`"));
-
-    lines.push("### 👥 Members & Boosts".to_string());
-    lines.push(format!("**Total Members**: `{member_count}`"));
-    lines.push(format!("**Server Boosts**: `{boost_count}` (Tier {boost_tier})"));
-
-    lines.push("### 🌐 Channels".to_string());
-    lines.push(format!(
-        "**Text**: `{text_channels}` · **Voice**: `{voice_channels}` · **Categories**: `{category_channels}` · **Total**: `{total_channels}`"
-    ));
-
-    lines.push("### ⚙️ Server Configuration".to_string());
-    lines.push(format!(
-        "**Roles**: `{role_count}` · **Emojis**: `{emoji_count}` · **Verification**: `{verification}`"
-    ));
 
     let mut buttons = Vec::new();
     let mut opts = CardOptions::default();
-    if let Some(icon) = icon_opt {
+    if let Some(icon) = icon {
         opts.thumbnail_url = Some(icon.clone());
         buttons.push(CreateButton::new_link(icon).label("Server Icon").emoji('🖼'));
     }
@@ -399,13 +396,13 @@ pub async fn nick(
     #[description = "New nickname; omit to reset"] nickname: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?;
+    let guild_id = require_guild(ctx)?;
 
     let new_nick = nickname
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_string);
+        .map(|s| truncate_chars(s, 32));
 
     let builder = match &new_nick {
         Some(n) => EditMember::new().nickname(n.as_str()),
@@ -450,7 +447,10 @@ async fn run_purge(
     let now = chrono::Utc::now().timestamp();
     let message_ids: Vec<MessageId> = messages
         .into_iter()
-        .filter(|m| now - m.timestamp.unix_timestamp() < BULK_DELETE_MAX_AGE_SECS && keep(m))
+        .filter(|m| {
+            now.saturating_sub(m.timestamp.unix_timestamp()) < BULK_DELETE_MAX_AGE_SECS
+                && keep(m)
+        })
         .map(|m| m.id)
         .collect();
 
@@ -481,9 +481,11 @@ fn parse_duration_secs(input: &str) -> Option<i64> {
     }
     let unit = input[idx..].to_lowercase();
     match unit.as_str() {
+        "s" | "sec" => Some(num),
         "m" | "min" => num.checked_mul(60),
-        "h" | "hr" => num.checked_mul(3600),
+        "h" | "hr" => num.checked_mul(3_600),
         "d" | "day" => num.checked_mul(86_400),
+        "w" | "week" => num.checked_mul(604_800),
         _ => None,
     }
 }
@@ -517,7 +519,7 @@ pub async fn purge(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(slash_command, prefix_command, rename = "messages", guild_only)]
 pub async fn purge_messages(
     ctx: Context<'_>,
-    #[description = "Number of messages to delete (1-500)"] amount: u16,
+    #[description = "Number of messages to scan (1-100)"] amount: u16,
 ) -> Result<(), Error> {
     run_purge(ctx, amount, |_| true).await
 }
@@ -580,9 +582,10 @@ pub async fn purge_duration(
     #[description = "How many matching messages to delete (default 100)"] amount: Option<u16>,
 ) -> Result<(), Error> {
     let secs = parse_duration_secs(&duration).ok_or_else(|| {
-        anyhow::anyhow!("Invalid duration `{duration}`. Try something like `10m`, `2h`, or `1d`.")
+        anyhow::anyhow!("Invalid duration `{duration}`. Try `10m`, `2h`, or `1d`.")
     })?;
-    let cutoff = chrono::Utc::now().timestamp() - secs;
+    let secs = secs.min(BULK_DELETE_MAX_AGE_SECS);
+    let cutoff = chrono::Utc::now().timestamp().saturating_sub(secs);
     run_purge(ctx, amount.unwrap_or(100), move |m| {
         m.timestamp.unix_timestamp() >= cutoff
     })

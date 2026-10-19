@@ -1,13 +1,31 @@
 use poise::serenity_prelude as serenity;
-use serenity::all::{ChannelType, CreateChannel, VoiceState};
-use tracing::{error, info};
+use serenity::all::{ChannelId, ChannelType, CreateChannel, GuildId, VoiceState};
+use tracing::{error, info, warn};
 
 use lumi_kernel::{Result, Services};
+
+use crate::shared::truncate_chars;
+
 use super::store;
 
+const MAX_CHANNEL_NAME: usize = 100;
+
+fn channel_is_empty(ctx: &serenity::Context, guild_id: GuildId, channel_id: ChannelId) -> bool {
+    ctx.cache
+        .guild(guild_id)
+        .and_then(|guild| guild.channels.get(&channel_id).cloned())
+        .is_none_or(|channel| channel.members(&ctx.cache).is_ok_and(|members| members.is_empty()))
+}
+
+fn parent_of(ctx: &serenity::Context, guild_id: GuildId, channel_id: ChannelId) -> Option<ChannelId> {
+    ctx.cache
+        .guild(guild_id)
+        .and_then(|guild| guild.channels.get(&channel_id).and_then(|c| c.parent_id))
+}
+
 /// Handle voice state transitions to implement the automatic TempVC lifecycle.
-/// 1. If user leaves a managed channel and it becomes empty -> delete the channel & record.
-/// 2. If user joins a generator channel -> create a new temporary VC, assign permissions, and move user.
+/// 1. If a managed channel becomes empty -> delete the channel and its record.
+/// 2. If a member joins a generator channel -> create a temporary VC and move them in.
 pub async fn on_voice_state_update(
     ctx: &serenity::Context,
     services: &Services,
@@ -19,95 +37,78 @@ pub async fn on_voice_state_update(
     };
     let gid = guild_id.get();
 
-    // 1. Check if user left a managed voice channel
     if let Some(old_state) = old {
         if let Some(old_ch_id) = old_state.channel_id {
-            if old_state.channel_id != new.channel_id {
-                let rec = store::get_record(&services.db, gid, old_ch_id.get()).await?;
-                if rec.is_some() {
-                    // Check if channel is empty
-                    let is_empty = match guild_id.channels(&ctx.http).await {
-                        Ok(channels) => {
-                            if let Some(ch) = channels.get(&old_ch_id) {
-                                match ch.members(&ctx.cache) {
-                                    Ok(members) => members.is_empty(),
-                                    Err(_) => true,
-                                }
-                            } else {
-                                true
-                            }
-                        }
-                        Err(_) => false,
-                    };
-
-                    if is_empty {
-                        info!(guild_id = gid, channel_id = old_ch_id.get(), "cleaning up empty tempvc");
-                        let _ = ctx.http.delete_channel(old_ch_id.into(), Some("TempVC channel empty cleanup")).await;
-                        let _ = store::delete_record(&services.db, gid, old_ch_id.get()).await;
-                    }
+            if old_state.channel_id != new.channel_id
+                && store::get_record(&services.db, gid, old_ch_id.get())
+                    .await?
+                    .is_some()
+                && channel_is_empty(ctx, guild_id, old_ch_id)
+            {
+                info!(guild_id = gid, channel_id = old_ch_id.get(), "cleaning up empty tempvc");
+                if let Err(error) = ctx
+                    .http
+                    .delete_channel(old_ch_id.into(), Some("TempVC channel empty cleanup"))
+                    .await
+                {
+                    warn!(%error, channel_id = old_ch_id.get(), "tempvc cleanup delete failed");
                 }
+                store::delete_record(&services.db, gid, old_ch_id.get()).await?;
             }
         }
     }
 
-    // 2. Check if user joined a generator channel
     let Some(new_ch_id) = new.channel_id else {
         return Ok(());
     };
-
-    let user_id = new.user_id.get();
-    let gen_opt = store::get_generator(&services.db, gid, new_ch_id.get()).await?;
-    let Some(generator) = gen_opt else {
+    let Some(generator) = store::get_generator(&services.db, gid, new_ch_id.get()).await? else {
         return Ok(());
     };
 
-    // User joined a generator channel -> create temporary VC for them
+    let user_id = new.user_id;
     let member = match new.member.clone() {
-        Some(m) => m,
-        None => guild_id.member(&ctx.http, new.user_id).await?,
+        Some(member) => member,
+        None => guild_id.member(&ctx.http, user_id).await?,
     };
-
-    let member_name = member.display_name().to_string();
-    let channel_name = generator.name.replace("{user}", &member_name);
-
-    // Get parent category from generator channel if available
-    let parent_id = match guild_id.channels(&ctx.http).await {
-        Ok(chs) => chs.get(&new_ch_id).and_then(|c| c.parent_id),
-        Err(_) => None,
-    };
+    let channel_name = truncate_chars(
+        &generator.name.replace("{user}", member.display_name()),
+        MAX_CHANNEL_NAME,
+    );
 
     let mut builder = CreateChannel::new(&channel_name).kind(ChannelType::Voice);
-
-    if generator.limit > 0 {
-        if let Ok(limit) = serenity::nonmax::NonMaxU16::try_from(generator.limit as u16) {
-            builder = builder.user_limit(limit);
+    if let Ok(limit) = u16::try_from(generator.limit) {
+        if limit > 0 {
+            if let Ok(limit) = serenity::nonmax::NonMaxU16::try_from(limit) {
+                builder = builder.user_limit(limit);
+            }
         }
     }
-
-    if let Some(parent) = parent_id {
+    if let Some(parent) = parent_of(ctx, guild_id, new_ch_id) {
         builder = builder.category(parent);
     }
 
     let created = guild_id.create_channel(&ctx.http, builder).await?;
-    info!(guild_id = gid, channel_id = created.id.get(), owner = user_id, "created tempvc");
+    info!(guild_id = gid, channel_id = created.id.get(), owner = user_id.get(), "created tempvc");
 
-    // Move user to the created voice channel
-    if let Err(e) = guild_id.move_member(&ctx.http, new.user_id, created.id).await {
-        error!(error = %e, "failed to move member into newly created tempvc");
+    if let Err(error) = guild_id
+        .move_member(&ctx.http, user_id, created.id)
+        .await
+    {
+        error!(%error, "failed to move member into newly created tempvc");
     }
 
-    // Record creation in DB
-    let _ = store::create_record(
+    if let Err(error) = store::create_record(
         &services.db,
         gid,
         created.id.get(),
-        user_id,
+        user_id.get(),
         new_ch_id.get(),
         channel_name,
-        1,
-        false,
-        false,
-    ).await;
+    )
+    .await
+    {
+        error!(%error, channel_id = created.id.get(), "failed to persist tempvc record");
+    }
 
     Ok(())
 }

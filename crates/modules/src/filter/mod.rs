@@ -6,47 +6,25 @@ pub mod events;
 pub mod heat;
 pub mod store;
 
-use serde_json::json;
-
 use lumi_kernel::module::{ConfigField, ConfigFieldKind, Module, ModuleMeta};
+
+use crate::shared::{
+    bool_field, channel_field, config_field, int_field, string_array_field, string_field,
+};
 
 #[derive(Debug)]
 pub struct FilterModule;
 
 fn string_array(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
-    ConfigField {
-        key: key.to_string(),
-        label: label.to_string(),
-        description: description.to_string(),
-        kind: ConfigFieldKind::StringArray,
-        default: json!([]),
-        subfields: Vec::new(),
-        group: Some(group.to_string()),
-    }
+    string_array_field(key, label, description, Some(group))
 }
 
 fn boolean(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
-    ConfigField {
-        key: key.to_string(),
-        label: label.to_string(),
-        description: description.to_string(),
-        kind: ConfigFieldKind::Boolean,
-        default: json!(false),
-        subfields: Vec::new(),
-        group: Some(group.to_string()),
-    }
+    bool_field(key, label, description, false, Some(group))
 }
 
 fn number(key: &str, label: &str, description: &str, default: i64, group: &str) -> ConfigField {
-    ConfigField {
-        key: key.to_string(),
-        label: label.to_string(),
-        description: description.to_string(),
-        kind: ConfigFieldKind::Integer,
-        default: json!(default),
-        subfields: Vec::new(),
-        group: Some(group.to_string()),
-    }
+    int_field(key, label, description, default, Some(group))
 }
 
 impl Module for FilterModule {
@@ -128,15 +106,14 @@ impl Module for FilterModule {
                 12,
                 spam,
             ),
-            ConfigField {
-                key: "exempt_roles".to_string(),
-                label: "Exempt Roles".to_string(),
-                description: "Roles that bypass all filter rules (members with Manage Messages are always exempt).".to_string(),
-                kind: ConfigFieldKind::RoleArray,
-                default: json!([]),
-                subfields: Vec::new(),
-                group: Some(punish.to_string()),
-            },
+            config_field(
+                "exempt_roles",
+                "Exempt Roles",
+                "Roles that bypass all filter rules (members with Manage Messages are always exempt).",
+                ConfigFieldKind::RoleArray,
+                serde_json::json!([]),
+                Some(punish),
+            ),
             number(
                 "timeout_minutes",
                 "Timeout (minutes)",
@@ -165,24 +142,19 @@ impl Module for FilterModule {
                 0,
                 punish,
             ),
-            ConfigField {
-                key: "warn_message".to_string(),
-                label: "Warning Message".to_string(),
-                description: "Transient warning sent after a deletion. Placeholders: {user}, {reason}. Empty disables the warning.".to_string(),
-                kind: ConfigFieldKind::String,
-                default: json!(store::DEFAULT_WARN_MESSAGE),
-                subfields: Vec::new(),
-                group: Some(punish.to_string()),
-            },
-            ConfigField {
-                key: "log_channel_id".to_string(),
-                label: "Log Channel".to_string(),
-                description: "Channel where filter hits are logged.".to_string(),
-                kind: ConfigFieldKind::Channel,
-                default: json!(null),
-                subfields: Vec::new(),
-                group: Some(punish.to_string()),
-            },
+            string_field(
+                "warn_message",
+                "Warning Message",
+                "Transient warning sent after a deletion. Placeholders: {user}, {reason}. Empty disables the warning.",
+                store::DEFAULT_WARN_MESSAGE,
+                Some(punish),
+            ),
+            channel_field(
+                "log_channel_id",
+                "Log Channel",
+                "Channel where filter hits are logged.",
+                Some(punish),
+            ),
             boolean(
                 "heat_enabled",
                 "Enable Heat Engine",
