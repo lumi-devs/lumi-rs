@@ -293,7 +293,7 @@ pub async fn purge_bots(
     ctx: Context<'_>,
     #[description = "How many matching messages to delete (default 100)"] amount: Option<u16>,
 ) -> Result<(), Error> {
-    run_purge(ctx, amount.unwrap_or(100), |m| m.author.bot).await
+    run_purge(ctx, amount.unwrap_or(100), |m| m.author.bot()).await
 }
 
 /// Delete recent messages containing a link.

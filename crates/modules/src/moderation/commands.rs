@@ -622,7 +622,7 @@ pub async fn say(
     #[description = "Channel to send in (defaults to this one)"] channel: Option<GenericChannelId>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let channel_id = ChannelId::new(channel.unwrap_or_else(|| ctx.channel_id()).get());
+    let channel_id = channel.unwrap_or_else(|| ctx.channel_id());
 
     channel_id
         .send_message(
