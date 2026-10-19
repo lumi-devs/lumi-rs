@@ -11,7 +11,6 @@ use lumi_kernel::module_state;
 use lumi_ui::panels::action_row_of;
 use lumi_ui::{Card, CardKind, CardOptions};
 
-use super::store;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MediaType {
@@ -122,8 +121,13 @@ async fn media_request(
             .await?
             .unwrap_or(10);
     let key = format!("lumi:media:{guild_id}:{}", ctx.author().id);
-    if !store::claim_cooldown(&ctx.data().cache, &key, cooldown_seconds * 1000).await? {
-        let remaining = store::cooldown_remaining_ms(&ctx.data().cache, &key).await?;
+    if !ctx
+        .data()
+        .cache
+        .claim_cooldown(&key, cooldown_seconds * 1000)
+        .await?
+    {
+        let remaining = ctx.data().cache.cooldown_remaining_ms(&key).await?;
         let secs = format!("{:.1}", remaining as f64 / 1000.0);
         let card = Card::new("⏳ Slow Down", format!("Try again in **{secs}s**."))
             .kind(CardKind::Error)

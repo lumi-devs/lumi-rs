@@ -84,8 +84,7 @@ pub fn role_select(
 pub fn back_button(custom_id: impl Into<String>) -> CreateActionRow<'static> {
     action_row_of(vec![
         CreateButton::new(custom_id.into())
-            .label("Back")
-            .emoji('⬅')
+            .label("\u{2190} Back")
             .style(ButtonStyle::Secondary),
     ])
 }
@@ -99,18 +98,22 @@ pub fn pagination_row(
     if total_pages < 2 {
         return None;
     }
-    let prev = CreateButton::new(format!("{custom_id_prefix}:{}", page.saturating_sub(1)))
+    let mut prev = CreateButton::new(format!("{custom_id_prefix}:{}", page.saturating_sub(1)))
         .label("Prev")
-        .emoji('◀')
         .style(ButtonStyle::Secondary)
         .disabled(page == 0);
-    let next = CreateButton::new(format!("{custom_id_prefix}:{}", page + 1))
+    if let Some(emoji) = component_emoji("\u{2b05}\u{fe0f}") {
+        prev = prev.emoji(emoji);
+    }
+    let mut next = CreateButton::new(format!("{custom_id_prefix}:{}", page + 1))
         .label("Next")
-        .emoji('▶')
         .style(ButtonStyle::Secondary)
         .disabled(page + 1 >= total_pages);
+    if let Some(emoji) = component_emoji("\u{27a1}\u{fe0f}") {
+        next = next.emoji(emoji);
+    }
     let indicator = CreateButton::new(format!("{custom_id_prefix}:indicator"))
-        .label(format!("{}/{}", page + 1, total_pages))
+        .label(format!("{} / {}", page + 1, total_pages))
         .style(ButtonStyle::Secondary)
         .disabled(true);
     Some(action_row_of(vec![prev, indicator, next]))

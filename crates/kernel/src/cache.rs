@@ -56,6 +56,28 @@ impl Cache {
         self.redis.clone()
     }
 
+    /// Atomically claim a cooldown slot. Returns `true` when the caller may
+    /// proceed, `false` while the key is still held.
+    pub async fn claim_cooldown(&self, key: &str, ttl_ms: u64) -> Result<bool> {
+        let mut conn = self.redis.clone();
+        let set: Option<String> = redis::cmd("SET")
+            .arg(key)
+            .arg("1")
+            .arg("NX")
+            .arg("PX")
+            .arg(ttl_ms)
+            .query_async(&mut conn)
+            .await?;
+        Ok(set.is_some())
+    }
+
+    /// Remaining time on a cooldown key in milliseconds (`0` when unset).
+    pub async fn cooldown_remaining_ms(&self, key: &str) -> Result<i64> {
+        let mut conn = self.redis.clone();
+        let ttl: i64 = redis::cmd("PTTL").arg(key).query_async(&mut conn).await?;
+        Ok(ttl.max(0))
+    }
+
     pub async fn get_json(&self, key: &str) -> Result<Option<Value>> {
         if let Some(value) = self.local.get(key).await {
             return Ok(Some(value));

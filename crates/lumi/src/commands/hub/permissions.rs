@@ -76,7 +76,14 @@ pub async fn list_card(
     action_rows.push(tab_row(HubView::Permissions));
 
     let footer = if total > 1 {
-        format_page_footer(safe_page, total, Some(PageFooterHint::Count(assignments.len())))
+        format_page_footer(
+            safe_page,
+            total,
+            Some(PageFooterHint::Hint(format!(
+                "{} assignment(s)",
+                assignments.len()
+            ))),
+        )
     } else {
         format!("{} assignment(s)", assignments.len())
     };

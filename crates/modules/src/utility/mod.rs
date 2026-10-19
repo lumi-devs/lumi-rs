@@ -1,7 +1,6 @@
 use lumi_kernel::module::{ConfigField, ConfigFieldKind, Module, ModuleMeta};
 
 pub mod commands;
-pub mod store;
 
 pub use commands::handle_component;
 

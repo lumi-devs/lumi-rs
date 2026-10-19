@@ -48,10 +48,10 @@ pub fn format_breadcrumb_header(crumbs: &[String]) -> String {
     }
 }
 
-/// Trailing hint for a paginated footer: an item count or a free-form string.
+/// Trailing hint for a paginated footer: an item count rendered as a string
+/// (the caller controls the noun), or a free-form string.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PageFooterHint {
-    Count(usize),
     Hint(String),
 }
 
@@ -59,9 +59,6 @@ pub enum PageFooterHint {
 pub fn format_page_footer(page_index: usize, total_pages: usize, hint: Option<PageFooterHint>) -> String {
     let page = format!("Page {} of {}", page_index + 1, total_pages.max(1));
     match hint {
-        Some(PageFooterHint::Count(n)) => {
-            format!("{page} \u{b7} {n} item{}", if n == 1 { "" } else { "s" })
-        }
         Some(PageFooterHint::Hint(h)) if !h.is_empty() => format!("{page} \u{b7} {h}"),
         _ => page,
     }
