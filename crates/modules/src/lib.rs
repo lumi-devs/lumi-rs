@@ -1,5 +1,6 @@
 pub mod afk;
 pub mod economy;
+pub mod filter;
 pub mod leveling;
 pub mod logging;
 pub mod moderation;
@@ -9,6 +10,7 @@ pub mod utility;
 
 pub use afk::AfkModule;
 pub use economy::EconomyModule;
+pub use filter::FilterModule;
 pub use leveling::LevelingModule;
 pub use logging::LoggingModule;
 pub use moderation::ModerationModule;

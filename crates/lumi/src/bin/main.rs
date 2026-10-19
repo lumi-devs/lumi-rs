@@ -75,7 +75,6 @@ async fn start_api(cfg: lumi_kernel::Config) -> Result<()> {
     let permits = Arc::new(lumi_kernel::PermitResolver::load(&db).await?);
     let registry = lumi_kernel::ModuleRegistry::new();
     let security = Arc::new(lumi_kernel::SecurityManager::new(db.clone()));
-    let filter = Arc::new(lumi_kernel::ContentFilter::default());
     let downloader = Arc::new(lumi_kernel::Downloader::new(
         db.clone(),
         std::path::PathBuf::from(&cfg.custom_dir),
@@ -87,7 +86,6 @@ async fn start_api(cfg: lumi_kernel::Config) -> Result<()> {
         permits,
         registry,
         security,
-        filter,
         downloader,
     });
     tracing::info!(addr = %addr, "starting HTTP/RPC API server");
