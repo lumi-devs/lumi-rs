@@ -3,13 +3,16 @@ use lumi_kernel::bot::Command;
 pub mod about;
 pub mod downloader;
 pub mod general;
+pub mod hub;
 pub mod security;
 
 pub use general::handle_component;
+pub use hub::{handle_hub_component, handle_hub_modal};
 
 /// Core root commands always registered by the host engine.
 pub fn core_commands() -> Vec<Command> {
     let mut commands = vec![general::ping()];
+    commands.extend(hub::commands());
     commands.extend(about::commands());
     commands.extend(security::commands());
     commands.extend(downloader::commands());

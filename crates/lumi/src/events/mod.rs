@@ -21,14 +21,38 @@ impl serenity::EventHandler for Events {
             serenity::FullEvent::GuildCreate { guild, is_new, .. } => {
                 tracing::debug!(guild_id = %guild.id, new = ?is_new, "guild create");
             }
-            serenity::FullEvent::InteractionCreate {
-                interaction: serenity::Interaction::Component(component),
-                ..
-            } => {
-                if let Err(error) =
-                    crate::commands::handle_component(ctx, 0, component).await
-                {
-                    tracing::warn!(%error, "ping component interaction failed");
+            serenity::FullEvent::InteractionCreate { interaction, .. } => {
+                let services = ctx.data::<lumi_kernel::bot::Data>();
+                match interaction {
+                    serenity::Interaction::Component(component) => {
+                        let result = if component.data.custom_id.starts_with("lumi:") {
+                            crate::commands::handle_hub_component(
+                                ctx,
+                                services.as_ref(),
+                                component,
+                            )
+                            .await
+                        } else {
+                            crate::commands::handle_component(ctx, 0, component).await
+                        };
+                        if let Err(error) = result {
+                            tracing::warn!(%error, "component interaction failed");
+                        }
+                    }
+                    serenity::Interaction::Modal(modal) => {
+                        if modal.data.custom_id.starts_with("lumi:") {
+                            if let Err(error) = crate::commands::handle_hub_modal(
+                                ctx,
+                                services.as_ref(),
+                                modal,
+                            )
+                            .await
+                            {
+                                tracing::warn!(%error, "hub modal interaction failed");
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             serenity::FullEvent::Message { new_message, .. } => {
