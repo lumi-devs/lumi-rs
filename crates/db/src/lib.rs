@@ -1,9 +1,10 @@
 pub mod entities;
 pub mod migrations;
 
+use sea_orm::entity::prelude::ChronoUtc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter,
-    QuerySelect, Set, TransactionTrait,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use sea_orm_migration::MigratorTrait;
 
@@ -78,4 +79,95 @@ pub async fn get_prefix(db: &DatabaseConnection, guild_id: Option<u64>) -> Strin
     }
 
     ",".to_string()
+}
+
+/// Set a guild's command prefix, creating the guild row when it does not exist.
+pub async fn set_prefix(db: &DatabaseConnection, guild_id: u64, prefix: &str) -> Result<()> {
+    let id = guild_id.to_string();
+    let now = ChronoUtc::now().fixed_offset();
+
+    match entities::guild::Entity::find_by_id(id.clone()).one(db).await? {
+        Some(model) => {
+            let mut active: entities::guild::ActiveModel = model.into();
+            active.prefix = Set(Some(prefix.to_string()));
+            active.updated_at = Set(now);
+            active.update(db).await?;
+        }
+        None => {
+            let active = entities::guild::ActiveModel {
+                id: Set(id),
+                prefix: Set(Some(prefix.to_string())),
+                locale: Set("en-US".to_string()),
+                ignored: Set(false),
+                left_at: Set(None),
+                created_at: Set(now),
+                updated_at: Set(now),
+            };
+            active.insert(db).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Clear a guild's prefix override so it falls back to the global default.
+pub async fn reset_prefix(db: &DatabaseConnection, guild_id: u64) -> Result<()> {
+    if let Some(model) = entities::guild::Entity::find_by_id(guild_id.to_string())
+        .one(db)
+        .await?
+    {
+        let mut active: entities::guild::ActiveModel = model.into();
+        active.prefix = Set(None);
+        active.updated_at = Set(ChronoUtc::now().fixed_offset());
+        active.update(db).await?;
+    }
+    Ok(())
+}
+
+/// A guild's permits ordered by their display position.
+pub async fn list_permits(
+    db: &DatabaseConnection,
+    guild_id: u64,
+) -> Result<Vec<entities::permit::Model>> {
+    entities::permit::Entity::find()
+        .filter(entities::permit::Column::GuildId.eq(guild_id.to_string()))
+        .order_by_asc(entities::permit::Column::Position)
+        .all(db)
+        .await
+}
+
+/// Delete a permit by id; returns how many rows were removed.
+pub async fn delete_permit(db: &DatabaseConnection, id: i32) -> Result<u64> {
+    let result = entities::permit::Entity::delete_by_id(id).exec(db).await?;
+    Ok(result.rows_affected)
+}
+
+/// Move a permit one step up/down within its guild by re-normalising `position`.
+pub async fn move_permit(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    permit_id: i32,
+    direction: &str,
+) -> Result<()> {
+    let mut permits = list_permits(db, guild_id).await?;
+    let Some(index) = permits.iter().position(|p| p.id == permit_id) else {
+        return Ok(());
+    };
+    let target = match direction {
+        "up" if index > 0 => index - 1,
+        "down" if index + 1 < permits.len() => index + 1,
+        _ => return Ok(()),
+    };
+    permits.swap(index, target);
+
+    let now = ChronoUtc::now().fixed_offset();
+    for (position, permit) in permits.iter().enumerate() {
+        let position = position as i32;
+        if permit.position != position {
+            let mut active: entities::permit::ActiveModel = permit.clone().into();
+            active.position = Set(position);
+            active.updated_at = Set(now);
+            active.update(db).await?;
+        }
+    }
+    Ok(())
 }

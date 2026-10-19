@@ -173,46 +173,6 @@ pub async fn help(
     Ok(())
 }
 
-/// Main administrative hub and server feature overview.
-#[poise::command(
-    slash_command,
-    prefix_command,
-    guild_only,
-    default_member_permissions = "ADMINISTRATOR"
-)]
-pub async fn lumi(ctx: Context<'_>) -> Result<(), Error> {
-    ctx.defer().await?;
-
-    let (guild_name, guild_icon) = {
-        let g = ctx.guild().ok_or_else(|| anyhow::anyhow!("guild only"))?;
-        (g.name.clone(), g.icon_url())
-    };
-
-    let title = format!("🎛️ Lumi Control Hub — {}", guild_name);
-
-    let mut body = vec![
-        "Configure and review your server's active administration capabilities:".to_string(),
-        String::new(),
-    ];
-
-    for m in ctx.data().registry.iter() {
-        let meta = m.metadata();
-        body.push(format!("### {} __{}__\n-# {}", meta.emoji, meta.display_name, meta.description));
-    }
-
-    let mut opts = CardOptions::default();
-    if let Some(icon) = guild_icon {
-        opts.thumbnail_url = Some(icon);
-    }
-
-    let card = Card::lines(title, body)
-        .kind(CardKind::Primary)
-        .options(opts);
-
-    ctx.send(card.into_reply().reply()).await?;
-    Ok(())
-}
-
 pub fn commands() -> Vec<Command> {
-    vec![about(), help(), lumi()]
+    vec![about(), help()]
 }
