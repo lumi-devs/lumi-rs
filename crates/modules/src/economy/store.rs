@@ -65,6 +65,20 @@ pub async fn get_balance(
     })
 }
 
+pub async fn get_leaderboard(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    limit: u64,
+) -> Result<Vec<economy_account::Model>> {
+    use sea_orm::{ExprTrait, QueryOrder, QuerySelect};
+    Ok(economy_account::Entity::find()
+        .filter(economy_account::Column::GuildId.eq(guild_id.to_string()))
+        .order_by_desc(sea_orm::sea_query::Expr::col(economy_account::Column::Wallet).add(sea_orm::sea_query::Expr::col(economy_account::Column::Bank)))
+        .limit(limit)
+        .all(db)
+        .await?)
+}
+
 pub async fn claim_daily(
     db: &DatabaseConnection,
     guild_id: u64,

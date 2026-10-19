@@ -27,18 +27,22 @@ const AUTO_UPDATE_INTERVALS: [(u64, &str); 5] = [
 pub async fn dashboard_card(
     services: &Services,
     guild: &GuildCtx,
-    _user_id: u64,
+    user_id: u64,
 ) -> Result<CardReply, Error> {
     let repos = services.downloader.list_repos().await?;
     let installed = services.downloader.get_installed_modules_detailed().await?;
-    let pending = services.downloader.check_for_updates().await.unwrap_or(0);
+    let pending = services.downloader.check_for_updates_detailed().await.unwrap_or_default();
 
     let mut body = vec![
+        "Manage external add-on repositories and installed modules.".to_string(),
         format!("📦 **Tracked Repositories:** {}", repos.len()),
         format!("📥 **Installed Add-ons:** {}", installed.len()),
     ];
-    if pending > 0 {
-        body.push(format!("⚠️ **Updates available:** {pending}"));
+    if !pending.is_empty() {
+        body.push(format!("⚠️ **Updates available:** {}", pending.join(", ")));
+    }
+    if !services.cfg.is_owner(user_id) {
+        body.push("-# Bot Owner access is required to manage repositories and settings.".to_string());
     }
 
     let nav = action_row_of(vec![
