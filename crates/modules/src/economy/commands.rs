@@ -558,12 +558,11 @@ async fn leaderboard_reply(
     let cfg = EconomyConfig::load(db, guild_id).await?;
     let entries = store::get_leaderboard(db, guild_id, LEADERBOARD_PER_PAGE, offset).await?;
 
-    let caller = caller_id.to_string();
     let mut lines = Vec::new();
     for (idx, entry) in entries.iter().enumerate() {
         let rank = usize::try_from(offset).unwrap_or(usize::MAX) + idx + 1;
         let total_amount = entry.wallet.saturating_add(entry.bank);
-        let marker = if entry.user_id == caller {
+        let marker = if entry.user_id.get() == caller_id {
             " **← you**"
         } else {
             ""

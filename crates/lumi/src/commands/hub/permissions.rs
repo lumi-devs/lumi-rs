@@ -40,7 +40,7 @@ pub async fn list_card(
                 lock,
                 kind_str(a.kind),
                 target_type,
-                mention(a.target_type, &a.target_id),
+                mention(a.target_type, &a.target_id.to_string()),
             );
             let payload = format!("{}|{}|{}", a.permit_id, target_type, a.target_id);
             let revoke = CreateButton::new(cid(&["permdel", payload.as_str()]))
@@ -372,9 +372,11 @@ pub async fn dispatch(
 ) -> Result<HubOutcome, Error> {
     match id.head().unwrap_or_default() {
         "permdel" => {
-            if let Some((permit_id, target_type, target_id)) = id.get(1).and_then(parse_target) {
-                lumi_db::unassign_permit(&services.db, guild.id, permit_id, target_type, &target_id)
-                    .await?;
+            if let Some((permit_id, target_type, target_str_id)) = id.get(1).and_then(parse_target) {
+                if let Ok(target_snowflake) = target_str_id.parse::<lumi_db::ids::SnowflakeId>() {
+                    lumi_db::unassign_permit(&services.db, guild.id, permit_id, target_type, target_snowflake)
+                        .await?;
+                }
             }
             Ok(HubOutcome::Update(list_card(services, guild, 0, user_id).await?))
         }
@@ -456,12 +458,14 @@ pub async fn dispatch(
                     ComponentInteractionDataKind::RoleSelect { .. } => PermitTargetType::Role,
                     _ => PermitTargetType::User,
                 };
-                if let (Some(permit_id), Some(target_id)) = (
+                if let (Some(permit_id), Some(target_val)) = (
                     id.tail(2).parse::<i32>().ok(),
                     first_value(data),
                 ) {
-                    lumi_db::assign_permit(&services.db, guild.id, permit_id, target_type, &target_id)
-                        .await?;
+                    if let Ok(target_snowflake) = target_val.parse::<lumi_db::ids::SnowflakeId>() {
+                        lumi_db::assign_permit(&services.db, guild.id, permit_id, target_type, target_snowflake)
+                            .await?;
+                    }
                 }
                 Ok(HubOutcome::Update(list_card(services, guild, 0, user_id).await?))
             }

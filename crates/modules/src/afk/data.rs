@@ -7,8 +7,8 @@ use lumi_kernel::Result;
 
 pub async fn set(db: &DatabaseConnection, guild_id: u64, user_id: u64, reason: &str) -> Result<()> {
     let row = afk_entry::ActiveModel {
-        user_id: Set(user_id as i64),
-        guild_id: Set(guild_id as i64),
+        user_id: Set(lumi_db::ids::UserId::from(user_id)),
+        guild_id: Set(lumi_db::ids::GuildId::from(guild_id)),
         reason: Set(reason.to_string()),
         since: Set(Utc::now().fixed_offset()),
     };

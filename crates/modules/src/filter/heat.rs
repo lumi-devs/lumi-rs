@@ -440,7 +440,6 @@ pub async fn check_heat(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn test_rules() -> FilterRules {
         let map = serde_json::json!({

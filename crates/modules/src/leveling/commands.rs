@@ -110,10 +110,10 @@ pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
     let mut rows = Vec::with_capacity(entries.len());
     let top_xp = entries.first().map_or(1, |e| e.total_xp.max(1));
     for (idx, entry) in entries.iter().enumerate() {
-        let user_id = entry.user_id.parse::<u64>().ok().map(UserId::new);
+        let user_id = Some(UserId::new(entry.user_id.get()));
         let name = user_id
             .and_then(|id| cached_name(ctx, guild_id, id))
-            .unwrap_or_else(|| format!("User {}", entry.user_id));
+            .unwrap_or_else(|| format!("User {}", entry.user_id.get()));
         rows.push(images::LeaderboardRow {
             rank: idx + 1,
             username: ellipsize(&name, 22),

@@ -36,7 +36,6 @@ poise = { git = "https://github.com/serenity-rs/poise", branch = "serenity-next"
 # Async
 tokio      = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync", "fs", "net", "process"] }
 futures    = "0.3"
-async-trait = "0.1"
 
 # Storage
 rustls = { version = "0.23", default-features = false, features = ["ring"] }

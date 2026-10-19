@@ -15,8 +15,8 @@ pub async fn create_generator(
     limit: i32,
 ) -> Result<()> {
     let row = temp_vc_generator::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        channel_id: Set(channel_id.to_string()),
+        guild_id: Set(lumi_db::ids::GuildId::from(guild_id)),
+        channel_id: Set(lumi_db::ids::ChannelId::from(channel_id)),
         name: Set(name),
         limit: Set(limit),
     };
@@ -44,8 +44,8 @@ pub async fn get_generator(
     channel_id: u64,
 ) -> Result<Option<temp_vc_generator::Model>> {
     Ok(temp_vc_generator::Entity::find()
-        .filter(temp_vc_generator::Column::GuildId.eq(guild_id.to_string()))
-        .filter(temp_vc_generator::Column::ChannelId.eq(channel_id.to_string()))
+        .filter(temp_vc_generator::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(temp_vc_generator::Column::ChannelId.eq(lumi_db::ids::ChannelId::from(channel_id)))
         .one(db)
         .await?)
 }
@@ -55,7 +55,7 @@ pub async fn list_generators(
     guild_id: u64,
 ) -> Result<Vec<temp_vc_generator::Model>> {
     Ok(temp_vc_generator::Entity::find()
-        .filter(temp_vc_generator::Column::GuildId.eq(guild_id.to_string()))
+        .filter(temp_vc_generator::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .order_by_asc(temp_vc_generator::Column::Name)
         .all(db)
         .await?)
@@ -88,8 +88,8 @@ pub async fn delete_generator(
     channel_id: u64,
 ) -> Result<bool> {
     let result = temp_vc_generator::Entity::delete_many()
-        .filter(temp_vc_generator::Column::GuildId.eq(guild_id.to_string()))
-        .filter(temp_vc_generator::Column::ChannelId.eq(channel_id.to_string()))
+        .filter(temp_vc_generator::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(temp_vc_generator::Column::ChannelId.eq(lumi_db::ids::ChannelId::from(channel_id)))
         .exec(db)
         .await?;
     Ok(result.rows_affected > 0)
@@ -104,10 +104,10 @@ pub async fn create_record(
     name: String,
 ) -> Result<()> {
     let row = temp_vc_record::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        channel_id: Set(channel_id.to_string()),
-        owner_id: Set(owner_id.to_string()),
-        generator_id: Set(generator_id.to_string()),
+        guild_id: Set(lumi_db::ids::GuildId::from(guild_id)),
+        channel_id: Set(lumi_db::ids::ChannelId::from(channel_id)),
+        owner_id: Set(lumi_db::ids::UserId::from(owner_id)),
+        generator_id: Set(lumi_db::ids::ChannelId::from(generator_id)),
         name: Set(name),
         number: Set(1),
         locked: Set(false),
@@ -140,8 +140,8 @@ pub async fn get_record(
     channel_id: u64,
 ) -> Result<Option<temp_vc_record::Model>> {
     Ok(temp_vc_record::Entity::find()
-        .filter(temp_vc_record::Column::GuildId.eq(guild_id.to_string()))
-        .filter(temp_vc_record::Column::ChannelId.eq(channel_id.to_string()))
+        .filter(temp_vc_record::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(temp_vc_record::Column::ChannelId.eq(lumi_db::ids::ChannelId::from(channel_id)))
         .one(db)
         .await?)
 }
@@ -152,8 +152,8 @@ pub async fn get_active_channel(
     user_id: u64,
 ) -> Result<Option<temp_vc_record::Model>> {
     Ok(temp_vc_record::Entity::find()
-        .filter(temp_vc_record::Column::GuildId.eq(guild_id.to_string()))
-        .filter(temp_vc_record::Column::OwnerId.eq(user_id.to_string()))
+        .filter(temp_vc_record::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(temp_vc_record::Column::OwnerId.eq(lumi_db::ids::UserId::from(user_id)))
         .order_by_desc(temp_vc_record::Column::CreatedAt)
         .one(db)
         .await?)
@@ -205,7 +205,7 @@ pub async fn set_owner(
     new_owner_id: u64,
 ) -> Result<bool> {
     update_record(db, guild_id, channel_id, |active| {
-        active.owner_id = Set(new_owner_id.to_string());
+        active.owner_id = Set(lumi_db::ids::UserId::from(new_owner_id));
     })
     .await
 }
@@ -216,8 +216,8 @@ pub async fn delete_record(
     channel_id: u64,
 ) -> Result<bool> {
     let result = temp_vc_record::Entity::delete_many()
-        .filter(temp_vc_record::Column::GuildId.eq(guild_id.to_string()))
-        .filter(temp_vc_record::Column::ChannelId.eq(channel_id.to_string()))
+        .filter(temp_vc_record::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(temp_vc_record::Column::ChannelId.eq(lumi_db::ids::ChannelId::from(channel_id)))
         .exec(db)
         .await?;
     Ok(result.rows_affected > 0)

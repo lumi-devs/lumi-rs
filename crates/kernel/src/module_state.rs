@@ -68,7 +68,7 @@ pub async fn set_enabled(
     enabled: bool,
 ) -> Result<()> {
     guild_module_state::Entity::insert(guild_module_state::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
+        guild_id: Set(lumi_db::ids::GuildId::from(guild_id)),
         module_name: Set(module.to_string()),
         enabled: Set(enabled),
         updated_at: Set(ChronoUtc::now().fixed_offset()),
@@ -210,7 +210,7 @@ pub async fn set_config_field(
     value: Value,
 ) -> Result<()> {
     guild_module_config::Entity::insert(guild_module_config::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
+        guild_id: Set(lumi_db::ids::GuildId::from(guild_id)),
         module_name: Set(module.to_string()),
         config_key: Set(key.to_string()),
         value: Set(value),

@@ -17,7 +17,7 @@ pub async fn card(
     guild: &GuildCtx,
     _user_id: u64,
 ) -> Result<CardReply, Error> {
-    let prefix = lumi_db::get_prefix(&services.db, Some(guild.id)).await;
+    let prefix = lumi_db::get_prefix(&services.db, Some(guild.id)).await.unwrap_or_else(|_| ",".to_string());
     let is_default = prefix == ",";
 
     let edit = CreateButton::new(cid(&["prefix", "set"]))

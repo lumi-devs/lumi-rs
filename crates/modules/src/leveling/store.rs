@@ -83,8 +83,8 @@ pub async fn get_account<C: ConnectionTrait>(
     user_id: u64,
 ) -> Result<Option<level_account::Model>> {
     Ok(level_account::Entity::find()
-        .filter(level_account::Column::GuildId.eq(guild_id.to_string()))
-        .filter(level_account::Column::UserId.eq(user_id.to_string()))
+        .filter(level_account::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(level_account::Column::UserId.eq(lumi_db::ids::UserId::from(user_id)))
         .one(db)
         .await?)
 }
@@ -101,8 +101,8 @@ pub async fn get_or_create_account<C: ConnectionTrait>(
     }
 
     let row = level_account::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        user_id: Set(user_id.to_string()),
+        guild_id: Set(lumi_db::ids::GuildId::from(guild_id)),
+        user_id: Set(lumi_db::ids::UserId::from(user_id)),
         level: Set(START_LEVEL),
         xp: Set(0),
         total_xp: Set(0),
@@ -135,8 +135,8 @@ async fn locked_account<C: ConnectionTrait>(
 ) -> Result<level_account::Model> {
     get_or_create_account(db, guild_id, user_id).await?;
     level_account::Entity::find()
-        .filter(level_account::Column::GuildId.eq(guild_id.to_string()))
-        .filter(level_account::Column::UserId.eq(user_id.to_string()))
+        .filter(level_account::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(level_account::Column::UserId.eq(lumi_db::ids::UserId::from(user_id)))
         .lock_exclusive()
         .one(db)
         .await?
@@ -152,8 +152,8 @@ async fn log_gain<C: ConnectionTrait>(
     now: DateTimeWithTimeZone,
 ) -> Result<()> {
     level_xp_gain::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        user_id: Set(user_id.to_string()),
+        guild_id: Set(lumi_db::ids::GuildId::from(guild_id)),
+        user_id: Set(lumi_db::ids::UserId::from(user_id)),
         amount: Set(amount),
         source: Set(source.to_string()),
         created_at: Set(now),
@@ -334,7 +334,7 @@ pub async fn get_user_rank(
     };
 
     let count = level_account::Entity::find()
-        .filter(level_account::Column::GuildId.eq(guild_id.to_string()))
+        .filter(level_account::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .filter(level_account::Column::TotalXp.gt(acc.total_xp))
         .count(db)
         .await?;
@@ -349,7 +349,7 @@ pub async fn get_leaderboard(
     offset: u64,
 ) -> Result<Vec<level_account::Model>> {
     Ok(level_account::Entity::find()
-        .filter(level_account::Column::GuildId.eq(guild_id.to_string()))
+        .filter(level_account::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .order_by_desc(level_account::Column::TotalXp)
         .order_by_desc(level_account::Column::Level)
         .order_by_desc(level_account::Column::Xp)
@@ -362,7 +362,7 @@ pub async fn get_leaderboard(
 
 pub async fn count_accounts(db: &DatabaseConnection, guild_id: u64) -> Result<u64> {
     Ok(level_account::Entity::find()
-        .filter(level_account::Column::GuildId.eq(guild_id.to_string()))
+        .filter(level_account::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .count(db)
         .await?)
 }

@@ -24,7 +24,7 @@ pub struct Migration;
 /// truth: this schema-syncs every table, unique key and single-column index
 /// declared in `lumi_db::entities::*`, then adds the composite indexes the
 /// entity attributes cannot express.
-#[async_trait::async_trait]
+#[sea_orm_migration::async_trait::async_trait]
 #[allow(elided_lifetimes_in_paths)]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {

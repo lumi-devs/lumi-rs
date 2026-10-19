@@ -35,7 +35,7 @@ impl PermitRow {
     fn from_model(model: permit::Model) -> Self {
         Self {
             id: model.id,
-            guild_id: model.guild_id,
+            guild_id: model.guild_id.to_string(),
             name: model.name,
             kind: model.kind,
             polarity: model.polarity,
@@ -194,17 +194,11 @@ impl PermitResolver {
             .all(db)
             .await?
             .into_iter()
-            .filter_map(|a| match a.target_id.parse::<i64>() {
-                Ok(target_id) => Some(PermitAssignment {
-                    permit_id: a.permit_id,
-                    guild_id: a.guild_id,
-                    target_type: a.target_type,
-                    target_id,
-                }),
-                Err(_) => {
-                    tracing::warn!(target = %a.target_id, permit_id = a.permit_id, "skipping permit assignment with non-numeric target");
-                    None
-                }
+            .map(|a| PermitAssignment {
+                permit_id: a.permit_id,
+                guild_id: a.guild_id.to_string(),
+                target_type: a.target_type,
+                target_id: a.target_id.as_i64(),
             })
             .collect();
 
@@ -409,17 +403,11 @@ pub async fn explain_permit(
     let assignments = lumi_db::list_assignments(db, guild_id)
         .await?
         .into_iter()
-        .filter_map(|row| match row.target_id.parse::<i64>() {
-            Ok(target_id) => Some(PermitAssignment {
-                permit_id: row.permit_id,
-                guild_id: guild_id.to_string(),
-                target_type: row.target_type,
-                target_id,
-            }),
-            Err(_) => {
-                tracing::warn!(target = %row.target_id, "skipping permit assignment with non-numeric target");
-                None
-            }
+        .map(|row| PermitAssignment {
+            permit_id: row.permit_id,
+            guild_id: guild_id.to_string(),
+            target_type: row.target_type,
+            target_id: row.target_id.as_i64(),
         })
         .collect();
 

@@ -88,8 +88,8 @@ async fn find_account<C: ConnectionTrait>(
     user_id: u64,
 ) -> Result<Option<economy_account::Model>> {
     Ok(economy_account::Entity::find()
-        .filter(economy_account::Column::GuildId.eq(guild_id.to_string()))
-        .filter(economy_account::Column::UserId.eq(user_id.to_string()))
+        .filter(economy_account::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(economy_account::Column::UserId.eq(lumi_db::ids::UserId::from(user_id)))
         .one(db)
         .await?)
 }
@@ -107,8 +107,8 @@ pub async fn get_or_create_account<C: ConnectionTrait>(
     }
 
     let row = economy_account::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        user_id: Set(user_id.to_string()),
+        guild_id: Set(lumi_db::ids::GuildId::from(guild_id)),
+        user_id: Set(lumi_db::ids::UserId::from(user_id)),
         wallet: Set(cfg.starting_wallet.min(cfg.max_balance).max(0)),
         bank: Set(cfg.starting_bank.min(cfg.max_balance).max(0)),
         last_payday_at: Set(None),
@@ -140,8 +140,8 @@ async fn locked_account<C: ConnectionTrait>(
 ) -> Result<economy_account::Model> {
     get_or_create_account(db, guild_id, user_id, cfg).await?;
     economy_account::Entity::find()
-        .filter(economy_account::Column::GuildId.eq(guild_id.to_string()))
-        .filter(economy_account::Column::UserId.eq(user_id.to_string()))
+        .filter(economy_account::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(economy_account::Column::UserId.eq(lumi_db::ids::UserId::from(user_id)))
         .lock_exclusive()
         .one(db)
         .await?
@@ -158,8 +158,8 @@ async fn log_transaction<C: ConnectionTrait>(
     reason: impl Into<String>,
 ) -> Result<()> {
     economy_transaction::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        user_id: Set(user_id.to_string()),
+        guild_id: Set(lumi_db::ids::GuildId::from(guild_id)),
+        user_id: Set(lumi_db::ids::UserId::from(user_id)),
         kind: Set(kind),
         amount: Set(amount),
         balance_after: Set(balance_after),
@@ -190,7 +190,7 @@ pub async fn get_leaderboard(
 ) -> Result<Vec<economy_account::Model>> {
     use sea_orm::sea_query::Expr;
     Ok(economy_account::Entity::find()
-        .filter(economy_account::Column::GuildId.eq(guild_id.to_string()))
+        .filter(economy_account::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .order_by_desc(sea_orm::ExprTrait::add(
             Expr::col(economy_account::Column::Wallet),
             Expr::col(economy_account::Column::Bank),
@@ -205,7 +205,7 @@ pub async fn get_leaderboard(
 /// Count of economy accounts on the server (for leaderboard pagination).
 pub async fn count_accounts(db: &DatabaseConnection, guild_id: u64) -> Result<u64> {
     Ok(economy_account::Entity::find()
-        .filter(economy_account::Column::GuildId.eq(guild_id.to_string()))
+        .filter(economy_account::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .count(db)
         .await?)
 }

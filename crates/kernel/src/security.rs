@@ -237,7 +237,11 @@ impl SecurityManager {
             return Ok(Some(status));
         }
 
-        let Some(state) = panic_state::Entity::find_by_id(guild_id.to_string())
+        let guild_snowflake: lumi_db::ids::GuildId = guild_id
+            .parse()
+            .map_err(|_| LumiError::Invalid(format!("guild id '{guild_id}' is not numeric")))?;
+
+        let Some(state) = panic_state::Entity::find_by_id(guild_snowflake)
             .one(&self.db)
             .await?
         else {
@@ -255,7 +259,7 @@ impl SecurityManager {
 
         let status = PanicStatus {
             active: true,
-            actor_id: Some(state.actor_id),
+            actor_id: Some(state.actor_id.to_string()),
             invites_paused: state.invites_paused,
             locked_channels,
             started_at: Some(state.started_at),
@@ -275,9 +279,16 @@ impl SecurityManager {
         let now = Utc::now().fixed_offset();
         let channels_json = serde_json::to_value(&locked_channels)?;
 
+        let guild_snowflake: lumi_db::ids::GuildId = guild_id
+            .parse()
+            .map_err(|_| LumiError::Invalid(format!("guild id '{guild_id}' is not numeric")))?;
+        let actor_snowflake: lumi_db::ids::UserId = actor_id
+            .parse()
+            .map_err(|_| LumiError::Invalid(format!("actor id '{actor_id}' is not numeric")))?;
+
         panic_state::Entity::insert(panic_state::ActiveModel {
-            guild_id: Set(guild_id.to_string()),
-            actor_id: Set(actor_id.to_string()),
+            guild_id: Set(guild_snowflake),
+            actor_id: Set(actor_snowflake),
             invites_paused: Set(invites_paused),
             locked_channels: Set(channels_json),
             started_at: Set(now),
@@ -313,7 +324,11 @@ impl SecurityManager {
             return Ok(None);
         }
 
-        panic_state::Entity::delete_by_id(guild_id.to_string())
+        let guild_snowflake: lumi_db::ids::GuildId = guild_id
+            .parse()
+            .map_err(|_| LumiError::Invalid(format!("guild id '{guild_id}' is not numeric")))?;
+
+        panic_state::Entity::delete_by_id(guild_snowflake)
             .exec(&self.db)
             .await?;
 
@@ -363,16 +378,22 @@ impl SecurityManager {
         let guild_id_u64: u64 = guild_id
             .parse()
             .map_err(|_| LumiError::Invalid(format!("guild id '{guild_id}' is not numeric")))?;
-        let counter_guild = i64::try_from(guild_id_u64).unwrap_or(i64::MAX);
-        let case_num = lumi_db::next_counter(&self.db, counter_guild, "cases").await?;
+        let case_num = lumi_db::next_counter(&self.db, guild_id_u64, "cases").await?;
         let case_number = i32::try_from(case_num)
             .map_err(|_| LumiError::Other(format!("case counter overflow for guild {guild_id}")))?;
 
+        let target_snowflake: lumi_db::ids::UserId = target_user_id
+            .parse()
+            .map_err(|_| LumiError::Invalid(format!("target user id '{target_user_id}' is not numeric")))?;
+        let mod_snowflake: lumi_db::ids::UserId = moderator_id
+            .parse()
+            .map_err(|_| LumiError::Invalid(format!("moderator id '{moderator_id}' is not numeric")))?;
+
         let row = lumi_db::entities::moderation_case::ActiveModel {
-            guild_id: Set(guild_id.to_string()),
+            guild_id: Set(lumi_db::ids::GuildId::from(guild_id_u64)),
             case_number: Set(case_number),
-            user_id: Set(target_user_id.to_string()),
-            moderator_id: Set(moderator_id.to_string()),
+            user_id: Set(target_snowflake),
+            moderator_id: Set(mod_snowflake),
             action: Set(CaseAction::Quarantine),
             custom_action: Set(None),
             reason: Set(Some(reason.to_string())),

@@ -85,7 +85,7 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
                     let data = ctx.framework.user_data();
                     let db = &data.db;
                     let guild_id = ctx.guild_id.map(serenity::all::GuildId::get);
-                    let p = lumi_db::get_prefix(db, guild_id).await;
+                    let p = lumi_db::get_prefix(db, guild_id).await.unwrap_or_else(|_| ",".to_string());
                     Ok(Some(p.into()))
                 })
             }),

@@ -48,11 +48,7 @@ async fn panel_action(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     };
 
-    let Ok(ch_id) = record.channel_id.parse::<u64>() else {
-        ctx.send(error_card("Your channel record is invalid; please rejoin a generator.").reply())
-            .await?;
-        return Ok(());
-    };
+    let ch_id = record.channel_id.get();
 
     let row1 = action_row_of(vec![
         button("lock", ch_id, "Lock", '🔒', ButtonStyle::Secondary),
@@ -475,7 +471,7 @@ pub async fn handle_component(
     };
 
     let caller_id = interaction.user.id;
-    let owner_id = rec.owner_id.parse::<u64>().unwrap_or(0);
+    let owner_id = rec.owner_id.get();
     let is_owner = caller_id.get() == owner_id;
 
     if action == "claim" {
