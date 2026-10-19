@@ -5,6 +5,7 @@ pub mod downloader;
 pub mod error;
 pub mod filter;
 pub mod module;
+pub mod module_state;
 pub mod permits;
 pub mod ratelimit;
 pub mod scheduler;
