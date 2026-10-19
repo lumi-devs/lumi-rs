@@ -3,13 +3,12 @@
 //! apalis-redis owns queueing, worker leases, heartbeats and orphan
 //! re-enqueueing, so there is no hand-rolled ZSET or leader election here.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use apalis::prelude::{BoxDynError, Data, TaskBuilder, TaskSink, WorkerBuilder};
 use apalis_redis::RedisStorage;
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -28,7 +27,7 @@ pub struct Job {
     pub every: Option<Duration>,
 }
 
-type JobFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+type JobFuture = BoxFuture<'static, Result<()>>;
 
 /// Runs one job. Errors are logged and the worker continues.
 pub type JobHandler = Arc<dyn Fn(Job) -> JobFuture + Send + Sync>;
@@ -45,17 +44,17 @@ pub struct Scheduler {
     storage: Storage,
 }
 
-/// Connect to Redis and build a scheduler.
-pub async fn connect(redis_url: &str) -> Result<Scheduler> {
-    let conn = apalis_redis::connect(redis_url)
-        .await
-        .map_err(|err| LumiError::Cache(err.to_string()))?;
-    Ok(Scheduler {
-        storage: RedisStorage::new(conn),
-    })
-}
-
 impl Scheduler {
+    /// Connect to Redis and build a scheduler.
+    pub async fn connect(redis_url: &str) -> Result<Self> {
+        let conn = apalis_redis::connect(redis_url)
+            .await
+            .map_err(|err| LumiError::Cache(err.to_string()))?;
+        Ok(Self {
+            storage: RedisStorage::new(conn),
+        })
+    }
+
     /// Enqueue a job to run as soon as a worker is free.
     pub async fn enqueue(&self, job: Job) -> Result<()> {
         let mut storage = self.storage.clone();
@@ -102,15 +101,20 @@ fn sink_error(err: impl std::fmt::Display) -> LumiError {
 }
 
 async fn dispatch(job: Job, state: Data<WorkerState>) -> std::result::Result<(), BoxDynError> {
-    let every = job.every;
-    let name = job.name.clone();
-    if let Err(err) = (state.handler)(job).await {
+    let Job { name, payload, every } = job;
+    if let Err(err) = (state.handler)(Job {
+        name: name.clone(),
+        payload: payload.clone(),
+        every,
+    })
+    .await
+    {
         tracing::warn!(job = %name, error = %err, "scheduled job failed");
     }
     if let Some(every) = every {
         let next = Job {
             name,
-            payload: None,
+            payload,
             every: Some(every),
         };
         let mut storage = state.storage.clone();

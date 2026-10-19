@@ -1,9 +1,18 @@
 use thiserror::Error;
 
+/// The single error type shared by the kernel and every crate built on it.
+///
+/// Keeping one typed enum (instead of `anyhow` scattered through the layers)
+/// lets callers match on failure modes and gives `?` a single hop from any
+/// underlying error.
 #[derive(Debug, Error)]
 pub enum LumiError {
     #[error("configuration error: {0}")]
     Config(String),
+    #[error("invalid input: {0}")]
+    Invalid(String),
+    #[error("not found: {0}")]
+    NotFound(String),
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
     #[error("cache error: {0}")]
@@ -14,6 +23,8 @@ pub enum LumiError {
     Json(#[from] serde_json::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("background task failed: {0}")]
+    Task(#[from] tokio::task::JoinError),
     #[error("discord error: {0}")]
     Discord(#[from] serenity::Error),
     #[error("other: {0}")]

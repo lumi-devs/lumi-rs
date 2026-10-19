@@ -6,7 +6,6 @@ pub mod error;
 pub mod module;
 pub mod module_state;
 pub mod permits;
-pub mod ratelimit;
 pub mod scheduler;
 pub mod security;
 pub mod services;
@@ -20,7 +19,6 @@ pub use downloader::Downloader;
 pub use error::{LumiError, Result};
 pub use module::{ConfigField, ConfigFieldKind, Module, ModuleMeta, ModuleRegistry};
 pub use permits::{PermitKind, PermitPolarity, PermitResolver, PermitTargetType};
-pub use ratelimit::RateLimiter;
 pub use scheduler::{Job, Scheduler};
 pub use security::{
     ActionThresholdViolation, AntiNukeConfig, AntiNukeResponse, DestructiveActionKind, PanicStatus,

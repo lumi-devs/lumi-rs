@@ -1,13 +1,14 @@
 //! Two-tier cache: an in-process moka cache in front of Redis, with pub/sub
 //! invalidation so every process drops matching local entries.
 
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
 use moka::future::Cache as MokaCache;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
+use redis::{AsyncCommands, ExistenceCheck, SetExpiry, SetOptions};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -15,6 +16,16 @@ use crate::Result;
 
 /// Channel carrying cross-process invalidation messages.
 pub const INVALIDATE_CHANNEL: &str = "lumi:invalidate";
+
+/// Maximum number of entries held in each process's local tier.
+const LOCAL_CAPACITY: u64 = 10_000;
+
+/// Reconnect backoff bounds for the invalidation listener.
+const BACKOFF_MIN: Duration = Duration::from_secs(1);
+const BACKOFF_MAX: Duration = Duration::from_secs(60);
+
+/// How long a Redis connection may take to establish or answer.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Invalidation {
@@ -42,11 +53,12 @@ impl std::fmt::Debug for Cache {
 impl Cache {
     pub async fn connect(redis_url: &str) -> Result<Self> {
         let client = redis::Client::open(redis_url)?;
-        let redis = client
-            .get_connection_manager_with_config(ConnectionManagerConfig::new())
-            .await?;
+        let config = ConnectionManagerConfig::new()
+            .set_connection_timeout(CONNECT_TIMEOUT)
+            .set_response_timeout(CONNECT_TIMEOUT);
+        let redis = client.get_connection_manager_with_config(config).await?;
         Ok(Self {
-            local: MokaCache::builder().max_capacity(10_000).build(),
+            local: MokaCache::builder().max_capacity(LOCAL_CAPACITY).build(),
             client,
             redis,
         })
@@ -60,21 +72,17 @@ impl Cache {
     /// proceed, `false` while the key is still held.
     pub async fn claim_cooldown(&self, key: &str, ttl_ms: u64) -> Result<bool> {
         let mut conn = self.redis.clone();
-        let set: Option<String> = redis::cmd("SET")
-            .arg(key)
-            .arg("1")
-            .arg("NX")
-            .arg("PX")
-            .arg(ttl_ms)
-            .query_async(&mut conn)
-            .await?;
+        let opts = SetOptions::default()
+            .conditional_set(ExistenceCheck::NX)
+            .with_expiration(SetExpiry::PX(ttl_ms));
+        let set: Option<String> = conn.set_options(key, "1", opts).await?;
         Ok(set.is_some())
     }
 
     /// Remaining time on a cooldown key in milliseconds (`0` when unset).
     pub async fn cooldown_remaining_ms(&self, key: &str) -> Result<i64> {
         let mut conn = self.redis.clone();
-        let ttl: i64 = redis::cmd("PTTL").arg(key).query_async(&mut conn).await?;
+        let ttl: i64 = conn.pttl(key).await?;
         Ok(ttl.max(0))
     }
 
@@ -83,7 +91,7 @@ impl Cache {
             return Ok(Some(value));
         }
         let mut conn = self.redis.clone();
-        let raw: Option<String> = redis::cmd("GET").arg(key).query_async(&mut conn).await?;
+        let raw: Option<String> = conn.get(key).await?;
         let Some(raw) = raw else {
             return Ok(None);
         };
@@ -96,28 +104,29 @@ impl Cache {
         self.local.insert(key.to_string(), value.clone()).await;
         let raw = serde_json::to_string(value)?;
         let mut conn = self.redis.clone();
-        let _: String = redis::cmd("SET").arg(key).arg(raw).query_async(&mut conn).await?;
+        let _: () = conn.set(key, raw).await?;
         Ok(())
     }
 
-    /// Return the cached value, otherwise compute it, store and return it.
-    pub async fn get_or_insert_json<F, Fut>(&self, key: &str, compute: F) -> Result<Value>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Value>>,
-    {
-        if let Some(value) = self.get_json(key).await? {
-            return Ok(value);
-        }
-        let value = compute().await?;
-        self.set_json(key, &value).await?;
-        Ok(value)
+    /// Typed read: deserialize the cached JSON into `T` instead of handing
+    /// callers a raw [`Value`].
+    pub async fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        Ok(self
+            .get_json(key)
+            .await?
+            .map(serde_json::from_value)
+            .transpose()?)
+    }
+
+    /// Typed write: serialize `T` as the cached JSON payload.
+    pub async fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        self.set_json(key, &serde_json::to_value(value)?).await
     }
 
     pub async fn invalidate(&self, key: &str) -> Result<()> {
         self.local.invalidate(key).await;
         let mut conn = self.redis.clone();
-        let _: i64 = redis::cmd("DEL").arg(key).query_async(&mut conn).await?;
+        let _: i64 = conn.del(key).await?;
         self.publish(&Invalidation::Keys(vec![key.to_string()])).await
     }
 
@@ -144,7 +153,7 @@ impl Cache {
                 .query_async(&mut conn)
                 .await?;
             if !batch.is_empty() {
-                let _: i64 = redis::cmd("DEL").arg(&batch).query_async(&mut conn).await?;
+                let _: i64 = conn.del(batch.as_slice()).await?;
             }
             cursor = next;
             if cursor == 0 {
@@ -157,25 +166,25 @@ impl Cache {
     async fn publish(&self, msg: &Invalidation) -> Result<()> {
         let payload = serde_json::to_string(msg)?;
         let mut conn = self.redis.clone();
-        let _: i64 = redis::cmd("PUBLISH")
-            .arg(INVALIDATE_CHANNEL)
-            .arg(payload)
-            .query_async(&mut conn)
-            .await?;
+        let _: i64 = conn.publish(INVALIDATE_CHANNEL, payload).await?;
         Ok(())
     }
 
     /// Subscribe to [`INVALIDATE_CHANNEL`] and drop matching local keys.
     ///
-    /// Never returns; call from a spawned task.
+    /// Never returns; call from a spawned task. Reconnects with exponential
+    /// backoff capped at [`BACKOFF_MAX`].
     pub async fn spawn_invalidation(self: Arc<Self>) {
-        // shortcut: one dedicated pub/sub connection, no reconnect backoff cap;
-        // back off harder or share a connection pool past a handful of workers.
+        let mut backoff = BACKOFF_MIN;
         loop {
-            if let Err(err) = self.subscribe_loop().await {
-                tracing::warn!(error = %err, "cache invalidation listener dropped; resubscribing");
+            match self.subscribe_loop().await {
+                Ok(()) => backoff = BACKOFF_MIN,
+                Err(err) => {
+                    tracing::warn!(error = %err, backoff_secs = backoff.as_secs(), "cache invalidation listener dropped; resubscribing");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(BACKOFF_MAX);
+                }
             }
-            tokio::time::sleep(Duration::from_secs(5)).await;
         }
     }
 

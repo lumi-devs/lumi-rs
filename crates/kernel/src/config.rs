@@ -1,3 +1,6 @@
+//! Process configuration: one layered loader (file → `LUMI_*` env → common
+//! deployment env vars) and the deployment [`Role`] the binary runs as.
+
 use figment::{
     providers::{Env, Format, Toml},
     Figment,
@@ -48,38 +51,55 @@ fn default_custom_dir() -> String {
 
 impl Config {
     /// Load layered configuration:
-    /// 1. Default fallback values
-    /// 2. `lumi.toml` file (if present)
-    /// 3. Environment variables (prefixed with `LUMI_`, or standard `DISCORD_TOKEN`, `DATABASE_URL`)
+    /// 1. `lumi.toml` (optional)
+    /// 2. `LUMI_*` environment variables
+    /// 3. common deployment names (`DISCORD_TOKEN`, `DATABASE_URL`, `REDIS_URL`, `OWNER_IDS`)
     pub fn load() -> Result<Self> {
         let mut figment = Figment::new()
             .merge(Toml::file("lumi.toml"))
             .merge(Env::prefixed("LUMI_"));
 
-        if let Ok(tok) = std::env::var("DISCORD_TOKEN") {
-            figment = figment.merge(("token", tok));
+        for (env, key) in [
+            ("DISCORD_TOKEN", "token"),
+            ("DATABASE_URL", "database_url"),
+            ("REDIS_URL", "redis_url"),
+        ] {
+            if let Ok(value) = std::env::var(env) {
+                figment = figment.merge((key, value));
+            }
         }
-        if let Ok(db) = std::env::var("DATABASE_URL") {
-            figment = figment.merge(("database_url", db));
-        }
-        if let Ok(redis) = std::env::var("REDIS_URL") {
-            figment = figment.merge(("redis_url", redis));
-        }
-        if let Ok(owners) = std::env::var("OWNER_IDS") {
-            let ids: Vec<u64> = owners
+
+        // `owner_ids` is a list, which figment cannot parse out of a single env
+        // string; parse it here and let it override any raw provider value.
+        if let Ok(owners) = std::env::var("OWNER_IDS").or_else(|_| std::env::var("LUMI_OWNER_IDS")) {
+            let ids = owners
                 .split(',')
-                .filter_map(|id| id.trim().parse().ok())
-                .collect();
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(|id| {
+                    id.parse::<u64>()
+                        .map_err(|_| LumiError::Config(format!("OWNER_IDS entry '{id}' is not a snowflake")))
+                })
+                .collect::<Result<Vec<_>>>()?;
             figment = figment.merge(("owner_ids", ids));
         }
 
-        figment.extract().map_err(|err| LumiError::Config(err.to_string()))
+        let cfg: Self = figment.extract().map_err(|err| LumiError::Config(err.to_string()))?;
+        cfg.validate()?;
+        Ok(cfg)
     }
 
-    pub fn from_env() -> Result<Self> {
-        Self::load()
+    fn validate(&self) -> Result<()> {
+        if self.database_url.trim().is_empty() {
+            return Err(LumiError::Config("database_url must not be empty".into()));
+        }
+        if self.redis_url.trim().is_empty() {
+            return Err(LumiError::Config("redis_url must not be empty".into()));
+        }
+        Ok(())
     }
 
+    #[must_use]
     pub fn is_owner(&self, user_id: u64) -> bool {
         self.owner_ids.contains(&user_id)
     }

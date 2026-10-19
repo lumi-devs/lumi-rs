@@ -11,14 +11,14 @@
 use std::collections::HashMap;
 
 use sea_orm::entity::prelude::ChronoUtc;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde_json::{Map, Value};
 
 use lumi_db::entities::{global_module_state, guild_module_config, guild_module_state};
 
 use crate::module::{ConfigField, ConfigFieldKind, ModuleRegistry};
-
-pub type Result<T> = std::result::Result<T, sea_orm::DbErr>;
+use crate::{LumiError, Result};
 
 /// One row of the Modules list: module metadata plus its resolved state.
 #[derive(Clone, Debug)]
@@ -31,26 +31,33 @@ pub struct FeatureRow {
     pub enabled: bool,
 }
 
-/// Whether a module runs in a guild. A global row that disables the module
-/// wins; otherwise the guild row wins; otherwise the module is enabled.
-pub async fn is_enabled(db: &DatabaseConnection, guild_id: u64, module: &str) -> bool {
-    let global = global_module_state::Entity::find()
+/// Resolve the effective enabled flag: a global disable wins, then the guild
+/// override, else the module is enabled.
+fn resolve_enabled(global: Option<bool>, guild: Option<bool>) -> bool {
+    global != Some(false) && guild.unwrap_or(true)
+}
+
+async fn global_enabled(db: &DatabaseConnection, module: &str) -> Option<bool> {
+    global_module_state::Entity::find()
         .filter(global_module_state::Column::ModuleName.eq(module))
         .one(db)
         .await
         .ok()
-        .flatten();
-    if matches!(global, Some(row) if !row.enabled) {
-        return false;
-    }
-    guild_module_state::Entity::find()
+        .flatten()
+        .map(|row| row.enabled)
+}
+
+/// Whether a module runs in a guild.
+pub async fn is_enabled(db: &DatabaseConnection, guild_id: u64, module: &str) -> bool {
+    let guild = guild_module_state::Entity::find()
         .filter(guild_module_state::Column::GuildId.eq(guild_id.to_string()))
         .filter(guild_module_state::Column::ModuleName.eq(module))
         .one(db)
         .await
         .ok()
         .flatten()
-        .map_or(true, |row| row.enabled)
+        .map(|row| row.enabled);
+    resolve_enabled(global_enabled(db, module).await, guild)
 }
 
 /// Persist a guild's enable/disable choice for a module.
@@ -60,31 +67,25 @@ pub async fn set_enabled(
     module: &str,
     enabled: bool,
 ) -> Result<()> {
-    let gid = guild_id.to_string();
-    let now = ChronoUtc::now().fixed_offset();
-    match guild_module_state::Entity::find()
-        .filter(guild_module_state::Column::GuildId.eq(gid.clone()))
-        .filter(guild_module_state::Column::ModuleName.eq(module))
-        .one(db)
-        .await?
-    {
-        Some(row) => {
-            let mut active: guild_module_state::ActiveModel = row.into();
-            active.enabled = Set(enabled);
-            active.updated_at = Set(now);
-            active.update(db).await?;
-        }
-        None => {
-            guild_module_state::ActiveModel {
-                guild_id: Set(gid),
-                module_name: Set(module.to_string()),
-                enabled: Set(enabled),
-                updated_at: Set(now),
-            }
-            .insert(db)
-            .await?;
-        }
-    }
+    guild_module_state::Entity::insert(guild_module_state::ActiveModel {
+        guild_id: Set(guild_id.to_string()),
+        module_name: Set(module.to_string()),
+        enabled: Set(enabled),
+        updated_at: Set(ChronoUtc::now().fixed_offset()),
+    })
+    .on_conflict(
+        OnConflict::columns([
+            guild_module_state::Column::GuildId,
+            guild_module_state::Column::ModuleName,
+        ])
+        .update_columns([
+            guild_module_state::Column::Enabled,
+            guild_module_state::Column::UpdatedAt,
+        ])
+        .to_owned(),
+    )
+    .exec(db)
+    .await?;
     Ok(())
 }
 
@@ -94,41 +95,51 @@ pub async fn list_feature_rows(
     db: &DatabaseConnection,
     guild_id: u64,
 ) -> Vec<FeatureRow> {
-    let guild_rows: HashMap<String, bool> = guild_module_state::Entity::find()
-        .filter(guild_module_state::Column::GuildId.eq(guild_id.to_string()))
-        .all(db)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|row| (row.module_name, row.enabled))
-        .collect();
-    let global_rows: HashMap<String, bool> = global_module_state::Entity::find()
-        .all(db)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|row| (row.module_name, row.enabled))
-        .collect();
+    let guild_rows = load_states(
+        guild_module_state::Entity::find()
+            .filter(guild_module_state::Column::GuildId.eq(guild_id.to_string()))
+            .all(db)
+            .await,
+        "guild module state",
+        |row| (row.module_name, row.enabled),
+    );
+    let global_rows = load_states(
+        global_module_state::Entity::find().all(db).await,
+        "global module state",
+        |row| (row.module_name, row.enabled),
+    );
 
     let mut rows: Vec<FeatureRow> = registry
         .iter()
         .map(|module| {
             let meta = module.metadata();
             let name = module.name();
-            let enabled = !matches!(global_rows.get(name), Some(false))
-                && guild_rows.get(name).copied().unwrap_or(true);
             FeatureRow {
                 name: name.to_string(),
                 display_name: meta.display_name,
                 emoji: meta.emoji,
                 description: meta.description,
                 version: meta.version,
-                enabled,
+                enabled: resolve_enabled(global_rows.get(name).copied(), guild_rows.get(name).copied()),
             }
         })
         .collect();
     rows.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
     rows
+}
+
+fn load_states<R>(
+    result: std::result::Result<Vec<R>, sea_orm::DbErr>,
+    label: &str,
+    extract: impl Fn(R) -> (String, bool),
+) -> HashMap<String, bool> {
+    match result {
+        Ok(rows) => rows.into_iter().map(extract).collect(),
+        Err(err) => {
+            tracing::warn!(error = %err, table = label, "failed to load module state; treating as unset");
+            HashMap::new()
+        }
+    }
 }
 
 /// Stored per-guild overrides for a module, keyed by config key. Keys the guild
@@ -138,15 +149,18 @@ pub async fn get_config(
     guild_id: u64,
     module: &str,
 ) -> Map<String, Value> {
-    guild_module_config::Entity::find()
+    match guild_module_config::Entity::find()
         .filter(guild_module_config::Column::GuildId.eq(guild_id.to_string()))
         .filter(guild_module_config::Column::ModuleName.eq(module))
         .all(db)
         .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|row| (row.config_key, row.value))
-        .collect()
+    {
+        Ok(rows) => rows.into_iter().map(|row| (row.config_key, row.value)).collect(),
+        Err(err) => {
+            tracing::warn!(error = %err, module, "failed to load module config; treating as unset");
+            Map::new()
+        }
+    }
 }
 
 /// A single stored config value for a guild + module, or `None` if unset.
@@ -195,34 +209,44 @@ pub async fn set_config_field(
     key: &str,
     value: Value,
 ) -> Result<()> {
-    let gid = guild_id.to_string();
-    let now = ChronoUtc::now().fixed_offset();
-    match guild_module_config::Entity::find()
-        .filter(guild_module_config::Column::GuildId.eq(gid.clone()))
-        .filter(guild_module_config::Column::ModuleName.eq(module))
-        .filter(guild_module_config::Column::ConfigKey.eq(key))
-        .one(db)
-        .await?
-    {
-        Some(row) => {
-            let mut active: guild_module_config::ActiveModel = row.into();
-            active.value = Set(value);
-            active.updated_at = Set(now);
-            active.update(db).await?;
-        }
-        None => {
-            guild_module_config::ActiveModel {
-                guild_id: Set(gid),
-                module_name: Set(module.to_string()),
-                config_key: Set(key.to_string()),
-                value: Set(value),
-                updated_at: Set(now),
-            }
-            .insert(db)
-            .await?;
-        }
-    }
+    guild_module_config::Entity::insert(guild_module_config::ActiveModel {
+        guild_id: Set(guild_id.to_string()),
+        module_name: Set(module.to_string()),
+        config_key: Set(key.to_string()),
+        value: Set(value),
+        updated_at: Set(ChronoUtc::now().fixed_offset()),
+    })
+    .on_conflict(
+        OnConflict::columns([
+            guild_module_config::Column::GuildId,
+            guild_module_config::Column::ModuleName,
+            guild_module_config::Column::ConfigKey,
+        ])
+        .update_columns([
+            guild_module_config::Column::Value,
+            guild_module_config::Column::UpdatedAt,
+        ])
+        .to_owned(),
+    )
+    .exec(db)
+    .await?;
     Ok(())
+}
+
+/// Convert raw dashboard input into the field's JSON type.
+fn coerce_value(raw: &str, kind: &ConfigFieldKind) -> Result<Value> {
+    match kind {
+        ConfigFieldKind::Boolean => Ok(Value::Bool(matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "true" | "1" | "yes"
+        ))),
+        ConfigFieldKind::Integer => raw
+            .trim()
+            .parse::<i64>()
+            .map(Value::from)
+            .map_err(|_| LumiError::Invalid(format!("'{raw}' is not an integer"))),
+        _ => Ok(Value::String(raw.to_string())),
+    }
 }
 
 /// Convert a raw select value into the field's JSON type, then store it.
@@ -234,13 +258,7 @@ pub async fn set_config_value(
     raw: &str,
     kind: &ConfigFieldKind,
 ) -> Result<()> {
-    let value = match kind {
-        ConfigFieldKind::Boolean => Value::Bool(matches!(raw, "true" | "1" | "yes")),
-        ConfigFieldKind::Integer => raw
-            .parse::<i64>()
-            .map_or_else(|_| Value::String(raw.to_string()), |n| Value::from(n)),
-        _ => Value::String(raw.to_string()),
-    };
+    let value = coerce_value(raw, kind)?;
     set_config_field(db, guild_id, module, key, value).await
 }
 
@@ -270,13 +288,7 @@ pub fn format_field_value(field: &ConfigField, value: Option<&Value>) -> String 
         ConfigFieldKind::RoleArray => {
             let ids: Vec<String> = value
                 .as_array()
-                .map(|array| {
-                    array
-                        .iter()
-                        .filter_map(parse_id)
-                        .map(|id| format!("<@&{id}>"))
-                        .collect()
-                })
+                .map(|array| array.iter().filter_map(parse_id).map(|id| format!("<@&{id}>")).collect())
                 .unwrap_or_default();
             if ids.is_empty() {
                 "-# *(not set)*".to_string()
@@ -288,12 +300,7 @@ pub fn format_field_value(field: &ConfigField, value: Option<&Value>) -> String 
         ConfigFieldKind::StringArray => {
             let items: Vec<String> = value
                 .as_array()
-                .map(|array| {
-                    array
-                        .iter()
-                        .filter_map(|item| item.as_str().map(str::to_string))
-                        .collect()
-                })
+                .map(|array| array.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
                 .unwrap_or_default();
             if items.is_empty() {
                 "-# *(not set)*".to_string()
@@ -327,10 +334,10 @@ pub fn format_field_value(field: &ConfigField, value: Option<&Value>) -> String 
 }
 
 fn id_value(value: &Value, render: impl Fn(&str) -> String) -> String {
-    value
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .map_or_else(|| "-# *(not set)*".to_string(), render)
+    parse_id(value).map_or_else(
+        || "-# *(not set)*".to_string(),
+        |id| render(&id.to_string()),
+    )
 }
 
 fn cut(text: &str, max: usize) -> String {
@@ -340,4 +347,52 @@ fn cut(text: &str, max: usize) -> String {
     let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
     out.push('\u{2026}');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn resolve_enabled_precedence() {
+        assert!(!resolve_enabled(Some(false), Some(true)), "global disable wins");
+        assert!(!resolve_enabled(None, Some(false)), "guild disable");
+        assert!(resolve_enabled(None, None), "default enabled");
+        assert!(resolve_enabled(Some(true), None));
+    }
+
+    #[test]
+    fn parse_id_accepts_number_and_string() {
+        assert_eq!(parse_id(&json!(42)), Some(42));
+        assert_eq!(parse_id(&json!("42")), Some(42));
+        assert_eq!(parse_id(&json!("nope")), None);
+    }
+
+    #[test]
+    fn coerce_value_types() {
+        assert_eq!(coerce_value("yes", &ConfigFieldKind::Boolean).ok(), Some(Value::Bool(true)));
+        assert_eq!(coerce_value("nope", &ConfigFieldKind::Boolean).ok(), Some(Value::Bool(false)));
+        assert_eq!(coerce_value(" 7 ", &ConfigFieldKind::Integer).ok(), Some(json!(7)));
+        assert!(coerce_value("7.5", &ConfigFieldKind::Integer).is_err());
+        assert_eq!(
+            coerce_value("hi", &ConfigFieldKind::String).ok(),
+            Some(Value::String("hi".into()))
+        );
+    }
+
+    #[test]
+    fn numeric_id_renders_as_mention() {
+        let field = ConfigField {
+            key: "channel".into(),
+            label: "Channel".into(),
+            description: String::new(),
+            kind: ConfigFieldKind::Channel,
+            default: Value::Null,
+            subfields: Vec::new(),
+            group: None,
+        };
+        assert_eq!(format_field_value(&field, Some(&json!(123))), "<#123>");
+        assert_eq!(format_field_value(&field, None), "-# *(not set)*");
+    }
 }

@@ -1006,15 +1006,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "croner"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c344b0690c1ad1c7176fe18eb173e0c927008fdaaa256e40dfd43ddd149c0843"
-dependencies = [
- "chrono",
-]
-
-[[package]]
 name = "crossbeam-channel"
 version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2416,18 +2407,12 @@ dependencies = [
  "anyhow",
  "apalis",
  "apalis-redis",
- "arc-swap",
- "async-trait",
  "chrono",
- "croner",
  "dashmap",
  "figment",
  "futures",
- "governor",
- "humantime",
  "lumi-db",
  "moka",
- "once_cell",
  "poise",
  "redis 0.28.2",
  "sea-orm",
