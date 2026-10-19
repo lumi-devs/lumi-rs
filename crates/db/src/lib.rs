@@ -3,8 +3,8 @@ pub mod migrations;
 
 use sea_orm::entity::prelude::ChronoUtc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use sea_orm_migration::MigratorTrait;
 
@@ -121,6 +121,16 @@ pub async fn reset_prefix(db: &DatabaseConnection, guild_id: u64) -> Result<()> 
         active.update(db).await?;
     }
     Ok(())
+}
+
+/// How many modules a guild has explicitly enabled.
+pub async fn count_enabled_modules(db: &DatabaseConnection, guild_id: u64) -> u64 {
+    entities::guild_module_state::Entity::find()
+        .filter(entities::guild_module_state::Column::GuildId.eq(guild_id.to_string()))
+        .filter(entities::guild_module_state::Column::Enabled.eq(true))
+        .count(db)
+        .await
+        .unwrap_or(0)
 }
 
 /// A guild's permits ordered by their display position.

@@ -7,7 +7,7 @@ pub mod hub;
 pub mod security;
 
 pub use general::handle_component;
-pub use hub::{handle_hub_component, handle_hub_modal};
+pub use hub::{handle_component as handle_hub_component, handle_modal as handle_hub_modal};
 
 /// Core root commands always registered by the host engine.
 pub fn core_commands() -> Vec<Command> {
