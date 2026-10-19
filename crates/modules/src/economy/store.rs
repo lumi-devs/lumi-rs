@@ -1,10 +1,8 @@
-use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hasher};
-
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    sea_query::OnConflict,
 };
 
 use lumi_db::entities::{economy_account, economy_transaction, enums::EconomyTxnKind};
@@ -13,6 +11,30 @@ use lumi_kernel::{LumiError, Result};
 use super::config::EconomyConfig;
 
 const SLOT_SYMBOLS: [&str; 5] = ["🍒", "🍋", "🔔", "💎", "🍀"];
+
+/// Which balance an admin operation targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Vault {
+    Wallet,
+    Bank,
+}
+
+impl Vault {
+    pub fn parse(value: Option<&str>) -> Option<Self> {
+        match value {
+            None | Some("wallet") => Some(Self::Wallet),
+            Some("bank") => Some(Self::Bank),
+            _ => None,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Wallet => "wallet",
+            Self::Bank => "bank",
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct SlotsOutcome {
@@ -29,6 +51,14 @@ pub struct AccountBalance {
     pub net_worth: i64,
 }
 
+fn balance(acc: &economy_account::Model) -> AccountBalance {
+    AccountBalance {
+        wallet: acc.wallet,
+        bank: acc.bank,
+        net_worth: acc.wallet.saturating_add(acc.bank),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum DailyOutcome {
     Claimed { amount: i64, wallet: i64 },
@@ -36,30 +66,110 @@ pub enum DailyOutcome {
     AtCap,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SlotsError {
+    #[error("bid must be between {min} and {max}")]
+    InvalidBid { min: i64, max: i64 },
+    #[error("insufficient wallet balance")]
+    InsufficientFunds,
+    #[error(transparent)]
+    Other(#[from] LumiError),
+}
+
+impl From<sea_orm::DbErr> for SlotsError {
+    fn from(err: sea_orm::DbErr) -> Self {
+        Self::Other(LumiError::from(err))
+    }
+}
+
+async fn find_account<C: ConnectionTrait>(
+    db: &C,
+    guild_id: u64,
+    user_id: u64,
+) -> Result<Option<economy_account::Model>> {
+    Ok(economy_account::Entity::find()
+        .filter(economy_account::Column::GuildId.eq(guild_id.to_string()))
+        .filter(economy_account::Column::UserId.eq(user_id.to_string()))
+        .one(db)
+        .await?)
+}
+
+/// Find or create the account without taking a row lock. Safe under concurrency:
+/// the insert is `ON CONFLICT DO NOTHING` followed by a read.
 pub async fn get_or_create_account<C: ConnectionTrait>(
     db: &C,
     guild_id: u64,
     user_id: u64,
     cfg: &EconomyConfig,
 ) -> Result<economy_account::Model> {
-    let existing = economy_account::Entity::find()
-        .filter(economy_account::Column::GuildId.eq(guild_id.to_string()))
-        .filter(economy_account::Column::UserId.eq(user_id.to_string()))
-        .one(db)
+    if let Some(acc) = find_account(db, guild_id, user_id).await? {
+        return Ok(acc);
+    }
+
+    let row = economy_account::ActiveModel {
+        guild_id: Set(guild_id.to_string()),
+        user_id: Set(user_id.to_string()),
+        wallet: Set(cfg.starting_wallet.min(cfg.max_balance).max(0)),
+        bank: Set(cfg.starting_bank.min(cfg.max_balance).max(0)),
+        last_payday_at: Set(None),
+    };
+    economy_account::Entity::insert(row)
+        .on_conflict(
+            OnConflict::columns([
+                economy_account::Column::GuildId,
+                economy_account::Column::UserId,
+            ])
+            .do_nothing()
+            .to_owned(),
+        )
+        .exec(db)
         .await?;
 
-    if let Some(acc) = existing {
-        Ok(acc)
-    } else {
-        let new_acc = economy_account::ActiveModel {
-            guild_id: Set(guild_id.to_string()),
-            user_id: Set(user_id.to_string()),
-            wallet: Set(cfg.starting_wallet.min(cfg.max_balance)),
-            bank: Set(cfg.starting_bank.min(cfg.max_balance)),
-            last_payday_at: Set(None),
-        };
-        Ok(new_acc.insert(db).await?)
+    find_account(db, guild_id, user_id)
+        .await?
+        .ok_or_else(|| LumiError::Other("economy account insert was lost".to_string()))
+}
+
+/// Account row locked with `SELECT … FOR UPDATE`; mutation paths must use this
+/// so concurrent transfers/claims cannot read stale balances.
+async fn locked_account<C: ConnectionTrait>(
+    db: &C,
+    guild_id: u64,
+    user_id: u64,
+    cfg: &EconomyConfig,
+) -> Result<economy_account::Model> {
+    get_or_create_account(db, guild_id, user_id, cfg).await?;
+    economy_account::Entity::find()
+        .filter(economy_account::Column::GuildId.eq(guild_id.to_string()))
+        .filter(economy_account::Column::UserId.eq(user_id.to_string()))
+        .lock_exclusive()
+        .one(db)
+        .await?
+        .ok_or_else(|| LumiError::Other("economy account disappeared".to_string()))
+}
+
+async fn log_transaction<C: ConnectionTrait>(
+    db: &C,
+    guild_id: u64,
+    user_id: u64,
+    kind: EconomyTxnKind,
+    amount: i64,
+    balance_after: i64,
+    reason: impl Into<String>,
+) -> Result<()> {
+    economy_transaction::ActiveModel {
+        guild_id: Set(guild_id.to_string()),
+        user_id: Set(user_id.to_string()),
+        kind: Set(kind),
+        amount: Set(amount),
+        balance_after: Set(balance_after),
+        reason: Set(Some(reason.into())),
+        created_at: Set(Utc::now().fixed_offset()),
+        ..Default::default()
     }
+    .insert(db)
+    .await?;
+    Ok(())
 }
 
 pub async fn get_balance(
@@ -69,11 +179,7 @@ pub async fn get_balance(
     cfg: &EconomyConfig,
 ) -> Result<AccountBalance> {
     let acc = get_or_create_account(db, guild_id, user_id, cfg).await?;
-    Ok(AccountBalance {
-        wallet: acc.wallet,
-        bank: acc.bank,
-        net_worth: acc.wallet + acc.bank,
-    })
+    Ok(balance(&acc))
 }
 
 pub async fn get_leaderboard(
@@ -82,10 +188,14 @@ pub async fn get_leaderboard(
     limit: u64,
     offset: u64,
 ) -> Result<Vec<economy_account::Model>> {
-    use sea_orm::{ExprTrait, QueryOrder, QuerySelect};
+    use sea_orm::sea_query::Expr;
     Ok(economy_account::Entity::find()
         .filter(economy_account::Column::GuildId.eq(guild_id.to_string()))
-        .order_by_desc(sea_orm::sea_query::Expr::col(economy_account::Column::Wallet).add(sea_orm::sea_query::Expr::col(economy_account::Column::Bank)))
+        .order_by_desc(sea_orm::ExprTrait::add(
+            Expr::col(economy_account::Column::Wallet),
+            Expr::col(economy_account::Column::Bank),
+        ))
+        .order_by_asc(economy_account::Column::UserId)
         .limit(limit)
         .offset(offset)
         .all(db)
@@ -94,7 +204,6 @@ pub async fn get_leaderboard(
 
 /// Count of economy accounts on the server (for leaderboard pagination).
 pub async fn count_accounts(db: &DatabaseConnection, guild_id: u64) -> Result<u64> {
-    use sea_orm::PaginatorTrait;
     Ok(economy_account::Entity::find()
         .filter(economy_account::Column::GuildId.eq(guild_id.to_string()))
         .count(db)
@@ -108,11 +217,11 @@ pub async fn claim_daily(
     cfg: &EconomyConfig,
 ) -> Result<DailyOutcome> {
     let txn = db.begin().await?;
-    let acc = get_or_create_account(&txn, guild_id, user_id, cfg).await?;
+    let acc = locked_account(&txn, guild_id, user_id, cfg).await?;
 
     if let Some(last) = acc.last_payday_at {
         let elapsed = (Utc::now().fixed_offset() - last).num_seconds();
-        let remaining = cfg.payday_cooldown_seconds - elapsed;
+        let remaining = cfg.payday_cooldown_seconds.saturating_sub(elapsed);
         if remaining > 0 {
             return Ok(DailyOutcome::OnCooldown {
                 remaining_seconds: remaining,
@@ -125,24 +234,23 @@ pub async fn claim_daily(
     }
 
     let amount = cfg.payday_amount.min(cfg.max_balance - acc.wallet);
-    let new_wallet = acc.wallet + amount;
+    let new_wallet = acc.wallet.saturating_add(amount);
 
     let mut active: economy_account::ActiveModel = acc.into();
     active.wallet = Set(new_wallet);
     active.last_payday_at = Set(Some(Utc::now().fixed_offset()));
     active.update(&txn).await?;
 
-    let log = economy_transaction::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        user_id: Set(user_id.to_string()),
-        kind: Set(EconomyTxnKind::Payday),
-        amount: Set(amount),
-        balance_after: Set(new_wallet),
-        reason: Set(Some("Daily allowance".to_string())),
-        created_at: Set(Utc::now().fixed_offset()),
-        ..Default::default()
-    };
-    log.insert(&txn).await?;
+    log_transaction(
+        &txn,
+        guild_id,
+        user_id,
+        EconomyTxnKind::Payday,
+        amount,
+        new_wallet,
+        "Daily allowance",
+    )
+    .await?;
 
     txn.commit().await?;
     Ok(DailyOutcome::Claimed {
@@ -155,43 +263,44 @@ pub async fn admin_set_balance(
     db: &DatabaseConnection,
     guild_id: u64,
     user_id: u64,
-    vault: &str,
+    vault: Vault,
     amount: i64,
     cfg: &EconomyConfig,
 ) -> Result<AccountBalance> {
     let txn = db.begin().await?;
-    let acc = get_or_create_account(&txn, guild_id, user_id, cfg).await?;
-    let amount = amount.min(cfg.max_balance);
+    let acc = locked_account(&txn, guild_id, user_id, cfg).await?;
+    let amount = amount.clamp(0, cfg.max_balance);
 
-    let (new_wallet, new_bank) = if vault == "bank" {
-        (acc.wallet, amount)
-    } else {
-        (amount, acc.bank)
+    let (new_wallet, new_bank) = match vault {
+        Vault::Bank => (acc.wallet, amount),
+        Vault::Wallet => (amount, acc.bank),
     };
-    let delta = (new_wallet + new_bank) - (acc.wallet + acc.bank);
+    let delta = new_wallet
+        .saturating_add(new_bank)
+        .saturating_sub(acc.wallet.saturating_add(acc.bank));
+    let after = new_wallet.saturating_add(new_bank);
 
     let mut active: economy_account::ActiveModel = acc.into();
     active.wallet = Set(new_wallet);
     active.bank = Set(new_bank);
     active.update(&txn).await?;
 
-    let log = economy_transaction::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        user_id: Set(user_id.to_string()),
-        kind: Set(EconomyTxnKind::AdminSet),
-        amount: Set(delta),
-        balance_after: Set(new_wallet + new_bank),
-        reason: Set(Some(format!("Admin set {vault} to {amount}"))),
-        created_at: Set(Utc::now().fixed_offset()),
-        ..Default::default()
-    };
-    log.insert(&txn).await?;
+    log_transaction(
+        &txn,
+        guild_id,
+        user_id,
+        EconomyTxnKind::AdminSet,
+        delta,
+        after,
+        format!("Admin set {} to {amount}", vault.label()),
+    )
+    .await?;
 
     txn.commit().await?;
     Ok(AccountBalance {
         wallet: new_wallet,
         bank: new_bank,
-        net_worth: new_wallet + new_bank,
+        net_worth: after,
     })
 }
 
@@ -199,19 +308,27 @@ pub async fn admin_adjust_balance(
     db: &DatabaseConnection,
     guild_id: u64,
     user_id: u64,
-    vault: &str,
+    vault: Vault,
     delta: i64,
     cfg: &EconomyConfig,
 ) -> Result<AccountBalance> {
     let txn = db.begin().await?;
-    let acc = get_or_create_account(&txn, guild_id, user_id, cfg).await?;
+    let acc = locked_account(&txn, guild_id, user_id, cfg).await?;
 
-    let (new_wallet, new_bank) = if vault == "bank" {
-        (acc.wallet, (acc.bank + delta).clamp(0, cfg.max_balance))
-    } else {
-        ((acc.wallet + delta).clamp(0, cfg.max_balance), acc.bank)
+    let (new_wallet, new_bank) = match vault {
+        Vault::Bank => (
+            acc.wallet,
+            acc.bank.saturating_add(delta).clamp(0, cfg.max_balance),
+        ),
+        Vault::Wallet => (
+            acc.wallet.saturating_add(delta).clamp(0, cfg.max_balance),
+            acc.bank,
+        ),
     };
-    let actual_delta = (new_wallet + new_bank) - (acc.wallet + acc.bank);
+    let actual_delta = new_wallet
+        .saturating_add(new_bank)
+        .saturating_sub(acc.wallet.saturating_add(acc.bank));
+    let after = new_wallet.saturating_add(new_bank);
     let kind = if delta >= 0 {
         EconomyTxnKind::AdminAdd
     } else {
@@ -223,23 +340,22 @@ pub async fn admin_adjust_balance(
     active.bank = Set(new_bank);
     active.update(&txn).await?;
 
-    let log = economy_transaction::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        user_id: Set(user_id.to_string()),
-        kind: Set(kind),
-        amount: Set(actual_delta),
-        balance_after: Set(new_wallet + new_bank),
-        reason: Set(Some(format!("Admin adjust {vault} by {delta}"))),
-        created_at: Set(Utc::now().fixed_offset()),
-        ..Default::default()
-    };
-    log.insert(&txn).await?;
+    log_transaction(
+        &txn,
+        guild_id,
+        user_id,
+        kind,
+        actual_delta,
+        after,
+        format!("Admin adjust {} by {delta}", vault.label()),
+    )
+    .await?;
 
     txn.commit().await?;
     Ok(AccountBalance {
         wallet: new_wallet,
         bank: new_bank,
-        net_worth: new_wallet + new_bank,
+        net_worth: after,
     })
 }
 
@@ -249,81 +365,75 @@ pub async fn play_slots(
     user_id: u64,
     bid: i64,
     cfg: &EconomyConfig,
-) -> Result<SlotsOutcome> {
-    if bid < cfg.slot_min_bid || bid > cfg.slot_max_bid {
-        return Err(LumiError::Other(format!(
-            "Bid must be between {} and {}",
-            cfg.slot_min_bid, cfg.slot_max_bid
-        )));
+) -> std::result::Result<SlotsOutcome, SlotsError> {
+    if bid < cfg.slot_min_bid || bid > cfg.slot_max_bid || bid <= 0 {
+        return Err(SlotsError::InvalidBid {
+            min: cfg.slot_min_bid,
+            max: cfg.slot_max_bid,
+        });
     }
 
     let txn = db.begin().await?;
-    let acc = get_or_create_account(&txn, guild_id, user_id, cfg).await?;
-
-    if bid <= 0 || acc.wallet < bid {
-        return Err(LumiError::Other("Insufficient wallet balance".to_string()));
+    let acc = locked_account(&txn, guild_id, user_id, cfg).await?;
+    if acc.wallet < bid {
+        return Err(SlotsError::InsufficientFunds);
     }
 
     let symbols = spin_symbols();
-    let multiplier = if symbols[0] == symbols[1] && symbols[1] == symbols[2] {
-        cfg.slot_payout_triple
-    } else if symbols[0] == symbols[1] || symbols[1] == symbols[2] || symbols[0] == symbols[2] {
-        cfg.slot_payout_pair
-    } else {
-        0
+    let multiplier = match &symbols {
+        [a, b, c] if a == b && b == c => cfg.slot_payout_triple,
+        [a, b, c] if a == b || b == c || a == c => cfg.slot_payout_pair,
+        _ => 0,
     };
-    let payout = bid * multiplier;
+    let payout = bid.saturating_mul(multiplier).max(0);
     let after_bid = acc.wallet - bid;
-    let new_wallet = (after_bid + payout).min(cfg.max_balance);
+    let new_wallet = after_bid
+        .saturating_add(payout)
+        .min(cfg.max_balance);
 
     let mut active: economy_account::ActiveModel = acc.into();
     active.wallet = Set(new_wallet);
     active.update(&txn).await?;
 
-    let reason = Some(format!("Slot machine [{}]", symbols.join(" ")));
-    let bid_log = economy_transaction::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        user_id: Set(user_id.to_string()),
-        kind: Set(EconomyTxnKind::SlotsBid),
-        amount: Set(-bid),
-        balance_after: Set(after_bid),
-        reason: Set(reason.clone()),
-        created_at: Set(Utc::now().fixed_offset()),
-        ..Default::default()
-    };
-    bid_log.insert(&txn).await?;
-
+    let reason = format!("Slot machine [{}]", symbols.join(" "));
+    log_transaction(
+        &txn,
+        guild_id,
+        user_id,
+        EconomyTxnKind::SlotsBid,
+        -bid,
+        after_bid,
+        reason.clone(),
+    )
+    .await?;
     if payout > 0 {
-        let win_log = economy_transaction::ActiveModel {
-            guild_id: Set(guild_id.to_string()),
-            user_id: Set(user_id.to_string()),
-            kind: Set(EconomyTxnKind::SlotsWin),
-            amount: Set(payout),
-            balance_after: Set(new_wallet),
-            reason: Set(reason),
-            created_at: Set(Utc::now().fixed_offset()),
-            ..Default::default()
-        };
-        win_log.insert(&txn).await?;
+        log_transaction(
+            &txn,
+            guild_id,
+            user_id,
+            EconomyTxnKind::SlotsWin,
+            payout,
+            new_wallet,
+            reason,
+        )
+        .await?;
     }
 
     txn.commit().await?;
     Ok(SlotsOutcome {
         symbols,
         payout,
-        net: payout - bid,
+        net: payout.saturating_sub(bid),
         new_wallet,
     })
 }
 
+/// Symbols from UUIDv4 bytes (already a dependency); unbiased enough for reels
+/// and avoids the process-wide hasher used previously.
 fn spin_symbols() -> [String; 3] {
-    let mut hasher = RandomState::new().build_hasher();
-    let mut out: [String; 3] = Default::default();
-    for (i, slot) in out.iter_mut().enumerate() {
-        hasher.write_u64(i as u64);
-        *slot = SLOT_SYMBOLS[(hasher.finish() as usize) % SLOT_SYMBOLS.len()].to_string();
-    }
-    out
+    let bytes = uuid::Uuid::new_v4();
+    let bytes = bytes.as_bytes();
+    std::array::from_fn(|i| SLOT_SYMBOLS[usize::from(bytes[i]) % SLOT_SYMBOLS.len()].to_string())
 }
 
 pub async fn transfer(
@@ -336,18 +446,30 @@ pub async fn transfer(
 ) -> Result<Option<i64>> {
     let txn = db.begin().await?;
 
-    let sender = get_or_create_account(&txn, guild_id, sender_id, cfg).await?;
+    // Lock both rows in a deterministic order so A→B and B→A cannot deadlock.
+    let (first, second) = if sender_id <= recipient_id {
+        (sender_id, recipient_id)
+    } else {
+        (recipient_id, sender_id)
+    };
+    let first_acc = locked_account(&txn, guild_id, first, cfg).await?;
+    let second_acc = locked_account(&txn, guild_id, second, cfg).await?;
+    let (sender, recipient) = if first == sender_id {
+        (first_acc, second_acc)
+    } else {
+        (second_acc, first_acc)
+    };
+
     if sender.wallet < amount {
         return Ok(None);
     }
 
-    let recipient = get_or_create_account(&txn, guild_id, recipient_id, cfg).await?;
-
     let tax = cfg.transfer_tax(amount);
-    let credited = (amount - tax).min((cfg.max_balance - recipient.wallet).max(0));
+    let room = cfg.max_balance.saturating_sub(recipient.wallet).max(0);
+    let credited = amount.saturating_sub(tax).min(room);
 
     let sender_new = sender.wallet - amount;
-    let recipient_new = recipient.wallet + credited;
+    let recipient_new = recipient.wallet.saturating_add(credited);
 
     let mut sender_act: economy_account::ActiveModel = sender.into();
     sender_act.wallet = Set(sender_new);
@@ -357,17 +479,26 @@ pub async fn transfer(
     recipient_act.wallet = Set(recipient_new);
     recipient_act.update(&txn).await?;
 
-    let log = economy_transaction::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        user_id: Set(sender_id.to_string()),
-        kind: Set(EconomyTxnKind::TransferOut),
-        amount: Set(-amount),
-        balance_after: Set(sender_new),
-        reason: Set(Some(format!("Transfer to {recipient_id}"))),
-        created_at: Set(Utc::now().fixed_offset()),
-        ..Default::default()
-    };
-    log.insert(&txn).await?;
+    log_transaction(
+        &txn,
+        guild_id,
+        sender_id,
+        EconomyTxnKind::TransferOut,
+        -amount,
+        sender_new,
+        format!("Transfer to {recipient_id}"),
+    )
+    .await?;
+    log_transaction(
+        &txn,
+        guild_id,
+        recipient_id,
+        EconomyTxnKind::TransferIn,
+        credited,
+        recipient_new,
+        format!("Transfer from {sender_id}"),
+    )
+    .await?;
 
     txn.commit().await?;
     Ok(Some(sender_new))
@@ -381,31 +512,34 @@ pub async fn deposit(
     cfg: &EconomyConfig,
 ) -> Result<Option<(i64, i64)>> {
     let txn = db.begin().await?;
-    let acc = get_or_create_account(&txn, guild_id, user_id, cfg).await?;
+    let acc = locked_account(&txn, guild_id, user_id, cfg).await?;
 
-    if acc.wallet < amount || amount <= 0 {
+    let moved = amount
+        .min(acc.wallet)
+        .min(cfg.max_balance.saturating_sub(acc.bank))
+        .max(0);
+    if moved <= 0 {
         return Ok(None);
     }
 
-    let new_wallet = acc.wallet - amount;
-    let new_bank = (acc.bank + amount).min(cfg.max_balance);
+    let new_wallet = acc.wallet - moved;
+    let new_bank = acc.bank.saturating_add(moved);
 
     let mut active: economy_account::ActiveModel = acc.into();
     active.wallet = Set(new_wallet);
     active.bank = Set(new_bank);
     active.update(&txn).await?;
 
-    let log = economy_transaction::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        user_id: Set(user_id.to_string()),
-        kind: Set(EconomyTxnKind::TransferOut),
-        amount: Set(-amount),
-        balance_after: Set(new_wallet),
-        reason: Set(Some("Bank deposit".to_string())),
-        created_at: Set(Utc::now().fixed_offset()),
-        ..Default::default()
-    };
-    log.insert(&txn).await?;
+    log_transaction(
+        &txn,
+        guild_id,
+        user_id,
+        EconomyTxnKind::TransferOut,
+        -moved,
+        new_wallet,
+        "Bank deposit",
+    )
+    .await?;
 
     txn.commit().await?;
     Ok(Some((new_wallet, new_bank)))
@@ -419,32 +553,48 @@ pub async fn withdraw(
     cfg: &EconomyConfig,
 ) -> Result<Option<(i64, i64)>> {
     let txn = db.begin().await?;
-    let acc = get_or_create_account(&txn, guild_id, user_id, cfg).await?;
+    let acc = locked_account(&txn, guild_id, user_id, cfg).await?;
 
-    if acc.bank < amount || amount <= 0 {
+    let moved = amount
+        .min(acc.bank)
+        .min(cfg.max_balance.saturating_sub(acc.wallet))
+        .max(0);
+    if moved <= 0 {
         return Ok(None);
     }
 
-    let new_wallet = (acc.wallet + amount).min(cfg.max_balance);
-    let new_bank = acc.bank - amount;
+    let new_wallet = acc.wallet.saturating_add(moved);
+    let new_bank = acc.bank - moved;
 
     let mut active: economy_account::ActiveModel = acc.into();
     active.wallet = Set(new_wallet);
     active.bank = Set(new_bank);
     active.update(&txn).await?;
 
-    let log = economy_transaction::ActiveModel {
-        guild_id: Set(guild_id.to_string()),
-        user_id: Set(user_id.to_string()),
-        kind: Set(EconomyTxnKind::TransferIn),
-        amount: Set(amount),
-        balance_after: Set(new_wallet),
-        reason: Set(Some("Bank withdrawal".to_string())),
-        created_at: Set(Utc::now().fixed_offset()),
-        ..Default::default()
-    };
-    log.insert(&txn).await?;
+    log_transaction(
+        &txn,
+        guild_id,
+        user_id,
+        EconomyTxnKind::TransferIn,
+        moved,
+        new_wallet,
+        "Bank withdrawal",
+    )
+    .await?;
 
     txn.commit().await?;
     Ok(Some((new_wallet, new_bank)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Vault;
+
+    #[test]
+    fn parses_vault() {
+        assert_eq!(Vault::parse(None), Some(Vault::Wallet));
+        assert_eq!(Vault::parse(Some("wallet")), Some(Vault::Wallet));
+        assert_eq!(Vault::parse(Some("bank")), Some(Vault::Bank));
+        assert_eq!(Vault::parse(Some("other")), None);
+    }
 }

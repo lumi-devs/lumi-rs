@@ -8,8 +8,12 @@ use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::panels::pagination_row;
 use lumi_ui::{Card, CardKind, CardReply};
 
+use crate::shared::{
+    claim_cooldown, cooldown_key, format_seconds, page_bounds, require_guild, secs_ceil,
+};
+
 use super::config::EconomyConfig;
-use super::store::{self, DailyOutcome};
+use super::store::{self, DailyOutcome, SlotsError, Vault};
 
 const LEADERBOARD_PER_PAGE: u64 = 10;
 
@@ -20,7 +24,7 @@ pub async fn balance(
     #[description = "Target user"] user: Option<UserId>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let guild_id = require_guild(ctx)?.get();
     let target_id = user.unwrap_or_else(|| ctx.author().id);
 
     let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
@@ -43,7 +47,7 @@ pub async fn balance(
 #[poise::command(slash_command, prefix_command, guild_only, aliases("payday"))]
 pub async fn daily(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let guild_id = require_guild(ctx)?.get();
     let user_id = ctx.author().id.get();
 
     let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
@@ -61,7 +65,7 @@ pub async fn daily(ctx: Context<'_>) -> Result<(), Error> {
             "⏳ Already Claimed",
             format!(
                 "You can claim again in **{}**.",
-                format_duration(remaining_seconds)
+                format_seconds(remaining_seconds)
             ),
         )
         .kind(CardKind::Warning),
@@ -87,7 +91,7 @@ pub async fn pay(
     #[description = "Amount to send"] amount: i64,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let guild_id = require_guild(ctx)?.get();
     let sender_id = ctx.author().id.get();
     let recipient_id = user.get();
 
@@ -106,7 +110,8 @@ pub async fn pay(
     }
 
     let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
-    let result = store::transfer(&ctx.data().db, guild_id, sender_id, recipient_id, amount, &cfg).await?;
+    let result =
+        store::transfer(&ctx.data().db, guild_id, sender_id, recipient_id, amount, &cfg).await?;
 
     match result {
         Some(remaining) => {
@@ -128,8 +133,11 @@ pub async fn pay(
             ctx.send(card.into_reply().reply()).await?;
         }
         None => {
-            let card = Card::new("❌ Insufficient Funds", "You do not have enough funds in your wallet for this transfer.")
-                .kind(CardKind::Error);
+            let card = Card::new(
+                "❌ Insufficient Funds",
+                "You do not have enough funds in your wallet for this transfer.",
+            )
+            .kind(CardKind::Error);
             ctx.send(card.into_reply().reply()).await?;
         }
     }
@@ -161,11 +169,12 @@ pub async fn deposit_cmd(
     #[description = "Amount to deposit"] amount: i64,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let guild_id = require_guild(ctx)?.get();
     let user_id = ctx.author().id.get();
 
     if amount <= 0 {
-        let card = Card::new("❌ Invalid Amount", "Deposit amount must be greater than zero.").kind(CardKind::Error);
+        let card = Card::new("❌ Invalid Amount", "Deposit amount must be greater than zero.")
+            .kind(CardKind::Error);
         ctx.send(card.into_reply().reply()).await?;
         return Ok(());
     }
@@ -183,11 +192,16 @@ pub async fn deposit_cmd(
                     cfg.bank_name,
                     cfg.format_amount(bank)
                 ),
-            ).kind(CardKind::Success);
+            )
+            .kind(CardKind::Success);
             ctx.send(card.into_reply().reply()).await?;
         }
         None => {
-            let card = Card::new("❌ Insufficient Funds", "You do not have enough funds in your wallet.").kind(CardKind::Error);
+            let card = Card::new(
+                "❌ Deposit Failed",
+                "You do not have enough wallet funds, or the bank is already at its cap.",
+            )
+            .kind(CardKind::Error);
             ctx.send(card.into_reply().reply()).await?;
         }
     }
@@ -201,11 +215,15 @@ pub async fn withdraw_cmd(
     #[description = "Amount to withdraw"] amount: i64,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let guild_id = require_guild(ctx)?.get();
     let user_id = ctx.author().id.get();
 
     if amount <= 0 {
-        let card = Card::new("❌ Invalid Amount", "Withdrawal amount must be greater than zero.").kind(CardKind::Error);
+        let card = Card::new(
+            "❌ Invalid Amount",
+            "Withdrawal amount must be greater than zero.",
+        )
+        .kind(CardKind::Error);
         ctx.send(card.into_reply().reply()).await?;
         return Ok(());
     }
@@ -222,11 +240,16 @@ pub async fn withdraw_cmd(
                     cfg.bank_name,
                     cfg.format_amount(bank)
                 ),
-            ).kind(CardKind::Success);
+            )
+            .kind(CardKind::Success);
             ctx.send(card.into_reply().reply()).await?;
         }
         None => {
-            let card = Card::new("❌ Insufficient Funds", "You do not have enough funds in your bank.").kind(CardKind::Error);
+            let card = Card::new(
+                "❌ Withdrawal Failed",
+                "You do not have enough bank funds, or your wallet is already at its cap.",
+            )
+            .kind(CardKind::Error);
             ctx.send(card.into_reply().reply()).await?;
         }
     }
@@ -239,14 +262,6 @@ enum AdminOp {
     Remove,
 }
 
-fn parse_vault(vault: &Option<String>) -> Option<&'static str> {
-    match vault.as_deref() {
-        None | Some("wallet") => Some("wallet"),
-        Some("bank") => Some("bank"),
-        _ => None,
-    }
-}
-
 async fn admin_adjust(
     ctx: Context<'_>,
     op: AdminOp,
@@ -256,7 +271,7 @@ async fn admin_adjust(
     reason: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let guild_id = require_guild(ctx)?.get();
     let target_id = user.get();
 
     let invalid_amount = match op {
@@ -273,7 +288,7 @@ async fn admin_adjust(
         return Ok(());
     }
 
-    let Some(vault) = parse_vault(&vault) else {
+    let Some(vault) = Vault::parse(vault.as_deref()) else {
         let card = Card::new("❌ Invalid Vault", "Vault must be either `wallet` or `bank`.")
             .kind(CardKind::Error);
         ctx.send(card.into_reply().reply()).await?;
@@ -284,9 +299,18 @@ async fn admin_adjust(
 
     let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
     let balance = match op {
-        AdminOp::Set => store::admin_set_balance(&ctx.data().db, guild_id, target_id, vault, amount, &cfg).await?,
-        AdminOp::Add => store::admin_adjust_balance(&ctx.data().db, guild_id, target_id, vault, amount, &cfg).await?,
-        AdminOp::Remove => store::admin_adjust_balance(&ctx.data().db, guild_id, target_id, vault, -amount, &cfg).await?,
+        AdminOp::Set => {
+            store::admin_set_balance(&ctx.data().db, guild_id, target_id, vault, amount, &cfg)
+                .await?
+        }
+        AdminOp::Add => {
+            store::admin_adjust_balance(&ctx.data().db, guild_id, target_id, vault, amount, &cfg)
+                .await?
+        }
+        AdminOp::Remove => {
+            store::admin_adjust_balance(&ctx.data().db, guild_id, target_id, vault, -amount, &cfg)
+                .await?
+        }
     };
 
     let (title, verb) = match op {
@@ -298,7 +322,11 @@ async fn admin_adjust(
     let card = Card::lines(
         title,
         vec![
-            format!("{verb} **{}** in <@{target_id}>'s {vault}.", cfg.format_amount(amount)),
+            format!(
+                "{verb} **{}** in <@{target_id}>'s {}.",
+                cfg.format_amount(amount),
+                vault.label()
+            ),
             format!("Reason: {reason}"),
             format!("**New total**: **{}**", cfg.format_amount(balance.net_worth)),
         ],
@@ -370,7 +398,7 @@ pub async fn slots(
     #[description = "How much to bet"] bid: i64,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let guild_id = require_guild(ctx)?.get();
     let user_id = ctx.author().id.get();
 
     let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
@@ -389,17 +417,16 @@ pub async fn slots(
         return Ok(());
     }
 
-    let key = format!("lumi:econ:slots:{guild_id}:{user_id}");
-    if !ctx
-        .data()
-        .cache
-        .claim_cooldown(&key, (cfg.slot_cooldown_seconds * 1000) as u64)
-        .await?
+    let key = cooldown_key("econ:slots", guild_id, user_id);
+    if let Some(remaining) =
+        claim_cooldown(&ctx.data().cache, &key, cfg.cooldown_ms(cfg.slot_cooldown_seconds)).await?
     {
-        let remaining = ctx.data().cache.cooldown_remaining_ms(&key).await?;
         let card = Card::new(
             "⏳ Slow Down",
-            format!("The reels are still spinning. Try again in **{:.1}s**.", remaining as f64 / 1000.0),
+            format!(
+                "The reels are still spinning. Try again in **{}**.",
+                format_seconds(secs_ceil(remaining))
+            ),
         )
         .kind(CardKind::Warning);
         ctx.send(card.into_reply().reply()).await?;
@@ -428,7 +455,7 @@ pub async fn slots(
             .kind(kind);
             ctx.send(card.into_reply().reply()).await?;
         }
-        Err(err) if err.to_string().contains("Insufficient") => {
+        Err(SlotsError::InsufficientFunds) => {
             let card = Card::new(
                 "❌ Insufficient Funds",
                 "You do not have enough funds in your wallet for that bet.",
@@ -436,7 +463,19 @@ pub async fn slots(
             .kind(CardKind::Error);
             ctx.send(card.into_reply().reply()).await?;
         }
-        Err(err) => return Err(err.into()),
+        Err(SlotsError::InvalidBid { min, max }) => {
+            let card = Card::new(
+                "❌ Invalid Bid",
+                format!(
+                    "Bid must be between **{}** and **{}**.",
+                    cfg.format_amount(min),
+                    cfg.format_amount(max)
+                ),
+            )
+            .kind(CardKind::Error);
+            ctx.send(card.into_reply().reply()).await?;
+        }
+        Err(SlotsError::Other(err)) => return Err(err.into()),
     }
 
     Ok(())
@@ -446,7 +485,7 @@ pub async fn slots(
 #[poise::command(slash_command, prefix_command, guild_only, aliases("lb", "top"))]
 pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+    let guild_id = require_guild(ctx)?.get();
     let guild_name = ctx
         .guild()
         .map_or_else(|| "this server".to_string(), |g| g.name.to_string());
@@ -463,11 +502,11 @@ pub async fn handle_component(
     services: &lumi_kernel::Services,
     interaction: &ComponentInteraction,
 ) -> Result<(), Error> {
-    let parts: Vec<&str> = interaction.data.custom_id.split(':').collect();
-    if parts.len() != 3 || parts[0] != "econ" || parts[1] != "lb" {
+    let mut parts = interaction.data.custom_id.split(':');
+    if parts.next() != Some("econ") || parts.next() != Some("lb") {
         return Ok(());
     }
-    let Ok(page) = parts[2].parse::<usize>() else {
+    let Some(page) = parts.next().and_then(|p| p.parse::<usize>().ok()) else {
         return Ok(());
     };
     let Some(guild_id) = interaction.guild_id else {
@@ -514,9 +553,7 @@ async fn leaderboard_reply(
         return Ok(card.into_reply());
     }
 
-    let total_pages = total.div_ceil(LEADERBOARD_PER_PAGE).max(1) as usize;
-    let page = page.min(total_pages - 1);
-    let offset = page as u64 * LEADERBOARD_PER_PAGE;
+    let (page, total_pages, offset) = page_bounds(total, LEADERBOARD_PER_PAGE, page);
 
     let cfg = EconomyConfig::load(db, guild_id).await?;
     let entries = store::get_leaderboard(db, guild_id, LEADERBOARD_PER_PAGE, offset).await?;
@@ -524,9 +561,13 @@ async fn leaderboard_reply(
     let caller = caller_id.to_string();
     let mut lines = Vec::new();
     for (idx, entry) in entries.iter().enumerate() {
-        let rank = offset as usize + idx + 1;
-        let total_amount = entry.wallet + entry.bank;
-        let marker = if entry.user_id == caller { " **← you**" } else { "" };
+        let rank = usize::try_from(offset).unwrap_or(usize::MAX) + idx + 1;
+        let total_amount = entry.wallet.saturating_add(entry.bank);
+        let marker = if entry.user_id == caller {
+            " **← you**"
+        } else {
+            ""
+        };
         lines.push(format!(
             "**#{rank}** <@{}> - {}{marker}",
             entry.user_id,
@@ -536,25 +577,14 @@ async fn leaderboard_reply(
 
     let mut opts = lumi_ui::CardOptions::default();
     opts.footer = Some(format!("Page {} of {total_pages}", page + 1));
-    opts.action_rows = pagination_row("econ:lb", page, total_pages).into_iter().collect();
+    opts.action_rows = pagination_row("econ:lb", page, total_pages)
+        .into_iter()
+        .collect();
 
     Ok(Card::lines(format!("🏆 Richest in {guild_name}"), lines)
         .kind(CardKind::Gold)
         .options(opts)
         .into_reply())
-}
-
-fn format_duration(seconds: i64) -> String {
-    let seconds = seconds.max(0);
-    let (h, m) = (seconds / 3600, (seconds % 3600) / 60);
-    let s = seconds % 60;
-    if h > 0 {
-        format!("{h}h {m}m")
-    } else if m > 0 {
-        format!("{m}m {s}s")
-    } else {
-        format!("{s}s")
-    }
 }
 
 pub fn commands() -> Vec<Command> {
