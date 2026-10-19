@@ -1,62 +1,174 @@
 use poise::serenity_prelude as serenity;
 use serenity::all::{
-    ChannelType, CreateButton, EditMember, GetMessages, Message, MessageId, Permissions, UserId,
+    ButtonStyle, ChannelType, ComponentInteraction, CreateButton, CreateInteractionResponse,
+    CreateInteractionResponseMessage, CreateMediaGallery, CreateMediaGalleryItem,
+    CreateUnfurledMediaItem, EditMember, GetMessages, Message, MessageFlags, MessageId,
+    Permissions, User, UserId,
 };
 
 use lumi_kernel::bot::{Command, Context, Error};
+use lumi_kernel::module_state;
 use lumi_ui::panels::action_row_of;
 use lumi_ui::{Card, CardKind, CardOptions};
 
+use super::store;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MediaType {
+    Avatar,
+    Banner,
+}
+
+impl MediaType {
+    const fn label(self) -> &'static str {
+        match self {
+            MediaType::Avatar => "Avatar",
+            MediaType::Banner => "Banner",
+        }
+    }
+
+    const fn key(self) -> &'static str {
+        match self {
+            MediaType::Avatar => "avatar",
+            MediaType::Banner => "banner",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "avatar" => Some(MediaType::Avatar),
+            "banner" => Some(MediaType::Banner),
+            _ => None,
+        }
+    }
+
+    fn url(self, user: &User) -> Option<String> {
+        match self {
+            MediaType::Avatar => user.avatar_url(),
+            MediaType::Banner => user.banner_url(),
+        }
+    }
+}
+
+fn gallery(url: String) -> CreateMediaGallery<'static> {
+    CreateMediaGallery::new(vec![CreateMediaGalleryItem::new(
+        CreateUnfurledMediaItem::new(url),
+    )])
+}
+
+fn build_media_card(user: &User, kind: MediaType, show_media: bool, ephemeral: bool) -> Card {
+    let url = kind.url(user);
+    let mut buttons = Vec::new();
+    let mut opts = CardOptions::default();
+    opts.thumbnail_url = url.clone();
+
+    if let Some(u) = &url {
+        if show_media {
+            opts.media_gallery = Some(gallery(u.clone()));
+            buttons.push(
+                CreateButton::new_link(u.clone()).label(format!("Open {}", kind.label())),
+            );
+        } else {
+            buttons.push(
+                CreateButton::new(format!("media:view:{}:{}", kind.key(), user.id))
+                    .style(ButtonStyle::Primary)
+                    .label(format!("View {}", kind.label())),
+            );
+        }
+    }
+    if !buttons.is_empty() {
+        opts.action_rows = vec![action_row_of(buttons)];
+    }
+
+    let display = user.global_name.as_deref().unwrap_or(&user.name);
+    let mut card = Card::lines(format!("🖼️ {} — {}", kind.label(), display), vec![])
+        .kind(CardKind::Info)
+        .options(opts);
+    if ephemeral {
+        card = card.ephemeral();
+    }
+    card
+}
+
 /// Fetch and display avatar of a user or yourself.
-#[poise::command(slash_command, prefix_command)]
+#[poise::command(slash_command, prefix_command, guild_only, aliases("av"))]
 pub async fn avatar(
     ctx: Context<'_>,
     #[description = "User to inspect"] user: Option<UserId>,
 ) -> Result<(), Error> {
-    ctx.defer().await?;
-    let target_id = user.unwrap_or_else(|| ctx.author().id);
-    let target_user = target_id.to_user(ctx.http()).await?;
-
-    let avatar_url = target_user.face();
-    let title = format!("🖼️ Avatar for {}", target_user.name);
-
-    let mut opts = CardOptions::default();
-    opts.thumbnail_url = Some(avatar_url.clone());
-
-    let card = Card::lines(title, vec![format!("[Direct Image Link]({avatar_url})")])
-        .kind(CardKind::Info)
-        .options(opts);
-
-    ctx.send(card.into_reply().reply()).await?;
-    Ok(())
+    media_request(ctx, user, MediaType::Avatar).await
 }
 
 /// Fetch and display banner of a user or yourself.
-#[poise::command(slash_command, prefix_command, aliases("b"))]
+#[poise::command(slash_command, prefix_command, guild_only, aliases("b"))]
 pub async fn banner(
     ctx: Context<'_>,
     #[description = "User to inspect"] user: Option<UserId>,
 ) -> Result<(), Error> {
-    ctx.defer().await?;
-    let target_id = user.unwrap_or_else(|| ctx.author().id);
-    let target_user = ctx.http().get_user(target_id).await?;
+    media_request(ctx, user, MediaType::Banner).await
+}
 
-    let card = if let Some(banner_url) = target_user.banner_url() {
-        let title = format!("🖼️ Banner for {}", target_user.name);
-        let mut opts = CardOptions::default();
-        opts.thumbnail_url = Some(banner_url.clone());
-        Card::lines(title, vec![format!("[Direct Image Link]({banner_url})")])
-            .kind(CardKind::Info)
-            .options(opts)
-    } else {
-        Card::lines(
-            "🖼️ No Banner",
-            vec![format!("<@{target_id}> has no banner set.")],
-        )
-        .kind(CardKind::Info)
+async fn media_request(
+    ctx: Context<'_>,
+    user: Option<UserId>,
+    kind: MediaType,
+) -> Result<(), Error> {
+    let target_id = user.unwrap_or_else(|| ctx.author().id);
+    let is_self = target_id == ctx.author().id;
+    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
+
+    let cooldown_seconds =
+        module_state::config_u64(&ctx.data().db, guild_id, "utility", "cooldown_seconds")
+            .await?
+            .unwrap_or(10);
+    let key = format!("lumi:media:{guild_id}:{}", ctx.author().id);
+    if !store::claim_cooldown(&ctx.data().cache, &key, cooldown_seconds * 1000).await? {
+        let remaining = store::cooldown_remaining_ms(&ctx.data().cache, &key).await?;
+        let secs = format!("{:.1}", remaining as f64 / 1000.0);
+        let card = Card::new("⏳ Slow Down", format!("Try again in **{secs}s**."))
+            .kind(CardKind::Error)
+            .ephemeral();
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
+    }
+
+    let target_user = target_id.to_user(ctx.http()).await?;
+    let card = build_media_card(&target_user, kind, is_self, !is_self);
+    ctx.send(card.into_reply().reply()).await?;
+    Ok(())
+}
+
+/// Re-render a media card with the image revealed (the "View" button).
+pub async fn handle_component(
+    ctx: &serenity::Context,
+    _services: &lumi_kernel::Services,
+    interaction: &ComponentInteraction,
+) -> Result<(), Error> {
+    let parts: Vec<&str> = interaction.data.custom_id.split(':').collect();
+    if parts.len() != 4 || parts[0] != "media" || parts[1] != "view" {
+        return Ok(());
+    }
+    let Some(kind) = MediaType::parse(parts[2]) else {
+        return Ok(());
+    };
+    let Ok(user_id) = parts[3].parse::<u64>() else {
+        return Ok(());
     };
 
-    ctx.send(card.into_reply().reply()).await?;
+    let user = ctx.http.get_user(UserId::new(user_id)).await?;
+    let card = build_media_card(&user, kind, true, true);
+
+    interaction
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::UpdateMessage(
+                CreateInteractionResponseMessage::new()
+                    .components(card.into_reply().components)
+                    .allowed_mentions(serenity::all::CreateAllowedMentions::new())
+                    .flags(MessageFlags::IS_COMPONENTS_V2),
+            ),
+        )
+        .await?;
     Ok(())
 }
 
