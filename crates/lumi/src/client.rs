@@ -7,7 +7,7 @@ pub use lumi_kernel::bot::{Context, Data, Error};
 
 /// Permit gate for guild commands. Commands absent from `permits::required_node`
 /// pass through untouched; permitted ones get an ephemeral denial card.
-fn command_check<'a>(ctx: Context<'a>) -> poise::BoxFuture<'a, Result<bool, Error>> {
+fn command_check(ctx: Context<'_>) -> poise::BoxFuture<'_, Result<bool, Error>> {
     Box::pin(async move {
         let Some(guild_id) = ctx.guild_id() else {
             return Ok(true);
@@ -69,45 +69,14 @@ fn command_check<'a>(ctx: Context<'a>) -> poise::BoxFuture<'a, Result<bool, Erro
 }
 
 pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
-    let db = lumi_db::connect(&cfg.database_url).await?;
-    lumi_db::migrate(&db).await?;
+    let services = crate::runtime::services(cfg).await?;
 
-    let cache = Arc::new(lumi_kernel::Cache::connect(&cfg.redis_url).await?);
-    let permits = Arc::new(lumi_kernel::PermitResolver::load(&db).await?);
-    let mut registry = lumi_kernel::ModuleRegistry::new();
-    registry.register(Box::new(lumi_modules::afk::AfkModule));
-    registry.register(Box::new(lumi_modules::logging::LoggingModule));
-    registry.register(Box::new(lumi_modules::filter::FilterModule));
-    registry.register(Box::new(lumi_modules::moderation::ModerationModule));
-    registry.register(Box::new(lumi_modules::security::SecurityModule));
-    registry.register(Box::new(lumi_modules::tempvc::TempVcModule));
-    registry.register(Box::new(lumi_modules::utility::UtilityModule));
-    registry.register(Box::new(lumi_modules::economy::EconomyModule));
-    registry.register(Box::new(lumi_modules::leveling::LevelingModule));
-
-    let security = Arc::new(lumi_kernel::SecurityManager::new(db.clone()));
-    let downloader = Arc::new(lumi_kernel::Downloader::new(
-        db.clone(),
-        std::path::PathBuf::from(&cfg.custom_dir),
-    ));
-
-    let commands = crate::commands::all_from_registry(&registry);
-
-    let services: Data = Arc::new(lumi_kernel::Services {
-        cfg,
-        db,
-        cache: Arc::clone(&cache),
-        permits,
-        registry,
-        security,
-        downloader,
-    });
-
-    tokio::spawn(async move { cache.spawn_invalidation().await });
+    let commands = crate::commands::all_from_registry(&services.registry);
 
     let framework = poise::Framework::new(poise::FrameworkOptions {
         commands,
         command_check: Some(command_check),
+        on_error: |error| Box::pin(crate::errors::on_error(error)),
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: Some(",".into()),
             mention_as_prefix: true,
@@ -115,7 +84,7 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
                 Box::pin(async move {
                     let data = ctx.framework.user_data();
                     let db = &data.db;
-                    let guild_id = ctx.guild_id.map(|g| g.get());
+                    let guild_id = ctx.guild_id.map(serenity::all::GuildId::get);
                     let p = lumi_db::get_prefix(db, guild_id).await;
                     Ok(Some(p.into()))
                 })
@@ -133,7 +102,7 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
     let token: serenity::Token = services.cfg.token.parse()?;
 
     let client = serenity::ClientBuilder::new(token, intents)
-        .data(Arc::new(services))
+        .data(crate::runtime::client_data(services))
         .framework(Box::new(framework))
         .event_handler(Arc::new(crate::events::Events))
         .await?;

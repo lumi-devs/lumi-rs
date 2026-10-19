@@ -8,6 +8,7 @@ use serenity::{
 };
 
 use lumi_kernel::bot::{Context, Error};
+use crate::interactions::{caller_is_owner, reply_ephemeral, update_message};
 use crate::ping::collect;
 
 enum PingView {
@@ -63,17 +64,8 @@ pub async fn handle_component(
     let Some((view, user_id)) = parse_view(&component.data.custom_id) else {
         return Ok(());
     };
-    if component.user.id.get() != user_id {
-        component
-            .create_response(
-                &ctx.http,
-                CreateInteractionResponse::Message(
-                    CreateInteractionResponseMessage::new()
-                        .content("This panel belongs to someone else.")
-                        .flags(MessageFlags::EPHEMERAL),
-                ),
-            )
-            .await?;
+    if !caller_is_owner(component, user_id) {
+        reply_ephemeral(&ctx.http, component, "This panel belongs to someone else.").await?;
         return Ok(());
     }
 
@@ -93,20 +85,10 @@ pub async fn handle_component(
     let card = match view {
         PingView::Overview { page } => build_overview_card_paged(&data, page, user_id),
         PingView::Category(category) => build_detail_card(category, &data, user_id),
-        PingView::Close => unreachable!(),
+        PingView::Close => return Ok(()),
     };
 
-    component
-        .create_response(
-            &ctx.http,
-            CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new()
-                    .components(card.components)
-                    .flags(MessageFlags::IS_COMPONENTS_V2)
-                    .allowed_mentions(CreateAllowedMentions::new()),
-            ),
-        )
-        .await?;
+    update_message(&ctx.http, component, &card).await?;
 
     Ok(())
 }
@@ -122,13 +104,17 @@ fn parse_view(custom_id: &str) -> Option<(PingView, u64)> {
     let view = match action {
         "close" => PingView::Close,
         OVERVIEW => PingView::Overview { page: 0 },
-        a if a.starts_with("p_") => {
-            let delta: i64 = a[2..].parse().ok()?;
-            let page = parts.next().and_then(|p| p.parse::<usize>().ok()).unwrap_or(0);
-            let new_page = (page as i64 + delta).max(0) as usize;
-            PingView::Overview { page: new_page }
-        }
-        a => PingView::Category(PingCategory::from_id(a)?),
+        action => match action.strip_prefix("p_") {
+            Some(delta) => {
+                let delta: i64 = delta.parse().ok()?;
+                let page = parts.next().and_then(|p| p.parse::<i64>().ok()).unwrap_or(0);
+                let new_page = page.saturating_add(delta).max(0);
+                PingView::Overview {
+                    page: usize::try_from(new_page).unwrap_or(usize::MAX),
+                }
+            }
+            None => PingView::Category(PingCategory::from_id(action)?),
+        },
     };
     Some((view, user_id))
 }

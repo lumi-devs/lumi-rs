@@ -4,7 +4,6 @@ members = [
   "crates/db",
   "crates/kernel",
   "crates/ui",
-  "crates/script",
   "crates/modules",
   "crates/api",
   "crates/lumi",
@@ -24,7 +23,6 @@ publish    = false
 lumi-db      = { path = "crates/db" }
 lumi-kernel  = { path = "crates/kernel" }
 lumi-ui      = { path = "crates/ui" }
-lumi-script  = { path = "crates/script" }
 lumi-modules = { path = "crates/modules" }
 lumi-api     = { path = "crates/api" }
 
@@ -33,7 +31,7 @@ serenity = { git = "https://github.com/serenity-rs/serenity", branch = "next", d
   "builder", "cache", "chrono", "collector", "framework",
   "gateway", "http", "model", "rustls_backend", "utils",
 ] }
-poise = { git = "https://github.com/serenity-rs/poise", branch = "serenity-next" }
+poise = { git = "https://github.com/serenity-rs/poise", branch = "serenity-next", features = ["handle_panics"] }
 
 # Async
 tokio      = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync", "fs", "net"] }
@@ -56,7 +54,6 @@ moka  = { version = "0.12", features = ["future"] }
 # Web / RPC
 reqwest          = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 axum             = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
-tower            = "0.5"
 tower-http       = { version = "0.6", default-features = false, features = ["trace"] }
 tower_governor   = { version = "0.8", default-features = false, features = ["axum"] }
 governor         = "0.10"
@@ -64,9 +61,6 @@ governor         = "0.10"
 # Background jobs
 apalis       = "1"
 apalis-redis = "1"
-
-# Scripting (addons)
-rhai = { version = "1", features = ["sync", "serde"] }
 
 # Serde / errors / utils
 aho-corasick = "1.1"
@@ -97,7 +91,6 @@ tracing-subscriber   = { version = "0.3", features = ["env-filter", "json", "fmt
 metrics              = "0.24"
 metrics-exporter-prometheus = { version = "0.16", default-features = false }
 sysinfo              = "0.33"
-console-subscriber   = "0.4"
 
 # Dev
 tempfile = "3"
