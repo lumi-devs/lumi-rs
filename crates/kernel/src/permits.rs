@@ -18,6 +18,7 @@ use crate::Result;
 #[derive(Clone, Debug)]
 pub struct PermitRow {
     pub id: i32,
+    pub guild_id: String,
     pub name: String,
     pub kind: PermitKind,
     pub polarity: PermitPolarity,
@@ -27,9 +28,10 @@ pub struct PermitRow {
 }
 
 /// A permit-to-target binding.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct PermitAssignment {
     pub permit_id: i32,
+    pub guild_id: String,
     pub target_type: PermitTargetType,
     pub target_id: i64,
 }
@@ -98,22 +100,40 @@ pub struct Decision {
 
 #[derive(Clone, Debug)]
 pub struct CheckContext<'a> {
+    pub guild_id: String,
     pub user_id: u64,
     pub channel_id: Option<u64>,
     /// Role ids ordered high→low (Discord position desc).
     pub role_ids: &'a [u64],
     pub is_owner: bool,
+    pub is_guild_owner: bool,
     pub is_manager: bool,
     pub is_quarantined: bool,
     pub node: &'a str,
 }
 
+/// Map an invoked command name to the permit node it requires.
+/// Commands absent from this map are unpermitted and pass freely.
+pub fn required_node(command: &str) -> Option<&'static str> {
+    match command {
+        "warn" => Some("mod.warn"),
+        "ban" => Some("mod.ban"),
+        "kick" => Some("mod.kick"),
+        "mute" | "unmute" | "timeout" => Some("mod.mute"),
+        "quarantine" => Some("mod.quarantine"),
+        "purge" => Some("mod.purge"),
+        "tempvc" => Some("tempvc.admin"),
+        "lumi" | "repo" | "download" => Some("admin.*"),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub struct PermitResolver {
     permits: HashMap<i32, PermitRow>,
-    by_user: HashMap<i64, Vec<i32>>,
-    by_channel: HashMap<i64, Vec<i32>>,
-    by_role: HashMap<i64, Vec<i32>>,
+    by_user: HashMap<(String, i64), Vec<i32>>,
+    by_channel: HashMap<(String, i64), Vec<i32>>,
+    by_role: HashMap<(String, i64), Vec<i32>>,
 }
 
 impl PermitResolver {
@@ -125,6 +145,7 @@ impl PermitResolver {
             .into_iter()
             .map(|p| PermitRow {
                 id: p.id,
+                guild_id: p.guild_id,
                 name: p.name,
                 kind: p.kind,
                 polarity: p.polarity,
@@ -138,6 +159,7 @@ impl PermitResolver {
             .into_iter()
             .map(|a| PermitAssignment {
                 permit_id: a.permit_id,
+                guild_id: a.guild_id,
                 target_type: a.target_type,
                 target_id: a.target_id.parse().unwrap_or(0),
             })
@@ -152,17 +174,16 @@ impl PermitResolver {
             permit_map.insert(p.id, p);
         }
 
-        let mut by_user: HashMap<i64, Vec<i32>> = HashMap::new();
-        let mut by_channel: HashMap<i64, Vec<i32>> = HashMap::new();
-        let mut by_role: HashMap<i64, Vec<i32>> = HashMap::new();
+        let mut by_user: HashMap<(String, i64), Vec<i32>> = HashMap::new();
+        let mut by_channel: HashMap<(String, i64), Vec<i32>> = HashMap::new();
+        let mut by_role: HashMap<(String, i64), Vec<i32>> = HashMap::new();
 
         for a in assignments {
+            let key = (a.guild_id, a.target_id);
             match a.target_type {
-                PermitTargetType::User => by_user.entry(a.target_id).or_default().push(a.permit_id),
-                PermitTargetType::Channel => {
-                    by_channel.entry(a.target_id).or_default().push(a.permit_id);
-                }
-                PermitTargetType::Role => by_role.entry(a.target_id).or_default().push(a.permit_id),
+                PermitTargetType::User => by_user.entry(key).or_default().push(a.permit_id),
+                PermitTargetType::Channel => by_channel.entry(key).or_default().push(a.permit_id),
+                PermitTargetType::Role => by_role.entry(key).or_default().push(a.permit_id),
             }
         }
 
@@ -174,6 +195,14 @@ impl PermitResolver {
         }
     }
 
+    /// Every permit belonging to one guild (the TS `getPermitChain` read side).
+    pub fn permits_for_guild(&self, guild_id: &str) -> Vec<&PermitRow> {
+        self.permits
+            .values()
+            .filter(|p| p.guild_id == guild_id)
+            .collect()
+    }
+
     pub fn resolve(&self, ctx: &CheckContext<'_>) -> Decision {
         let mut rows = Vec::new();
 
@@ -182,6 +211,18 @@ impl PermitResolver {
                 tier: "owner".into(),
                 verdict: Verdict::Allow,
                 detail: Some("bot owner bypass".into()),
+            });
+            return Decision {
+                allowed: true,
+                rows,
+            };
+        }
+
+        if ctx.is_guild_owner {
+            rows.push(TierExplanation {
+                tier: "owner".into(),
+                verdict: Verdict::Allow,
+                detail: Some("server owner bypass".into()),
             });
             return Decision {
                 allowed: true,
@@ -205,7 +246,12 @@ impl PermitResolver {
         let mut allowed = false;
 
         // Tier: Enforced (User target only)
-        let enforced_row = self.evaluate_bucket("enforced", self.by_user.get(&(ctx.user_id as i64)), ctx.node, true);
+        let enforced_row = self.evaluate_bucket(
+            "enforced",
+            self.by_user.get(&(ctx.guild_id.clone(), ctx.user_id as i64)),
+            ctx.node,
+            true,
+        );
         consider(&mut rows, &mut decided, &mut allowed, enforced_row);
 
         if decided || ctx.is_quarantined {
@@ -220,7 +266,12 @@ impl PermitResolver {
         }
 
         // Tier: User Custom
-        let user_row = self.evaluate_bucket("user", self.by_user.get(&(ctx.user_id as i64)), ctx.node, false);
+        let user_row = self.evaluate_bucket(
+            "user",
+            self.by_user.get(&(ctx.guild_id.clone(), ctx.user_id as i64)),
+            ctx.node,
+            false,
+        );
         consider(&mut rows, &mut decided, &mut allowed, user_row);
         if decided {
             return Decision { allowed, rows };
@@ -228,7 +279,12 @@ impl PermitResolver {
 
         // Tier: Channel Custom
         if let Some(channel_id) = ctx.channel_id {
-            let channel_row = self.evaluate_bucket("channel", self.by_channel.get(&(channel_id as i64)), ctx.node, false);
+            let channel_row = self.evaluate_bucket(
+                "channel",
+                self.by_channel.get(&(ctx.guild_id.clone(), channel_id as i64)),
+                ctx.node,
+                false,
+            );
             consider(&mut rows, &mut decided, &mut allowed, channel_row);
             if decided {
                 return Decision { allowed, rows };
@@ -237,7 +293,12 @@ impl PermitResolver {
 
         // Tier: Roles Custom (in priority order)
         for &role_id in ctx.role_ids {
-            let role_row = self.evaluate_bucket(&format!("role:{role_id}"), self.by_role.get(&(role_id as i64)), ctx.node, false);
+            let role_row = self.evaluate_bucket(
+                &format!("role:{role_id}"),
+                self.by_role.get(&(ctx.guild_id.clone(), role_id as i64)),
+                ctx.node,
+                false,
+            );
             consider(&mut rows, &mut decided, &mut allowed, role_row);
             if decided {
                 return Decision { allowed, rows };
