@@ -140,6 +140,12 @@ fn sections(schema: &[ConfigField]) -> Vec<Section<'_>> {
             });
         }
     }
+    if out.is_empty() {
+        out.push(Section {
+            name: None,
+            fields: Vec::new(),
+        });
+    }
     out
 }
 

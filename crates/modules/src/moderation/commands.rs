@@ -662,10 +662,10 @@ fn parse_duration(input: &str) -> Option<std::time::Duration> {
     let num: u64 = num_part.parse().ok()?;
     let secs = match unit_part.to_lowercase().as_str() {
         "s" | "sec" | "secs" => num,
-        "m" | "min" | "mins" => num * 60,
-        "h" | "hr" | "hrs" | "hour" | "hours" => num * 3600,
-        "d" | "day" | "days" => num * 86400,
-        "w" | "week" | "weeks" => num * 604800,
+        "m" | "min" | "mins" => num.checked_mul(60)?,
+        "h" | "hr" | "hrs" | "hour" | "hours" => num.checked_mul(3600)?,
+        "d" | "day" | "days" => num.checked_mul(86_400)?,
+        "w" | "week" | "weeks" => num.checked_mul(604_800)?,
         _ => return None,
     };
     Some(std::time::Duration::from_secs(secs))

@@ -481,9 +481,9 @@ fn parse_duration_secs(input: &str) -> Option<i64> {
     }
     let unit = input[idx..].to_lowercase();
     match unit.as_str() {
-        "m" | "min" => Some(num * 60),
-        "h" | "hr" => Some(num * 3600),
-        "d" | "day" => Some(num * 86_400),
+        "m" | "min" => num.checked_mul(60),
+        "h" | "hr" => num.checked_mul(3600),
+        "d" | "day" => num.checked_mul(86_400),
         _ => None,
     }
 }

@@ -80,7 +80,7 @@ pub async fn repo_list(ctx: Context<'_>) -> Result<(), Error> {
                     .iter()
                     .map(|r| {
                         let commit_str = r.commit.as_ref().map_or("none", |c| {
-                            if c.len() > 7 { &c[..7] } else { c }
+                            c.get(..7).unwrap_or(c.as_str())
                         });
                         format!("• **{}** (`{}`) — branch `{}` (`{}`)", r.name, r.url, r.branch, commit_str)
                     })

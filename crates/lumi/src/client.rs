@@ -133,7 +133,7 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
     let token: serenity::Token = services.cfg.token.parse()?;
 
     let client = serenity::ClientBuilder::new(token, intents)
-        .data(services)
+        .data(Arc::new(services))
         .framework(Box::new(framework))
         .event_handler(Arc::new(crate::events::Events))
         .await?;
