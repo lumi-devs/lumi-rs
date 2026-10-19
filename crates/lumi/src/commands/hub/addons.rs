@@ -827,16 +827,16 @@ fn uninstall_modal() -> CreateModal<'static> {
 }
 
 fn text_input(
-    custom_id: &str,
-    label: &str,
-    placeholder: &str,
+    custom_id: impl Into<String>,
+    label: impl Into<String>,
+    placeholder: impl Into<String>,
     required: bool,
 ) -> CreateModalComponent<'static> {
     CreateModalComponent::Label(CreateLabel::input_text(
-        label,
-        CreateInputText::new(InputTextStyle::Short, custom_id)
+        label.into(),
+        CreateInputText::new(InputTextStyle::Short, custom_id.into())
             .required(required)
-            .placeholder(placeholder),
+            .placeholder(placeholder.into()),
     ))
 }
 
