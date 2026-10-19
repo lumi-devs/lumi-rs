@@ -31,6 +31,23 @@
 - **AFK**: `/afk`, `/afklist`, `/afkstats`, mention notifications and welcome-back cards.
 - **API**: HTTP API server (`/healthz`, `/metrics`, `/action` with typed dispatchers).
 
+### UI/UX Parity Round (recent)
+- **Utility media**: `/avatar` and `/banner` now render the image in a media gallery for the
+  requester, are ephemeral when viewing others, expose an "Open" link button (self) or a
+  "View" primary button that re-renders the gallery via a `media:` component handler, and
+  respect a per-guild `utility.cooldown_seconds` (default 10, Redis `SET NX PX`).
+- **`/whois`**: display-colour accent, roles with overflow (+N more), key-permissions list,
+  server-booster badge, Profile/Avatar link buttons, `[BOT]` tag.
+- **`/serverinfo`**: channel breakdown (text/voice/category/total), boosts + tier, emojis,
+  verification level, icon link button.
+- **Economy**: new `/leaderboard` (aliases `lb`, `top`, `count` 1-50) with "← you" marker;
+  configurable `currency_name` / `currency_emoji` / `bank_name` with grouped, formatted
+  amounts across every economy reply.
+- **Addons dashboard**: lists the names of repos with pending updates and shows the
+  Bot-Owner access hint for non-owners.
+- **Moderation/Hub**: multi-target kick/ban with confirm prompts, `/cases` manager, warn
+  escalation, and sectioned module-config card (merged from earlier round).
+
 ---
 
 ## Active Parity Gaps Tracked (from Full TS Audit)
