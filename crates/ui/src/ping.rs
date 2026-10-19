@@ -251,14 +251,14 @@ fn detail_card(subtitle: &str, data: &PingData) -> Container {
 
 /// Pagination row: ◀️ (disabled) · Close · ▶️ (disabled when single page).
 fn overview_nav_row(user_id: u64, page: usize, total: usize) -> CreateActionRow<'static> {
-    let prev = CreateButton::new(ping_custom_id("p_-1", user_id))
+    let prev = CreateButton::new(format!("{PING_ID_PREFIX}:p_-1:{user_id}:{page}"))
         .emoji('◀')
         .style(ButtonStyle::Secondary)
         .disabled(page == 0);
     let close = CreateButton::new(ping_custom_id("close", user_id))
         .label("Close")
         .style(ButtonStyle::Danger);
-    let next = CreateButton::new(ping_custom_id("p_1", user_id))
+    let next = CreateButton::new(format!("{PING_ID_PREFIX}:p_1:{user_id}:{page}"))
         .emoji('▶')
         .style(ButtonStyle::Secondary)
         .disabled(page + 1 >= total);
@@ -266,7 +266,7 @@ fn overview_nav_row(user_id: u64, page: usize, total: usize) -> CreateActionRow<
 }
 
 #[must_use]
-pub fn build_overview_card_paged(data: &PingData, page: usize, _user_id: u64) -> CardReply {
+pub fn build_overview_card_paged(data: &PingData, page: usize, user_id: u64) -> CardReply {
     const PAGE_SIZE: usize = 5;
     let fallback = [ShardInfo {
         id: 0,
@@ -319,7 +319,7 @@ pub fn build_overview_card_paged(data: &PingData, page: usize, _user_id: u64) ->
         fmt_ms(data.db_latency_ms),
     ));
     c = c.separator(true, SeparatorSpacingSize::Small);
-    c = c.action_row(overview_nav_row(0, page, total_pages));
+    c = c.action_row(overview_nav_row(user_id, page, total_pages));
 
     container_reply(c)
 }

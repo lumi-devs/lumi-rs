@@ -140,7 +140,6 @@ pub fn required_node(command: &str) -> Option<&'static str> {
         "mute" | "unmute" | "timeout" => Some("mod.mute"),
         "quarantine" => Some("mod.quarantine"),
         "purge" => Some("mod.purge"),
-        "tempvc" => Some("tempvc.admin"),
         "lumi" | "repo" | "download" => Some("admin.*"),
         _ => None,
     }
@@ -520,6 +519,10 @@ mod tests {
 
         command.custom_data = Box::new("custom.node");
         assert_eq!(command_node(&command), Some("custom.node"));
+
+        assert_eq!(required_node("tempvc"), None);
+        assert_eq!(required_node("panel"), None);
+        assert_eq!(required_node("lumi"), Some("admin.*"));
     }
 
     #[test]

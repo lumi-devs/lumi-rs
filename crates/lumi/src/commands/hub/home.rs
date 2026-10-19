@@ -7,9 +7,9 @@ use super::{tab_row, GuildCtx, HubView};
 /// The hub landing card.
 pub async fn card(services: &Services, guild: &GuildCtx) -> Result<CardReply, Error> {
     let prefix = lumi_db::get_prefix(&services.db, Some(guild.id)).await.unwrap_or_else(|_| ",".to_string());
-    let total = services.registry.len();
-    let enabled_count = lumi_db::count_enabled_modules(&services.db, guild.id).await.unwrap_or(0);
-    let enabled = usize::try_from(enabled_count).unwrap_or(total).min(total);
+    let rows = lumi_kernel::module_state::list_feature_rows(&services.registry, &services.db, guild.id).await;
+    let total = rows.len();
+    let enabled = rows.iter().filter(|r| r.enabled).count();
 
     let hints = [
         "⚙️ **Modules** - enable, disable, and configure every feature",

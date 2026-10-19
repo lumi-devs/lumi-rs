@@ -10,7 +10,7 @@ use serenity::all::{
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_kernel::permits::CheckContext;
 use lumi_kernel::Services;
-use lumi_ui::CardReply;
+use lumi_ui::{Card, CardReply};
 
 pub mod addons;
 pub mod home;
@@ -96,7 +96,6 @@ pub enum HubOutcome {
     slash_command,
     prefix_command,
     guild_only,
-    default_member_permissions = "ADMINISTRATOR",
     subcommands("panel")
 )]
 pub async fn lumi(ctx: Context<'_>) -> Result<(), Error> {
@@ -104,7 +103,7 @@ pub async fn lumi(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Open the interactive control panel.
-#[poise::command(slash_command, prefix_command, guild_only, rename = "panel")]
+#[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn panel(ctx: Context<'_>) -> Result<(), Error> {
     open(ctx).await
 }
@@ -140,6 +139,7 @@ async fn open(ctx: Context<'_>) -> Result<(), Error> {
                 .send_message(
                     ctx.http(),
                     serenity::CreateMessage::new()
+                        .reference_message(pfx.msg)
                         .components(card.components)
                         .flags(MessageFlags::IS_COMPONENTS_V2)
                         .allowed_mentions(CreateAllowedMentions::new()),
@@ -291,22 +291,40 @@ pub async fn caller_may_manage(
     }
     let is_quarantined =
         lumi_modules::security::store::panic_locks_commands(services, guild_id.get()).await;
-    let Some(guild) = ctx.cache.guild(guild_id) else {
-        return false;
+    let (is_guild_owner, is_manager, roles) = if let Some(guild) = ctx.cache.guild(guild_id) {
+        let is_owner = guild.owner_id == component.user.id;
+        let (manager, roles) = if let Some(member) = component
+            .member
+            .as_deref()
+            .or_else(|| guild.members.get(&component.user.id))
+        {
+            let perms = guild.member_permissions(member);
+            let roles: Vec<u64> = member.roles.iter().map(|r| r.get()).collect();
+            (perms.administrator() || perms.manage_guild(), roles)
+        } else {
+            (false, Vec::new())
+        };
+        (is_owner, manager, roles)
+    } else {
+        let manager = component
+            .member
+            .as_deref()
+            .and_then(|m| m.permissions)
+            .is_some_and(|p| p.administrator() || p.manage_guild());
+        let roles = component
+            .member
+            .as_deref()
+            .map_or_else(Vec::new, |m| m.roles.iter().map(|r| r.get()).collect());
+        (false, manager, roles)
     };
-    let Some(member) = guild.members.get(&component.user.id) else {
-        return false;
-    };
-    let perms = guild.member_permissions(member);
-    let roles: Vec<u64> = member.roles.iter().map(|r| r.get()).collect();
     let check = CheckContext {
         guild_id: guild_id.get().to_string(),
         user_id: component.user.id.get(),
         channel_id: Some(component.channel_id.get()),
         role_ids: &roles,
-        is_owner: false,
-        is_guild_owner: guild.owner_id == component.user.id,
-        is_manager: perms.administrator() || perms.manage_guild(),
+        is_owner: services.cfg.is_owner(component.user.id.get()),
+        is_guild_owner,
+        is_manager,
         is_quarantined,
         node: ADMIN_NODE,
     };
@@ -326,22 +344,40 @@ async fn caller_may_manage_modal(
     };
     let is_quarantined =
         lumi_modules::security::store::panic_locks_commands(services, guild_id.get()).await;
-    let Some(guild) = ctx.cache.guild(guild_id) else {
-        return false;
+    let (is_guild_owner, is_manager, roles) = if let Some(guild) = ctx.cache.guild(guild_id) {
+        let is_owner = guild.owner_id == modal.user.id;
+        let (manager, roles) = if let Some(member) = modal
+            .member
+            .as_deref()
+            .or_else(|| guild.members.get(&modal.user.id))
+        {
+            let perms = guild.member_permissions(member);
+            let roles: Vec<u64> = member.roles.iter().map(|r| r.get()).collect();
+            (perms.administrator() || perms.manage_guild(), roles)
+        } else {
+            (false, Vec::new())
+        };
+        (is_owner, manager, roles)
+    } else {
+        let manager = modal
+            .member
+            .as_deref()
+            .and_then(|m| m.permissions)
+            .is_some_and(|p| p.administrator() || p.manage_guild());
+        let roles = modal
+            .member
+            .as_deref()
+            .map_or_else(Vec::new, |m| m.roles.iter().map(|r| r.get()).collect());
+        (false, manager, roles)
     };
-    let Some(member) = guild.members.get(&modal.user.id) else {
-        return false;
-    };
-    let perms = guild.member_permissions(member);
-    let roles: Vec<u64> = member.roles.iter().map(|r| r.get()).collect();
     let check = CheckContext {
         guild_id: guild_id.get().to_string(),
         user_id: modal.user.id.get(),
         channel_id: Some(modal.channel_id.get()),
         role_ids: &roles,
-        is_owner: false,
-        is_guild_owner: guild.owner_id == modal.user.id,
-        is_manager: perms.administrator() || perms.manage_guild(),
+        is_owner: services.cfg.is_owner(modal.user.id.get()),
+        is_guild_owner,
+        is_manager,
         is_quarantined,
         node: ADMIN_NODE,
     };
@@ -437,13 +473,20 @@ async fn acknowledge(
 }
 
 async fn deny(ctx: &serenity::Context, component: &ComponentInteraction) -> Result<(), Error> {
+    let card = Card::error(
+        "Permission Denied",
+        format!("You need the `{ADMIN_NODE}` permit to manage this server."),
+    )
+    .ephemeral();
+    let reply = card.into_reply();
     component
         .create_response(
             &ctx.http,
             CreateInteractionResponse::Message(
                 CreateInteractionResponseMessage::new()
-                    .content(format!("You need the `{ADMIN_NODE}` permit to manage this server."))
-                    .flags(MessageFlags::EPHEMERAL),
+                    .components(reply.components)
+                    .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
+                    .allowed_mentions(CreateAllowedMentions::new()),
             ),
         )
         .await?;
@@ -451,13 +494,20 @@ async fn deny(ctx: &serenity::Context, component: &ComponentInteraction) -> Resu
 }
 
 async fn deny_modal(ctx: &serenity::Context, modal: &ModalInteraction) -> Result<(), Error> {
+    let card = Card::error(
+        "Permission Denied",
+        "You are not allowed to use this panel.",
+    )
+    .ephemeral();
+    let reply = card.into_reply();
     modal
         .create_response(
             &ctx.http,
             CreateInteractionResponse::Message(
                 CreateInteractionResponseMessage::new()
-                    .content("You are not allowed to use this panel.")
-                    .flags(MessageFlags::EPHEMERAL),
+                    .components(reply.components)
+                    .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
+                    .allowed_mentions(CreateAllowedMentions::new()),
             ),
         )
         .await?;
@@ -542,4 +592,27 @@ pub fn tab_row(active: HubView) -> serenity::CreateActionRow<'static> {
         tab_button(HubView::Settings, active, "Settings", '🏰'),
         tab_button(HubView::Addons, active, "Addons", '📦'),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lumi_slash_command_structure_and_permissions() {
+        let cmds = commands();
+        assert_eq!(cmds.len(), 1);
+        let lumi_cmd = &cmds[0];
+        assert_eq!(lumi_cmd.name, "lumi");
+        assert!(
+            lumi_cmd.default_member_permissions.is_empty(),
+            "default_member_permissions must be empty so Discord shows /lumi panel to all users including bot owners"
+        );
+        let panel_sub = lumi_cmd
+            .subcommands
+            .iter()
+            .find(|s| s.name == "panel")
+            .expect("panel subcommand under lumi");
+        assert_eq!(panel_sub.name, "panel");
+    }
 }

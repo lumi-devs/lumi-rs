@@ -120,6 +120,7 @@ pub async fn panel_cmd(ctx: Context<'_>) -> Result<(), Error> {
     rename = "admin",
     guild_only,
     default_member_permissions = "MANAGE_CHANNELS",
+    custom_data = "\"tempvc.admin\"",
     subcommands(
         "admin_setup",
         "admin_delete",
@@ -494,7 +495,7 @@ pub async fn handle_component(
         return Ok(());
     }
 
-    if !is_owner && !is_admin(ctx, guild_id, caller_id) {
+    if !is_owner && !is_admin(ctx, guild_id, caller_id) && !services.cfg.is_owner(caller_id.get()) {
         let card = error_card("Only the channel owner or staff can use these controls.");
         respond_card(ctx, interaction, card, false).await?;
         return Ok(());
@@ -613,4 +614,25 @@ async fn finish_privacy(
 
 pub fn commands() -> Vec<Command> {
     vec![tempvc()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tempvc_subcommands_and_permits() {
+        let cmd = tempvc();
+        assert_eq!(cmd.name, "tempvc");
+        assert_eq!(cmd.subcommands.len(), 2);
+
+        let panel = cmd.subcommands.iter().find(|s| s.name == "panel").expect("panel subcommand");
+        assert!(panel.custom_data.downcast_ref::<&'static str>().is_none());
+
+        let admin = cmd.subcommands.iter().find(|s| s.name == "admin").expect("admin subcommand");
+        assert_eq!(
+            admin.custom_data.downcast_ref::<&'static str>().copied(),
+            Some("tempvc.admin")
+        );
+    }
 }

@@ -17,9 +17,17 @@ impl serenity::EventHandler for Events {
                 } else {
                     tracing::info!("slash commands synced successfully");
                 }
+                for guild in &data_about_bot.guilds {
+                    if let Err(e) = poise::builtins::register_in_guild(&ctx.http, &commands, guild.id).await {
+                        tracing::warn!(guild_id = %guild.id, error = %e, "failed to sync guild slash commands");
+                    }
+                }
             }
             serenity::FullEvent::GuildCreate { guild, is_new, .. } => {
                 tracing::debug!(guild_id = %guild.id, new = ?is_new, "guild create");
+                let services = ctx.data::<lumi_kernel::bot::Data>();
+                let commands = crate::commands::all_from_registry(&services.registry);
+                let _ = poise::builtins::register_in_guild(&ctx.http, &commands, guild.id).await;
             }
             serenity::FullEvent::InteractionCreate { interaction, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();

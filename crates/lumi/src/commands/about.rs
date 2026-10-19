@@ -157,15 +157,14 @@ pub async fn help(
 
     let mut body = vec![
         "Lumi interactive command manual. Use `/help <command>` for parameter breakdown:".to_string(),
-        String::new(),
     ];
 
     for (cat_name, cmds) in categories {
-        body.push(format!("### {cat_name}"));
+        let mut section = format!("### {cat_name}\n");
         for (name, desc) in cmds {
-            body.push(format!("• `/{name}` — {desc}"));
+            section.push_str(&format!("• `/{name}` — {desc}\n"));
         }
-        body.push(String::new());
+        body.push(section);
     }
 
     let card = Card::lines("📖 Lumi Command Manual", body).kind(CardKind::Info);

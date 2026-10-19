@@ -158,13 +158,16 @@ pub async fn reply_ephemeral(
     component: &ComponentInteraction,
     content: impl Into<String>,
 ) -> Result<(), serenity::Error> {
+    let card = Card::warning("Notice", content.into()).ephemeral();
+    let reply = card.into_reply();
     component
         .create_response(
             http,
             CreateInteractionResponse::Message(
                 CreateInteractionResponseMessage::new()
-                    .content(content.into())
-                    .flags(MessageFlags::EPHEMERAL),
+                    .components(reply.components)
+                    .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
+                    .allowed_mentions(CreateAllowedMentions::new()),
             ),
         )
         .await

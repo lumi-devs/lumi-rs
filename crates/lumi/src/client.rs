@@ -9,36 +9,47 @@ pub use lumi_kernel::bot::{Context, Data, Error};
 /// pass through untouched; permitted ones get an ephemeral denial card.
 fn command_check(ctx: Context<'_>) -> poise::BoxFuture<'_, Result<bool, Error>> {
     Box::pin(async move {
+        let author_id = ctx.author().id;
+        let is_owner = ctx.data().cfg.is_owner(author_id.get())
+            || ctx.framework().options().owners.contains(&author_id);
+        if is_owner {
+            return Ok(true);
+        }
+
         let Some(guild_id) = ctx.guild_id() else {
             return Ok(true);
         };
-        let Some(root) = ctx.command_tree().first() else {
-            return Ok(true);
-        };
-        let Some(node) = lumi_kernel::permits::required_node(&root.name) else {
+        let node = ctx
+            .command_tree()
+            .iter()
+            .rev()
+            .find_map(|cmd| lumi_kernel::permits::command_node(cmd));
+        let Some(node) = node else {
             return Ok(true);
         };
 
-        let author_id = ctx.author().id;
-        let mut role_ids: Vec<u64> = Vec::new();
-        let mut is_guild_owner = false;
-        let mut is_manager = false;
-        if let Some(guild) = ctx.guild() {
-            is_guild_owner = guild.owner_id == author_id;
-            if let Some(member) = guild.members.get(&author_id) {
+        let (is_guild_owner, is_manager, role_ids) = if let Some(guild) = ctx.guild() {
+            let is_guild_owner = guild.owner_id == author_id;
+            let (is_manager, role_ids) = if let Some(member) = guild.members.get(&author_id) {
                 let perms = guild.member_permissions(member);
-                is_manager = perms.contains(serenity::all::Permissions::ADMINISTRATOR)
+                let is_manager = perms.contains(serenity::all::Permissions::ADMINISTRATOR)
                     || perms.contains(serenity::all::Permissions::MANAGE_GUILD);
-                role_ids = member.roles.iter().map(|role| role.get()).collect();
-                role_ids.sort_by_key(|id| {
+                let mut roles: Vec<u64> = member.roles.iter().map(|role| role.get()).collect();
+                roles.sort_by_key(|id| {
                     guild
                         .roles
                         .get(&serenity::all::RoleId::new(*id))
                         .map_or(0, |role| role.position)
                 });
-                role_ids.reverse();
-            }
-        }
+                roles.reverse();
+                (is_manager, roles)
+            } else {
+                (false, Vec::new())
+            };
+            (is_guild_owner, is_manager, role_ids)
+        } else {
+            (false, false, Vec::new())
+        };
 
         let is_quarantined =
             lumi_modules::security::store::panic_locks_commands(&ctx.data(), guild_id.get()).await;
@@ -48,7 +59,7 @@ fn command_check(ctx: Context<'_>) -> poise::BoxFuture<'_, Result<bool, Error>> 
             user_id: author_id.get(),
             channel_id: Some(ctx.channel_id().get()),
             role_ids: &role_ids,
-            is_owner: ctx.data().cfg.is_owner(author_id.get()),
+            is_owner: false,
             is_guild_owner,
             is_manager,
             is_quarantined,
@@ -68,15 +79,67 @@ fn command_check(ctx: Context<'_>) -> poise::BoxFuture<'_, Result<bool, Error>> 
     })
 }
 
-pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
+pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
+    if let Ok(token) = cfg.token.parse::<serenity::Token>() {
+        let http = serenity::Http::new(token);
+        match http.get_current_application_info().await {
+            Ok(info) => {
+                if let Some(owner) = info.owner {
+                    let id = owner.id.get();
+                    if !cfg.owner_ids.contains(&id) {
+                        tracing::info!(owner_id = id, "resolved application owner from Discord");
+                        cfg.owner_ids.push(id);
+                    }
+                }
+                if let Some(team) = info.team {
+                    let team_owner = team.owner_user_id.get();
+                    if !cfg.owner_ids.contains(&team_owner) {
+                        tracing::info!(owner_id = team_owner, "resolved team owner from Discord");
+                        cfg.owner_ids.push(team_owner);
+                    }
+                    for member in team.members {
+                        if member.membership_state == serenity::MembershipState::Accepted {
+                            let id = member.user.id.get();
+                            if !cfg.owner_ids.contains(&id) {
+                                tracing::info!(member_id = id, "resolved team member owner from Discord");
+                                cfg.owner_ids.push(id);
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to resolve application owner from Discord HTTP");
+            }
+        }
+    }
+
     let services = crate::runtime::services(cfg).await?;
 
     let commands = crate::commands::all_from_registry(&services.registry);
 
+    let owners: std::collections::HashSet<serenity::UserId> = services
+        .cfg
+        .owner_ids
+        .iter()
+        .copied()
+        .map(serenity::UserId::new)
+        .collect();
+
     let framework = poise::Framework::new(poise::FrameworkOptions {
         commands,
         command_check: Some(command_check),
+        skip_checks_for_owners: true,
+        owners,
+        initialize_owners: true,
         on_error: |error| Box::pin(crate::errors::on_error(error)),
+        reply_callback: Some(|ctx, reply| {
+            if let poise::Context::Prefix(_) = ctx {
+                reply.reply(true)
+            } else {
+                reply
+            }
+        }),
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: Some(",".into()),
             mention_as_prefix: true,

@@ -92,7 +92,7 @@ pub(super) fn parse_duration(input: &str) -> Option<Duration> {
         .unwrap_or(input.len());
     let (number, unit) = input.split_at(split);
     let amount: u64 = number.parse().ok()?;
-    let seconds = match unit.to_lowercase().as_str() {
+    let seconds = match unit.trim().to_lowercase().as_str() {
         "s" | "sec" | "secs" => amount,
         "m" | "min" | "mins" => amount.checked_mul(60)?,
         "h" | "hr" | "hrs" | "hour" | "hours" => amount.checked_mul(3_600)?,

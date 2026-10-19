@@ -104,6 +104,7 @@ impl CardReply {
             .components(self.components.clone())
             .allowed_mentions(CreateAllowedMentions::new())
             .flags(self.flags())
+            .reply(true)
     }
 
     /// Render into a raw channel message (V2 flag set, no-ping mentions).
@@ -234,18 +235,24 @@ impl Card {
                 )),
             );
             children.push(CreateContainerComponent::Section(section));
-            for part in non_empty.into_iter().skip(1) {
+            let rest: Vec<&str> = non_empty.iter().skip(1).map(|s| s.as_str()).collect();
+            if !rest.is_empty() {
                 children.push(separator(true));
-                children.push(text(part.clone()));
+                children.push(text(rest.join("\n")));
             }
         } else {
-            for (i, part) in self.body.iter().enumerate() {
+            let non_empty: Vec<&String> = self.body.iter().filter(|p| !p.is_empty()).collect();
+            let chunk_size = if non_empty.len() > 10 {
+                (non_empty.len() + 9) / 10
+            } else {
+                1
+            };
+            for (i, chunk) in non_empty.chunks(chunk_size).enumerate() {
                 if i > 0 {
                     children.push(separator(true));
                 }
-                if !part.is_empty() {
-                    children.push(text(part.clone()));
-                }
+                let combined = chunk.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+                children.push(text(combined));
             }
         }
 

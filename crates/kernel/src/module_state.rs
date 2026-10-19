@@ -50,7 +50,7 @@ async fn global_enabled(db: &DatabaseConnection, module: &str) -> Option<bool> {
 /// Whether a module runs in a guild.
 pub async fn is_enabled(db: &DatabaseConnection, guild_id: u64, module: &str) -> bool {
     let guild = guild_module_state::Entity::find()
-        .filter(guild_module_state::Column::GuildId.eq(guild_id.to_string()))
+        .filter(guild_module_state::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .filter(guild_module_state::Column::ModuleName.eq(module))
         .one(db)
         .await
@@ -97,7 +97,7 @@ pub async fn list_feature_rows(
 ) -> Vec<FeatureRow> {
     let guild_rows = load_states(
         guild_module_state::Entity::find()
-            .filter(guild_module_state::Column::GuildId.eq(guild_id.to_string()))
+            .filter(guild_module_state::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
             .all(db)
             .await,
         "guild module state",
@@ -150,7 +150,7 @@ pub async fn get_config(
     module: &str,
 ) -> Map<String, Value> {
     match guild_module_config::Entity::find()
-        .filter(guild_module_config::Column::GuildId.eq(guild_id.to_string()))
+        .filter(guild_module_config::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .filter(guild_module_config::Column::ModuleName.eq(module))
         .all(db)
         .await
@@ -172,7 +172,7 @@ pub async fn config_value(
     key: &str,
 ) -> Result<Option<Value>> {
     Ok(guild_module_config::Entity::find()
-        .filter(guild_module_config::Column::GuildId.eq(guild_id.to_string()))
+        .filter(guild_module_config::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .filter(guild_module_config::Column::ModuleName.eq(module))
         .filter(guild_module_config::Column::ConfigKey.eq(key))
         .one(db)
@@ -265,7 +265,7 @@ pub async fn set_config_value(
 /// Delete every stored override for a module; returns the rows removed.
 pub async fn clear_config(db: &DatabaseConnection, guild_id: u64, module: &str) -> Result<u64> {
     let result = guild_module_config::Entity::delete_many()
-        .filter(guild_module_config::Column::GuildId.eq(guild_id.to_string()))
+        .filter(guild_module_config::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .filter(guild_module_config::Column::ModuleName.eq(module))
         .exec(db)
         .await?;

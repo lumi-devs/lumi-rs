@@ -1,10 +1,6 @@
-//! Process configuration: one layered loader (file → `LUMI_*` env → common
-//! deployment env vars) and the deployment [`Role`] the binary runs as.
+//! Process configuration: direct environment-based loader (`.env`)
+//! and the deployment [`Role`] the binary runs as.
 
-use figment::{
-    providers::{Env, Format, Toml},
-    Figment,
-};
 use serde::{Deserialize, Serialize};
 
 use crate::{LumiError, Result};
@@ -38,7 +34,7 @@ pub struct Config {
 }
 
 fn default_redis_url() -> String {
-    "redis://127.0.0.1/".into()
+    "redis://127.0.0.1:6379/".into()
 }
 
 fn default_rpc_port() -> u16 {
@@ -50,41 +46,54 @@ fn default_custom_dir() -> String {
 }
 
 impl Config {
-    /// Load layered configuration:
-    /// 1. `lumi.toml` (optional)
-    /// 2. `LUMI_*` environment variables
-    /// 3. common deployment names (`DISCORD_TOKEN`, `DATABASE_URL`, `REDIS_URL`, `OWNER_IDS`)
+    /// Load process configuration directly from environment variables.
     pub fn load() -> Result<Self> {
-        let mut figment = Figment::new()
-            .merge(Toml::file("lumi.toml"))
-            .merge(Env::prefixed("LUMI_"));
+        let token = std::env::var("BOT_TOKEN")
+            .or_else(|_| std::env::var("DISCORD_TOKEN"))
+            .map_err(|_| LumiError::Config("BOT_TOKEN or DISCORD_TOKEN must be set in environment / .env".into()))?;
 
-        for (env, key) in [
-            ("DISCORD_TOKEN", "token"),
-            ("DATABASE_URL", "database_url"),
-            ("REDIS_URL", "redis_url"),
-        ] {
-            if let Ok(value) = std::env::var(env) {
-                figment = figment.merge((key, value));
+        let database_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/lumi".into());
+
+        let redis_url = std::env::var("REDIS_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
+
+        let rpc_token = std::env::var("RPC_TOKEN").ok();
+        let rpc_port = std::env::var("RPC_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or_else(default_rpc_port);
+
+        let custom_dir = std::env::var("CUSTOM_DIR").unwrap_or_else(|_| default_custom_dir());
+
+        let mut owner_ids = Vec::new();
+        if let Ok(owners) = std::env::var("OWNER")
+            .or_else(|_| std::env::var("OWNERS"))
+            .or_else(|_| std::env::var("OWNER_IDS"))
+        {
+            for id_str in owners.split(',') {
+                let id_str = id_str.trim();
+                if !id_str.is_empty() {
+                    let id = id_str
+                        .parse::<u64>()
+                        .map_err(|_| LumiError::Config(format!("owner entry '{id_str}' is not a snowflake")))?;
+                    if !owner_ids.contains(&id) {
+                        owner_ids.push(id);
+                    }
+                }
             }
         }
 
-        // `owner_ids` is a list, which figment cannot parse out of a single env
-        // string; parse it here and let it override any raw provider value.
-        if let Ok(owners) = std::env::var("OWNER_IDS").or_else(|_| std::env::var("LUMI_OWNER_IDS")) {
-            let ids = owners
-                .split(',')
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(|id| {
-                    id.parse::<u64>()
-                        .map_err(|_| LumiError::Config(format!("OWNER_IDS entry '{id}' is not a snowflake")))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            figment = figment.merge(("owner_ids", ids));
-        }
-
-        let cfg: Self = figment.extract().map_err(|err| LumiError::Config(err.to_string()))?;
+        let cfg = Self {
+            role: Role::All,
+            token,
+            database_url,
+            redis_url,
+            rpc_token,
+            rpc_port,
+            owner_ids,
+            custom_dir,
+        };
         cfg.validate()?;
         Ok(cfg)
     }

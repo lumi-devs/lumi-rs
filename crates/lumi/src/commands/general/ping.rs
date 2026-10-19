@@ -1,6 +1,7 @@
 use lumi_ui::ping::{
     OVERVIEW, PING_ID_PREFIX, PingCategory, build_detail_card, build_overview_card_paged,
 };
+use lumi_ui::Card;
 use poise::serenity_prelude as serenity;
 use serenity::{
     CreateAllowedMentions, CreateInteractionResponse, CreateInteractionResponseMessage,
@@ -44,6 +45,7 @@ pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
                 .send_message(
                     ctx.http(),
                     serenity::CreateMessage::new()
+                        .reference_message(pfx.msg)
                         .components(card.components)
                         .flags(MessageFlags::IS_COMPONENTS_V2)
                         .allowed_mentions(CreateAllowedMentions::new()),
@@ -70,14 +72,14 @@ pub async fn handle_component(
     }
 
     if matches!(view, PingView::Close) {
-        component
-            .create_response(&ctx.http, CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new()
-                    .content("*Closed.*")
-                    .components(vec![])
-                    .flags(MessageFlags::IS_COMPONENTS_V2),
-            ))
-            .await?;
+        if component.message.delete(&ctx.http, None).await.is_ok() {
+            let _ = component
+                .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
+                .await;
+            return Ok(());
+        }
+        let card = Card::info("Closed", "This dashboard has been closed.").into_reply();
+        let _ = update_message(&ctx.http, component, &card).await;
         return Ok(());
     }
 

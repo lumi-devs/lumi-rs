@@ -24,5 +24,4 @@ apalis      = { workspace = true }
 apalis-redis = { workspace = true }
 poise       = { workspace = true }
 serenity    = { workspace = true }
-figment     = { workspace = true }
 chrono      = { workspace = true }
