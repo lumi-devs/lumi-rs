@@ -74,7 +74,7 @@ pub async fn rank(
 }
 
 /// View the top 10 server members on the XP leaderboard.
-#[poise::command(slash_command, prefix_command, guild_only)]
+#[poise::command(slash_command, prefix_command, guild_only, rename = "levelboard", aliases("xplb", "xpboard"))]
 pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))?.get();
