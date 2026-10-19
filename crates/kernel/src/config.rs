@@ -65,6 +65,13 @@ impl Config {
         if let Ok(redis) = std::env::var("REDIS_URL") {
             figment = figment.merge(("redis_url", redis));
         }
+        if let Ok(owners) = std::env::var("OWNER_IDS") {
+            let ids: Vec<u64> = owners
+                .split(',')
+                .filter_map(|id| id.trim().parse().ok())
+                .collect();
+            figment = figment.merge(("owner_ids", ids));
+        }
 
         figment.extract().map_err(|err| LumiError::Config(err.to_string()))
     }
