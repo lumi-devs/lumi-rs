@@ -34,6 +34,7 @@ pub fn all() -> Vec<Command> {
     registry.register(Box::new(lumi_modules::afk::AfkModule));
     registry.register(Box::new(lumi_modules::logging::LoggingModule));
     registry.register(Box::new(lumi_modules::moderation::ModerationModule));
+    registry.register(Box::new(lumi_modules::security::SecurityModule));
     registry.register(Box::new(lumi_modules::tempvc::TempVcModule));
     registry.register(Box::new(lumi_modules::utility::UtilityModule));
     registry.register(Box::new(lumi_modules::economy::EconomyModule));

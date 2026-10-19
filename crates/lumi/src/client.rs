@@ -40,6 +40,9 @@ fn command_check<'a>(ctx: Context<'a>) -> poise::BoxFuture<'a, Result<bool, Erro
             }
         }
 
+        let is_quarantined =
+            lumi_modules::security::store::panic_locks_commands(&ctx.data(), guild_id.get()).await;
+
         let check = lumi_kernel::permits::CheckContext {
             guild_id: guild_id.get().to_string(),
             user_id: author_id.get(),
@@ -48,7 +51,7 @@ fn command_check<'a>(ctx: Context<'a>) -> poise::BoxFuture<'a, Result<bool, Erro
             is_owner: ctx.data().cfg.is_owner(author_id.get()),
             is_guild_owner,
             is_manager,
-            is_quarantined: false, // why: quarantine state has no persisted store yet
+            is_quarantined,
             node,
         };
         if ctx.data().permits.resolve(&check).allowed {
@@ -75,6 +78,7 @@ pub async fn build(cfg: lumi_kernel::Config) -> Result<serenity::Client> {
     registry.register(Box::new(lumi_modules::afk::AfkModule));
     registry.register(Box::new(lumi_modules::logging::LoggingModule));
     registry.register(Box::new(lumi_modules::moderation::ModerationModule));
+    registry.register(Box::new(lumi_modules::security::SecurityModule));
     registry.register(Box::new(lumi_modules::tempvc::TempVcModule));
     registry.register(Box::new(lumi_modules::utility::UtilityModule));
     registry.register(Box::new(lumi_modules::economy::EconomyModule));
