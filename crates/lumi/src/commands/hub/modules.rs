@@ -107,12 +107,74 @@ pub async fn list_card(
         .into_reply())
 }
 
-/// A module's config panel: field values plus inline editors for enums/booleans.
+/// One rendered schema section: a `group` (or a page of a large group) and its
+/// fields, matching lumi's sectioned module detail view.
+struct Section<'a> {
+    name: Option<String>,
+    fields: Vec<&'a ConfigField>,
+}
+
+/// Group schema fields by `group`, preserving order, and split any group larger
+/// than a page so a section never overflows the card.
+fn sections(schema: &[ConfigField]) -> Vec<Section<'_>> {
+    let mut groups: Vec<(Option<String>, Vec<&ConfigField>)> = Vec::new();
+    for field in schema {
+        match groups.iter_mut().find(|(group, _)| group == &field.group) {
+            Some((_, fields)) => fields.push(field),
+            None => groups.push((field.group.clone(), vec![field])),
+        }
+    }
+
+    let mut out = Vec::new();
+    for (name, fields) in groups {
+        let pages = fields.chunks(FIELDS_PER_PAGE).count();
+        for (index, chunk) in fields.chunks(FIELDS_PER_PAGE).enumerate() {
+            let label = match (&name, pages, index) {
+                (_, 1, _) => name.clone(),
+                (Some(name), _, index) => Some(format!("{name} ({})", index + 1)),
+                (None, _, index) => Some(format!("Page {}", index + 1)),
+            };
+            out.push(Section {
+                name: label,
+                fields: chunk.to_vec(),
+            });
+        }
+    }
+    out
+}
+
+/// The section index containing `key`, so a field edit reopens its own section.
+fn section_of(schema: &[ConfigField], key: &str) -> usize {
+    sections(schema)
+        .iter()
+        .position(|section| section.fields.iter().any(|field| field.key == key))
+        .unwrap_or(0)
+}
+
+/// Picker options: one per section, labelled with its setting count.
+fn section_options(sections: &[Section<'_>], current: usize) -> Vec<(String, String)> {
+    sections
+        .iter()
+        .take(MAX_SELECT_OPTIONS)
+        .enumerate()
+        .map(|(index, section)| {
+            let name = section.name.as_deref().unwrap_or("Settings");
+            let marker = if index == current { "\u{2022} " } else { "" };
+            (
+                cut(&format!("{marker}{name} ({} setting(s))", section.fields.len()), 100),
+                index.to_string(),
+            )
+        })
+        .collect()
+}
+
+/// A module's config panel, one schema section at a time: values plus inline
+/// editors for enums/booleans, a section picker and prev/next arrows.
 pub async fn config_card(
     services: &Services,
     guild: &GuildCtx,
     module_name: &str,
-    page: usize,
+    section: usize,
 ) -> Result<CardReply, Error> {
     let Some(module) = services.registry.get(module_name) else {
         return Ok(
@@ -123,16 +185,22 @@ pub async fn config_card(
     let schema = module.config_schema();
     let overrides = module_state::get_config(&services.db, guild.id, module_name).await;
 
-    let total_pages = schema.len().div_ceil(FIELDS_PER_PAGE).max(1);
-    let safe_page = page.min(total_pages - 1);
-    let start = safe_page * FIELDS_PER_PAGE;
-    let fields: Vec<&ConfigField> = schema.iter().skip(start).take(FIELDS_PER_PAGE).collect();
+    let sections = sections(&schema);
+    let total = sections.len().max(1);
+    let safe = section.min(total - 1);
+    let current = &sections[safe];
+    let multi = total > 1;
 
     let mut body = Vec::new();
-    if fields.is_empty() {
+    if multi {
+        if let Some(name) = &current.name {
+            body.push(format!("-# Section **{name}** · {}/{}", safe + 1, total));
+        }
+    }
+    if current.fields.is_empty() {
         body.push("-# *No configurable fields.*".to_string());
     } else {
-        for &field in &fields {
+        for &field in &current.fields {
             let value = module_state::format_field_value(field, overrides.get(&field.key));
             let line = format!("**{}** = {value}", field.label);
             if field.description.is_empty() {
@@ -143,13 +211,20 @@ pub async fn config_card(
         }
     }
 
-    let edit_options = edit_options(&fields);
+    let edit_options = edit_options(&current.fields);
     let mut action_rows: Vec<CreateActionRow<'static>> = Vec::new();
     if !edit_options.is_empty() {
         action_rows.push(string_select(
             cid(&["cfg", "field", module_name]),
             "Edit a setting…",
             edit_options,
+        ));
+    }
+    if multi {
+        action_rows.push(string_select(
+            cid(&["cfg", "section", module_name]),
+            "Jump to a section…",
+            section_options(&sections, safe),
         ));
     }
     action_rows.push(action_row_of(vec![
@@ -164,8 +239,8 @@ pub async fn config_card(
     ]));
     if let Some(pagination) = lumi_ui::panels::pagination_row(
         &cid(&["cfg", "page", module_name]),
-        safe_page,
-        total_pages,
+        safe,
+        total,
     ) {
         action_rows.push(pagination);
     }
@@ -291,6 +366,17 @@ pub async fn dispatch(
                 config_card(services, guild, name, page).await?,
             ))
         }
+        Some("section") => {
+            let Some(name) = name else {
+                return Ok(HubOutcome::Done);
+            };
+            let Some(section) = select_value(data).and_then(|value| value.parse().ok()) else {
+                return Ok(HubOutcome::Done);
+            };
+            Ok(HubOutcome::Update(
+                config_card(services, guild, name, section).await?,
+            ))
+        }
         Some("field") => {
             let Some(name) = name else {
                 return Ok(HubOutcome::Done);
@@ -301,17 +387,18 @@ pub async fn dispatch(
             let Some((key, raw)) = decode(&selected) else {
                 return Ok(HubOutcome::Done);
             };
-            let Some(field) = services
-                .registry
-                .get(name)
-                .and_then(|module| module.config_schema().into_iter().find(|f| f.key == key))
-            else {
+            let Some(module) = services.registry.get(name) else {
                 return Ok(HubOutcome::Done);
             };
+            let schema = module.config_schema();
+            let Some(field) = schema.iter().find(|f| f.key == key) else {
+                return Ok(HubOutcome::Done);
+            };
+            let section = section_of(&schema, key);
             module_state::set_config_value(&services.db, guild.id, name, key, raw, &field.kind)
                 .await?;
             Ok(HubOutcome::Update(
-                config_card(services, guild, name, 0).await?,
+                config_card(services, guild, name, section).await?,
             ))
         }
         Some("reset") => {

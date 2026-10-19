@@ -78,9 +78,6 @@ impl Verdict {
 }
 
 /// Evaluate the rules in lumi's precedence order; the first hit wins.
-///
-/// shortcut: duplicate/near-duplicate detection is skipped (no Redis wiring
-/// from a module yet); add a short-lived guild+user last-message key when needed.
 pub fn evaluate(rules: &FilterRules, content: &str, mention_count: u64) -> Verdict {
     let Some(reason) = first_hit(rules, content, mention_count) else {
         return Verdict::clean();
@@ -94,11 +91,8 @@ pub fn evaluate(rules: &FilterRules, content: &str, mention_count: u64) -> Verdi
 }
 
 fn first_hit(rules: &FilterRules, content: &str, mention_count: u64) -> Option<Reason> {
-    if !rules.terms.is_empty() {
-        let lower = content.to_lowercase();
-        if let Some(term) = rules.terms.iter().find(|term| lower.contains(term.as_str())) {
-            return Some(Reason::Term(term.clone()));
-        }
+    if let Some(term) = rules.term_hit(content) {
+        return Some(Reason::Term(term));
     }
 
     if let Some(regex) = rules.regexes.iter().find(|regex| regex.is_match(content)) {
