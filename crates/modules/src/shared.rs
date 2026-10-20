@@ -140,11 +140,7 @@ pub fn require_guild(ctx: Context<'_>) -> Result<GuildId, Error> {
 
 /// Claim `key` for `ttl_ms`. `Ok(None)` means proceed; `Ok(Some(ms))` is the
 /// remaining cooldown in milliseconds.
-pub async fn claim_cooldown(
-    cache: &Cache,
-    key: &str,
-    ttl_ms: u64,
-) -> Result<Option<i64>, Error> {
+pub async fn claim_cooldown(cache: &Cache, key: &str, ttl_ms: u64) -> Result<Option<i64>, Error> {
     if cache.claim_cooldown(key, ttl_ms).await? {
         Ok(None)
     } else {
@@ -190,11 +186,7 @@ pub fn group_digits(n: i64) -> String {
         }
         out.push(c);
     }
-    if n < 0 {
-        format!("-{out}")
-    } else {
-        out
-    }
+    if n < 0 { format!("-{out}") } else { out }
 }
 
 /// Cut to at most `max` characters without changing the tail's meaning.

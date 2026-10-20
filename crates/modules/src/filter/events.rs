@@ -81,14 +81,11 @@ fn is_exempt(ctx: &serenity::Context, message: &Message, rules: &FilterRules) ->
         return false;
     };
     ctx.cache.guild(guild_id).is_some_and(|guild| {
-        guild
-            .members
-            .get(&message.author.id)
-            .is_some_and(|member| {
-                guild
-                    .member_permissions(member)
-                    .contains(Permissions::MANAGE_MESSAGES)
-            })
+        guild.members.get(&message.author.id).is_some_and(|member| {
+            guild
+                .member_permissions(member)
+                .contains(Permissions::MANAGE_MESSAGES)
+        })
     })
 }
 

@@ -233,9 +233,10 @@ pub fn build_overview_card(data: &PingData, user_id: u64, page: usize, prefix: &
             "### External Services:\n\
              {SPACE}🧠 **Cache:** {cache} \n\
              {SPACE} 🐘 **Database:** `{db}`",
-            cache = data
-                .redis_hit_ratio
-                .map_or_else(|| "no reads since boot".to_string(), |r| format!("{r:.1}% hit ratio")),
+            cache = data.redis_hit_ratio.map_or_else(
+                || "no reads since boot".to_string(),
+                |r| format!("{r:.1}% hit ratio")
+            ),
             db = fmt_ms(data.db_latency_ms),
         ))
         .separator(true, SeparatorSpacingSize::Small)

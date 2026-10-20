@@ -2,8 +2,8 @@ use poise::serenity_prelude as serenity;
 use sea_orm::DatabaseConnection;
 use serde_json::Value;
 
-use lumi_kernel::module_state;
 use lumi_kernel::Result;
+use lumi_kernel::module_state;
 
 const MODULE: &str = "logging";
 
@@ -36,7 +36,8 @@ pub async fn target(
 ) -> Result<Option<serenity::GenericChannelId>> {
     // Matches lumi's `isToggleEnabled`: only an explicit `false` disables; a
     // missing value stays enabled.
-    if module_state::config_value(db, guild_id, MODULE, toggle_key).await? == Some(Value::Bool(false))
+    if module_state::config_value(db, guild_id, MODULE, toggle_key).await?
+        == Some(Value::Bool(false))
     {
         return Ok(None);
     }

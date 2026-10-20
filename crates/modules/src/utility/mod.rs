@@ -29,7 +29,8 @@ impl Module for UtilityModule {
         vec![ConfigField {
             key: "cooldown_seconds".to_string(),
             label: "Media Cooldown (seconds)".to_string(),
-            description: "Seconds a member must wait between /avatar and /banner lookups.".to_string(),
+            description: "Seconds a member must wait between /avatar and /banner lookups."
+                .to_string(),
             kind: ConfigFieldKind::Integer,
             default: serde_json::json!(10),
             subfields: Vec::new(),

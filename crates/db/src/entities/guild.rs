@@ -1,5 +1,5 @@
-use sea_orm::entity::prelude::*;
 use crate::ids::GuildId;
+use sea_orm::entity::prelude::*;
 
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]

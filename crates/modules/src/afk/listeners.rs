@@ -13,11 +13,11 @@ use crate::shared::format_seconds;
 use super::cards::{mention_card, welcome_back_card};
 use super::config;
 use super::constants::{
-    MENTION_COOLDOWN_MS, NICK_PREFIX, NOTICE_TTL,
-    WELCOME_COOLDOWN_MS, nick_cooldown_key, removal_cooldown_key, welcome_cooldown_key,
+    MENTION_COOLDOWN_MS, NICK_PREFIX, NOTICE_TTL, WELCOME_COOLDOWN_MS, nick_cooldown_key,
+    removal_cooldown_key, welcome_cooldown_key,
 };
-use super::mentions::{self, Mention};
 use super::data;
+use super::mentions::{self, Mention};
 
 /// Message listener: clear the author's AFK, then notify about mentioned AFK users.
 pub async fn on_message(
@@ -115,10 +115,7 @@ async fn clear_afk(
             let cache = Arc::clone(&services.cache);
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(ttl)).await;
-                if let Err(error) = sent
-                    .delete(&http, Some("AFK welcome back expired"))
-                    .await
-                {
+                if let Err(error) = sent.delete(&http, Some("AFK welcome back expired")).await {
                     tracing::debug!(%error, "afk welcome delete failed");
                 }
                 if let Err(error) = mentions::clear(&cache, gid, author).await {
@@ -156,7 +153,10 @@ async fn strip_nick_prefix(
     let rest = rest.trim();
     let ok = services
         .cache
-        .claim_cooldown(&nick_cooldown_key(user_id), super::constants::NICK_COOLDOWN_MS)
+        .claim_cooldown(
+            &nick_cooldown_key(user_id),
+            super::constants::NICK_COOLDOWN_MS,
+        )
         .await
         .unwrap_or(false);
     if !ok {
@@ -267,4 +267,3 @@ fn display_name(ctx: &serenity::Context, guild_id: u64, user_id: u64) -> Option<
     let name = member.display_name();
     Some(name.strip_prefix(NICK_PREFIX).unwrap_or(name).to_string())
 }
-

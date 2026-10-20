@@ -6,13 +6,13 @@ use serenity::all::{
     CreateModalComponent, InputTextStyle, ModalInteraction,
 };
 
+use lumi_kernel::Services;
 use lumi_kernel::bot::Error;
 use lumi_kernel::downloader::AutoUpdateConfig;
-use lumi_kernel::Services;
 use lumi_ui::panels::{action_row_of, back_button, pagination_row, setting_row, string_select};
-use lumi_ui::{cut_text, Card, CardKind, CardOptions, CardReply};
+use lumi_ui::{Card, CardKind, CardOptions, CardReply, cut_text};
 
-use super::{cid, read_input, tab_row, GuildCtx, HubId, HubOutcome, HubView};
+use super::{GuildCtx, HubId, HubOutcome, HubView, cid, read_input, tab_row};
 
 /// Selectable auto-update cadences (minutes, label).
 const AUTO_UPDATE_INTERVALS: [(u64, &str); 5] = [
@@ -31,7 +31,11 @@ pub async fn dashboard_card(
 ) -> Result<CardReply, Error> {
     let repos = services.downloader.list_repos().await?;
     let installed = services.downloader.get_installed_modules_detailed().await?;
-    let pending = services.downloader.check_for_updates_detailed().await.unwrap_or_default();
+    let pending = services
+        .downloader
+        .check_for_updates_detailed()
+        .await
+        .unwrap_or_default();
 
     let mut body = vec![
         "Manage external add-on repositories and installed modules.".to_string(),
@@ -42,7 +46,9 @@ pub async fn dashboard_card(
         body.push(format!("⚠️ **Updates available:** {}", pending.join(", ")));
     }
     if !services.cfg.is_owner(user_id) {
-        body.push("-# Bot Owner access is required to manage repositories and settings.".to_string());
+        body.push(
+            "-# Bot Owner access is required to manage repositories and settings.".to_string(),
+        );
     }
 
     let nav = action_row_of(vec![
@@ -82,18 +88,15 @@ async fn repos_card(services: &Services) -> Result<CardReply, Error> {
 
     let mut sections = Vec::new();
     for repo in &repos {
-        let sha = repo
-            .commit
-            .as_deref()
-            .map_or_else(|| "unknown".to_string(), |c| c.chars().take(7).collect::<String>());
+        let sha = repo.commit.as_deref().map_or_else(
+            || "unknown".to_string(),
+            |c| c.chars().take(7).collect::<String>(),
+        );
         let update = CreateButton::new(cid(&["addon", "update_repo", repo.name.as_str()]))
             .label("Update")
             .style(ButtonStyle::Secondary);
         sections.push(setting_row(
-            format!(
-                "📦 **{}** branch `{}` @ `{}`",
-                repo.name, repo.branch, sha
-            ),
+            format!("📦 **{}** branch `{}` @ `{}`", repo.name, repo.branch, sha),
             update,
         ));
     }
@@ -392,27 +395,31 @@ async fn module_info_card(
 
     let lines = [
         format!("### 📦 __{}__ (v{})", module.name, module.version),
-        module
-            .description
-            .clone()
-            .map_or_else(|| "*No description provided.*".to_string(), |d| format!("*{d}*")),
+        module.description.clone().map_or_else(
+            || "*No description provided.*".to_string(),
+            |d| format!("*{d}*"),
+        ),
         String::new(),
-        format!("**Author:** {}", module.author.as_deref().unwrap_or("Unknown")),
+        format!(
+            "**Author:** {}",
+            module.author.as_deref().unwrap_or("Unknown")
+        ),
         format!(
             "**Min Bot Version:** `{}`",
             module.min_bot_version.as_deref().unwrap_or("Any")
         ),
         String::new(),
         "### 🛡 __Data & Privacy Statement__".to_string(),
-        module
-            .end_user_data_statement
-            .clone()
-            .unwrap_or_else(|| "*This module has not specified an end-user data statement.*".to_string()),
+        module.end_user_data_statement.clone().unwrap_or_else(|| {
+            "*This module has not specified an end-user data statement.*".to_string()
+        }),
     ];
 
-    Ok(Card::info(format!("Module Info: {}", module.name), lines.join("\n"))
-        .ephemeral()
-        .into_reply())
+    Ok(
+        Card::info(format!("Module Info: {}", module.name), lines.join("\n"))
+            .ephemeral()
+            .into_reply(),
+    )
 }
 
 /// Repository update confirmation card.
@@ -432,10 +439,7 @@ fn update_confirm_card(repo_name: &str, changelog: Option<&str>) -> CardReply {
 
     let mut opts = CardOptions::default();
     opts.separator_above_action_rows = true;
-    opts.action_rows = vec![
-        action_row_of(vec![confirm, skip]),
-        tab_row(HubView::Addons),
-    ];
+    opts.action_rows = vec![action_row_of(vec![confirm, skip]), tab_row(HubView::Addons)];
 
     Card::new(format!("📦 Update available for {repo_name}"), body)
         .kind(CardKind::Warning)
@@ -496,9 +500,7 @@ pub async fn dispatch(
         ("update_all", _) => update_all(services).await,
         ("addon", Some("repos")) => Ok(HubOutcome::Update(repos_card(services).await?)),
         ("addon", Some("installed")) => Ok(HubOutcome::Update(installed_card(services).await?)),
-        ("addon", Some("autoupdate")) => {
-            Ok(HubOutcome::Update(autoupdate_card(services).await?))
-        }
+        ("addon", Some("autoupdate")) => Ok(HubOutcome::Update(autoupdate_card(services).await?)),
         ("addon", Some("autoupdate_toggle")) => {
             let cfg = services.downloader.get_auto_update_config().await?;
             services
@@ -597,15 +599,10 @@ pub async fn dispatch(
             };
             Ok(HubOutcome::Ephemeral(reply))
         }
-        ("addon", Some("update_repo_skip")) => {
-            Ok(HubOutcome::Update(repos_card(services).await?))
-        }
+        ("addon", Some("update_repo_skip")) => Ok(HubOutcome::Update(repos_card(services).await?)),
         ("addon", Some("browsepage")) => {
             let repo = id.get(2).unwrap_or_default().to_string();
-            let page = id
-                .get(4)
-                .and_then(|p| p.parse::<usize>().ok())
-                .unwrap_or(0);
+            let page = id.get(4).and_then(|p| p.parse::<usize>().ok()).unwrap_or(0);
             if repo.is_empty() {
                 return Ok(HubOutcome::Done);
             }
@@ -802,9 +799,24 @@ pub async fn handle_modal(
 
 fn add_repo_modal() -> CreateModal<'static> {
     CreateModal::new(cid(&["addonmodal", "add_repo"]), "Add Repository").components(vec![
-        text_input("url", "Repository URL", "e.g. https://github.com/owner/repo", true),
-        text_input("name", "Repository Name (optional)", "Leave blank to derive from the URL", false),
-        text_input("branch", "Branch (optional)", "default: repository default", false),
+        text_input(
+            "url",
+            "Repository URL",
+            "e.g. https://github.com/owner/repo",
+            true,
+        ),
+        text_input(
+            "name",
+            "Repository Name (optional)",
+            "Leave blank to derive from the URL",
+            false,
+        ),
+        text_input(
+            "branch",
+            "Branch (optional)",
+            "default: repository default",
+            false,
+        ),
     ])
 }
 

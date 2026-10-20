@@ -12,8 +12,8 @@ use serenity::all::{
     UserId,
 };
 
-use lumi_kernel::bot::{Context, Error};
 use lumi_kernel::Services;
+use lumi_kernel::bot::{Context, Error};
 use lumi_ui::{Card, CardKind, CardOptions, CardReply};
 
 pub const HUB_PREFIX: &str = crate::commands::hub::PREFIX;
@@ -209,11 +209,12 @@ pub async fn confirm(
     let reply = ctx.send(card.into_reply().reply()).await?;
     let msg = reply.message().await?;
 
-    let interaction = serenity::collector::ComponentInteractionCollector::new(ctx.serenity_context())
-        .message_id(msg.id)
-        .author_id(ctx.author().id)
-        .timeout(std::time::Duration::from_secs(30))
-        .await;
+    let interaction =
+        serenity::collector::ComponentInteractionCollector::new(ctx.serenity_context())
+            .message_id(msg.id)
+            .author_id(ctx.author().id)
+            .timeout(std::time::Duration::from_secs(30))
+            .await;
 
     let Some(press) = interaction else {
         let _ = reply
@@ -223,10 +224,7 @@ pub async fn confirm(
     };
 
     let _ = press
-        .create_response(
-            ctx.http(),
-            CreateInteractionResponse::Acknowledge,
-        )
+        .create_response(ctx.http(), CreateInteractionResponse::Acknowledge)
         .await;
 
     let _ = reply
@@ -242,12 +240,30 @@ mod tests {
 
     #[test]
     fn routes_by_prefix_without_panicking_on_utf8() {
-        assert_eq!(ComponentRoute::from_custom_id("lumi:home:1"), Some(ComponentRoute::Hub));
-        assert_eq!(ComponentRoute::from_custom_id("tempvc:lock:1"), Some(ComponentRoute::TempVc));
-        assert_eq!(ComponentRoute::from_custom_id("media:view:avatar:1"), Some(ComponentRoute::Media));
-        assert_eq!(ComponentRoute::from_custom_id("econ:lb:2"), Some(ComponentRoute::Economy));
-        assert_eq!(ComponentRoute::from_custom_id("ping:p_1:3"), Some(ComponentRoute::Ping));
-        assert_eq!(ComponentRoute::from_custom_id("afk:mentions:1:0"), Some(ComponentRoute::Afk));
+        assert_eq!(
+            ComponentRoute::from_custom_id("lumi:home:1"),
+            Some(ComponentRoute::Hub)
+        );
+        assert_eq!(
+            ComponentRoute::from_custom_id("tempvc:lock:1"),
+            Some(ComponentRoute::TempVc)
+        );
+        assert_eq!(
+            ComponentRoute::from_custom_id("media:view:avatar:1"),
+            Some(ComponentRoute::Media)
+        );
+        assert_eq!(
+            ComponentRoute::from_custom_id("econ:lb:2"),
+            Some(ComponentRoute::Economy)
+        );
+        assert_eq!(
+            ComponentRoute::from_custom_id("ping:p_1:3"),
+            Some(ComponentRoute::Ping)
+        );
+        assert_eq!(
+            ComponentRoute::from_custom_id("afk:mentions:1:0"),
+            Some(ComponentRoute::Afk)
+        );
         assert_eq!(ComponentRoute::from_custom_id("nope:1"), None);
         assert_eq!(ComponentRoute::from_custom_id(""), None);
         // Multi-byte prefix must not hit a byte slice.
@@ -264,7 +280,10 @@ mod tests {
 
     #[test]
     fn modal_routes() {
-        assert_eq!(ModalRoute::from_custom_id("lumi:prefixmodal"), Some(ModalRoute::Hub));
+        assert_eq!(
+            ModalRoute::from_custom_id("lumi:prefixmodal"),
+            Some(ModalRoute::Hub)
+        );
         assert_eq!(ModalRoute::from_custom_id("help:1"), None);
     }
 }

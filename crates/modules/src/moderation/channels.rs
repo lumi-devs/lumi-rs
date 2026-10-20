@@ -56,7 +56,10 @@ pub async fn set_guild_locked(
     reason: &str,
 ) -> ChannelChanges {
     let Ok(channels) = guild_id.channels(http).await else {
-        tracing::warn!(guild_id = guild_id.get(), "could not fetch channels for lockdown");
+        tracing::warn!(
+            guild_id = guild_id.get(),
+            "could not fetch channels for lockdown"
+        );
         return ChannelChanges {
             modified: 0,
             failed: 1,

@@ -135,8 +135,10 @@ pub fn punishment_card(outcome: &BulkOutcome, reason: Option<&str>) -> CardReply
     );
 
     let mut lines = Vec::new();
-    if let Some(AppliedCase { target, case }) =
-        outcome.applied.first().filter(|_| outcome.applied.len() == 1)
+    if let Some(AppliedCase { target, case }) = outcome
+        .applied
+        .first()
+        .filter(|_| outcome.applied.len() == 1)
     {
         lines.push(format!("Applied **{label}** to <@{}>.", target.get()));
         match case {
@@ -154,10 +156,10 @@ pub fn punishment_card(outcome: &BulkOutcome, reason: Option<&str>) -> CardReply
             .applied
             .iter()
             .map(|applied| {
-                applied
-                    .case
-                    .as_ref()
-                    .map_or_else(|| "`#?`".to_string(), |case| format!("`#{}`", case.case_number))
+                applied.case.as_ref().map_or_else(
+                    || "`#?`".to_string(),
+                    |case| format!("`#{}`", case.case_number),
+                )
             })
             .collect::<Vec<_>>()
             .join(", ");

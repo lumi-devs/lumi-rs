@@ -167,9 +167,16 @@ pub async fn lockdown_enable(ctx: Context<'_>) -> Result<(), Error> {
         changes.modified
     )];
     if changes.failed > 0 {
-        lines.push(format!("{} channel(s) could not be modified.", changes.failed));
+        lines.push(format!(
+            "{} channel(s) could not be modified.",
+            changes.failed
+        ));
     }
-    send_card(ctx, Card::lines("🔒 Lockdown Enabled", lines).kind(CardKind::Success)).await
+    send_card(
+        ctx,
+        Card::lines("🔒 Lockdown Enabled", lines).kind(CardKind::Success),
+    )
+    .await
 }
 
 /// Lift the server-wide channel lockdown.
@@ -184,7 +191,8 @@ pub async fn lockdown_enable(ctx: Context<'_>) -> Result<(), Error> {
 pub async fn lockdown_disable(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild = guild_id(ctx)?;
-    let changes = permissions::set_guild_locked(ctx.http(), guild, false, "Server lockdown lifted").await;
+    let changes =
+        permissions::set_guild_locked(ctx.http(), guild, false, "Server lockdown lifted").await;
 
     if changes.all_failed() {
         return send_card(
@@ -206,8 +214,14 @@ pub async fn lockdown_disable(ctx: Context<'_>) -> Result<(), Error> {
         changes.modified
     )];
     if changes.failed > 0 {
-        lines.push(format!("{} channel(s) could not be modified.", changes.failed));
+        lines.push(format!(
+            "{} channel(s) could not be modified.",
+            changes.failed
+        ));
     }
-    send_card(ctx, Card::lines("🔓 Lockdown Disabled", lines).kind(CardKind::Success)).await
+    send_card(
+        ctx,
+        Card::lines("🔓 Lockdown Disabled", lines).kind(CardKind::Success),
+    )
+    .await
 }
-

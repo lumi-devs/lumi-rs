@@ -1,11 +1,11 @@
 use chrono::{TimeDelta, Utc};
+use lumi_db::entities::{enums::CaseAction, mod_note, moderation_case, warn_threshold};
+use lumi_kernel::Result;
+use lumi_kernel::module_state;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect, Set,
 };
-use lumi_db::entities::{enums::CaseAction, mod_note, moderation_case, warn_threshold};
-use lumi_kernel::module_state;
-use lumi_kernel::Result;
 
 use crate::config;
 
@@ -109,7 +109,9 @@ pub async fn delete_case(
 ) -> Result<Option<moderation_case::Model>> {
     let case = get_case(db, guild_id, case_number).await?;
     if let Some(case) = &case {
-        moderation_case::Entity::delete_by_id(case.id).exec(db).await?;
+        moderation_case::Entity::delete_by_id(case.id)
+            .exec(db)
+            .await?;
     }
     Ok(case)
 }

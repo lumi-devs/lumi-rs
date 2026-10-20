@@ -118,7 +118,10 @@ impl Cache {
     /// Version reported by the connected Redis, e.g. `8.10.2`.
     pub async fn server_version(&self) -> Result<String> {
         let mut conn = self.redis.clone();
-        let info: String = redis::cmd("INFO").arg("server").query_async(&mut conn).await?;
+        let info: String = redis::cmd("INFO")
+            .arg("server")
+            .query_async(&mut conn)
+            .await?;
         Ok(info_field::<String>(&info, "redis_version").unwrap_or_else(|| "unknown".to_string()))
     }
 
@@ -163,7 +166,8 @@ impl Cache {
         self.local.invalidate(key).await;
         let mut conn = self.redis.clone();
         let _: i64 = conn.del(key).await?;
-        self.publish(&Invalidation::Keys(vec![key.to_string()])).await
+        self.publish(&Invalidation::Keys(vec![key.to_string()]))
+            .await
     }
 
     pub async fn invalidate_prefix(&self, prefix: &str) -> Result<()> {
@@ -196,7 +200,8 @@ impl Cache {
                 break;
             }
         }
-        self.publish(&Invalidation::Prefix(prefix.to_string())).await
+        self.publish(&Invalidation::Prefix(prefix.to_string()))
+            .await
     }
 
     async fn publish(&self, msg: &Invalidation) -> Result<()> {

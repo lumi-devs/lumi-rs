@@ -63,13 +63,17 @@ impl Config {
     pub fn load() -> Result<Self> {
         let token = std::env::var("BOT_TOKEN")
             .or_else(|_| std::env::var("DISCORD_TOKEN"))
-            .map_err(|_| LumiError::Config("BOT_TOKEN or DISCORD_TOKEN must be set in environment / .env".into()))?;
+            .map_err(|_| {
+                LumiError::Config(
+                    "BOT_TOKEN or DISCORD_TOKEN must be set in environment / .env".into(),
+                )
+            })?;
 
         let database_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/lumi".into());
 
-        let redis_url = std::env::var("REDIS_URL")
-            .unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
 
         let rpc_token = std::env::var("RPC_TOKEN").ok();
         let rpc_port = std::env::var("RPC_PORT")
@@ -105,9 +109,9 @@ impl Config {
             for id_str in owners.split(',') {
                 let id_str = id_str.trim();
                 if !id_str.is_empty() {
-                    let id = id_str
-                        .parse::<u64>()
-                        .map_err(|_| LumiError::Config(format!("owner entry '{id_str}' is not a snowflake")))?;
+                    let id = id_str.parse::<u64>().map_err(|_| {
+                        LumiError::Config(format!("owner entry '{id_str}' is not a snowflake"))
+                    })?;
                     if !owner_ids.contains(&id) {
                         owner_ids.push(id);
                     }
@@ -152,10 +156,14 @@ fn parse_shard_range(raw: &str, shard_count: Option<u16>) -> Result<ShardRange> 
         LumiError::Config(format!("SHARD_RANGE must be 'start-end', got '{raw}'"))
     })?;
     let start = start.trim().parse::<u16>().map_err(|_| {
-        LumiError::Config(format!("SHARD_RANGE start must be a shard index, got '{raw}'"))
+        LumiError::Config(format!(
+            "SHARD_RANGE start must be a shard index, got '{raw}'"
+        ))
     })?;
     let end = end.trim().parse::<u16>().map_err(|_| {
-        LumiError::Config(format!("SHARD_RANGE end must be a shard index, got '{raw}'"))
+        LumiError::Config(format!(
+            "SHARD_RANGE end must be a shard index, got '{raw}'"
+        ))
     })?;
 
     if start > end {
@@ -217,7 +225,10 @@ mod tests {
     fn shard_range_rejects_malformed_input() {
         for raw in ["", "5", "a-b", "0-", "-3", "1-2-3", "1.5-2", "-1-2"] {
             assert!(
-                matches!(parse_shard_range(raw, Some(8)).err(), Some(LumiError::Config(_))),
+                matches!(
+                    parse_shard_range(raw, Some(8)).err(),
+                    Some(LumiError::Config(_))
+                ),
                 "expected error for '{raw}'"
             );
         }

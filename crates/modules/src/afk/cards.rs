@@ -1,21 +1,16 @@
 use serenity::all::{
-    ButtonStyle, CreateActionRow, CreateButton, CreateComponent,
-    SeparatorSpacingSize,
+    ButtonStyle, CreateActionRow, CreateButton, CreateComponent, SeparatorSpacingSize,
 };
 
-use lumi_ui::panels::{action_row_of, component_emoji, pagination_row};
 use lumi_ui::container::Container;
+use lumi_ui::panels::{action_row_of, component_emoji, pagination_row};
 use lumi_ui::{CardOptions, CardReply, make_list_card};
 
 /// A compact card: bold title, divider, body, optional action rows.
 ///
 /// The AFK surfaces mirror lumi's hand-built containers (`**title**` rather
 /// than a `##` card heading), so they are assembled from [`Container`].
-fn compact_card(
-    title: &str,
-    body: &str,
-    action_rows: Vec<CreateActionRow<'static>>,
-) -> CardReply {
+fn compact_card(title: &str, body: &str, action_rows: Vec<CreateActionRow<'static>>) -> CardReply {
     let mut container = Container::new()
         .text(format!("**{title}**"))
         .separator(true, SeparatorSpacingSize::Small)
@@ -82,4 +77,3 @@ pub fn mentions_card(
     card.ephemeral = true;
     card
 }
-

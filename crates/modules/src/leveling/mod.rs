@@ -21,7 +21,8 @@ impl Module for LevelingModule {
         ModuleMeta {
             display_name: "Leveling".to_string(),
             emoji: "⭐".to_string(),
-            description: "Server experience, level progression, rank cards, and leaderboards.".to_string(),
+            description: "Server experience, level progression, rank cards, and leaderboards."
+                .to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }

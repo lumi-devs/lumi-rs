@@ -4,19 +4,19 @@ use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock};
 
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 
-use lumi_kernel::services::Services;
 use lumi_kernel::Result;
+use lumi_kernel::services::Services;
 
 static PROMETHEUS: LazyLock<Option<PrometheusHandle>> =
     LazyLock::new(|| match PrometheusBuilder::new().install_recorder() {
@@ -111,37 +111,49 @@ async fn action(
     tracing::info!(action = %req.action, "executing rpc action");
 
     match req.action.as_str() {
-        "ping" => {
-            (StatusCode::OK, Json(ActionResponse {
+        "ping" => (
+            StatusCode::OK,
+            Json(ActionResponse {
                 success: true,
                 data: Some(json!({ "status": "pong", "time": chrono::Utc::now().to_rfc3339() })),
                 error: None,
-            }))
-        }
+            }),
+        ),
         "cache.clear" => {
             // Invalidate redis cache keys
-            (StatusCode::OK, Json(ActionResponse {
-                success: true,
-                data: Some(json!({ "message": "cache invalidation triggered" })),
-                error: None,
-            }))
+            (
+                StatusCode::OK,
+                Json(ActionResponse {
+                    success: true,
+                    data: Some(json!({ "message": "cache invalidation triggered" })),
+                    error: None,
+                }),
+            )
         }
         "modules.list" => {
-            let modules: Vec<_> = state.services.registry.iter().map(|m| {
-                let meta = m.metadata();
-                json!({
-                    "name": m.name(),
-                    "display_name": meta.display_name,
-                    "emoji": meta.emoji,
-                    "version": meta.version,
+            let modules: Vec<_> = state
+                .services
+                .registry
+                .iter()
+                .map(|m| {
+                    let meta = m.metadata();
+                    json!({
+                        "name": m.name(),
+                        "display_name": meta.display_name,
+                        "emoji": meta.emoji,
+                        "version": meta.version,
+                    })
                 })
-            }).collect();
+                .collect();
 
-            (StatusCode::OK, Json(ActionResponse {
-                success: true,
-                data: Some(json!({ "modules": modules })),
-                error: None,
-            }))
+            (
+                StatusCode::OK,
+                Json(ActionResponse {
+                    success: true,
+                    data: Some(json!({ "modules": modules })),
+                    error: None,
+                }),
+            )
         }
         "security.panic.status" => {
             if let Some(guild_id) = req
@@ -152,34 +164,44 @@ async fn action(
             {
                 match state.services.security.get_panic_status(guild_id).await {
                     Ok(st) => {
-                        return (StatusCode::OK, Json(ActionResponse {
-                            success: true,
-                            data: Some(json!({ "panic": st })),
-                            error: None,
-                        }));
+                        return (
+                            StatusCode::OK,
+                            Json(ActionResponse {
+                                success: true,
+                                data: Some(json!({ "panic": st })),
+                                error: None,
+                            }),
+                        );
                     }
                     Err(e) => {
-                        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ActionResponse {
-                            success: false,
-                            data: None,
-                            error: Some(e.to_string()),
-                        }));
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ActionResponse {
+                                success: false,
+                                data: None,
+                                error: Some(e.to_string()),
+                            }),
+                        );
                     }
                 }
             }
-            (StatusCode::BAD_REQUEST, Json(ActionResponse {
-                success: false,
-                data: None,
-                error: Some("missing guild_id in payload".to_string()),
-            }))
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ActionResponse {
+                    success: false,
+                    data: None,
+                    error: Some("missing guild_id in payload".to_string()),
+                }),
+            )
         }
-        _ => {
-            (StatusCode::NOT_FOUND, Json(ActionResponse {
+        _ => (
+            StatusCode::NOT_FOUND,
+            Json(ActionResponse {
                 success: false,
                 data: None,
                 error: Some(format!("unknown action: {}", req.action)),
-            }))
-        }
+            }),
+        ),
     }
 }
 

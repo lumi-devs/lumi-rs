@@ -249,7 +249,11 @@ impl PermitResolver {
             return rows;
         }
         if ctx.is_guild_owner {
-            rows.push(tier_row("owner", Verdict::Allow, Some("server owner".into())));
+            rows.push(tier_row(
+                "owner",
+                Verdict::Allow,
+                Some("server owner".into()),
+            ));
             return rows;
         }
         rows.push(tier_row("owner", Verdict::Pass, None));
@@ -276,7 +280,11 @@ impl PermitResolver {
         );
         if decided || ctx.is_quarantined {
             if ctx.is_quarantined && !decided {
-                rows.push(tier_row("quarantine", Verdict::Deny, Some("user is quarantined".into())));
+                rows.push(tier_row(
+                    "quarantine",
+                    Verdict::Deny,
+                    Some("user is quarantined".into()),
+                ));
             }
             return rows;
         }
@@ -297,7 +305,12 @@ impl PermitResolver {
                 &mut rows,
                 &mut decided,
                 &mut allowed,
-                self.evaluate_bucket("custom:channel", self.by_channel.get(&channel), ctx.node, false),
+                self.evaluate_bucket(
+                    "custom:channel",
+                    self.by_channel.get(&channel),
+                    ctx.node,
+                    false,
+                ),
             );
             if decided {
                 return rows;
@@ -352,7 +365,11 @@ impl PermitResolver {
             if permit.kind != wanted {
                 continue;
             }
-            if let Some(pattern) = permit.nodes.iter().find(|pattern| node_matches(pattern, node)) {
+            if let Some(pattern) = permit
+                .nodes
+                .iter()
+                .find(|pattern| node_matches(pattern, node))
+            {
                 match permit.polarity {
                     PermitPolarity::Deny => deny = Some(pattern.clone()),
                     PermitPolarity::Grant => {
@@ -468,7 +485,11 @@ mod tests {
         }
     }
 
-    fn assignment(permit_id: i32, target_type: PermitTargetType, target_id: i64) -> PermitAssignment {
+    fn assignment(
+        permit_id: i32,
+        target_type: PermitTargetType,
+        target_id: i64,
+    ) -> PermitAssignment {
         PermitAssignment {
             permit_id,
             guild_id: "1".into(),
@@ -527,7 +548,12 @@ mod tests {
 
     #[test]
     fn user_custom_grant_decides() {
-        let permits = vec![permit(1, PermitKind::Custom, PermitPolarity::Grant, &["mod.ban"])];
+        let permits = vec![permit(
+            1,
+            PermitKind::Custom,
+            PermitPolarity::Grant,
+            &["mod.ban"],
+        )];
         let resolver = PermitResolver::new(permits, vec![assignment(1, PermitTargetType::User, 7)]);
         let decision = resolver.resolve(&ctx(&[], "mod.ban"));
         assert!(decision.allowed);
@@ -549,7 +575,10 @@ mod tests {
         );
         let decision = resolver.resolve(&ctx(&[], "mod.ban"));
         assert!(!decision.allowed);
-        assert_eq!(decision.rows.last().map(|r| r.tier.as_str()), Some("enforced:user"));
+        assert_eq!(
+            decision.rows.last().map(|r| r.tier.as_str()),
+            Some("enforced:user")
+        );
     }
 
     #[test]
@@ -567,6 +596,9 @@ mod tests {
         let resolver = PermitResolver::new(Vec::new(), Vec::new());
         let rows = resolver.explain(&ctx(&[], "mod.ban"));
         assert_eq!(rows.first().map(|r| r.tier.as_str()), Some("owner"));
-        assert!(rows.iter().any(|r| r.tier == "manager" && r.verdict == Verdict::Pass));
+        assert!(
+            rows.iter()
+                .any(|r| r.tier == "manager" && r.verdict == Verdict::Pass)
+        );
     }
 }

@@ -23,7 +23,12 @@ const MAX_USER_LIMIT: i32 = 99;
 const MAX_CHANNEL_NAME: usize = 100;
 
 /// TempVC entry point. `,tempvc` (prefix) shows the panel directly.
-#[poise::command(slash_command, prefix_command, guild_only, subcommands("panel_cmd", "admin_cmd"))]
+#[poise::command(
+    slash_command,
+    prefix_command,
+    guild_only,
+    subcommands("panel_cmd", "admin_cmd")
+)]
 pub async fn tempvc(ctx: Context<'_>) -> Result<(), Error> {
     run_panel(ctx).await
 }
@@ -41,8 +46,10 @@ async fn run_panel(ctx: Context<'_>) -> Result<(), Error> {
 
     let Some(record) = store::get_active_channel(&ctx.data().db, guild_id, user_id).await? else {
         ctx.send(
-            error_card("You do not own an active temporary voice channel. Join a generator channel first.")
-                .reply(),
+            error_card(
+                "You do not own an active temporary voice channel. Join a generator channel first.",
+            )
+            .reply(),
         )
         .await?;
         return Ok(());
@@ -124,7 +131,12 @@ fn is_admin(ctx: &serenity::Context, guild_id: GuildId, user_id: UserId) -> bool
     })
 }
 
-fn may_manage(ctx: &serenity::Context, services: &Services, guild_id: GuildId, user: UserId) -> bool {
+fn may_manage(
+    ctx: &serenity::Context,
+    services: &Services,
+    guild_id: GuildId,
+    user: UserId,
+) -> bool {
     is_admin(ctx, guild_id, user) || services.cfg.is_owner(user.get())
 }
 
@@ -203,9 +215,9 @@ fn input_modal(
     if !value.is_empty() {
         input = input.value(value.to_string());
     }
-    CreateModal::new(custom_id, title.to_string()).components(vec![
-        CreateModalComponent::Label(CreateLabel::input_text(label.to_string(), input)),
-    ])
+    CreateModal::new(custom_id, title.to_string()).components(vec![CreateModalComponent::Label(
+        CreateLabel::input_text(label.to_string(), input),
+    )])
 }
 
 async fn show_modal(
@@ -446,10 +458,22 @@ async fn panel_action(
             respond(ctx, interaction, card, true).await
         }
         "kick" | "trust" | "untrust" | "block" | "unblock" | "transfer" => {
-            respond(ctx, interaction, views::picker_card(action, channel_id), true).await
+            respond(
+                ctx,
+                interaction,
+                views::picker_card(action, channel_id),
+                true,
+            )
+            .await
         }
         "delete" => {
-            respond(ctx, interaction, views::delete_confirm_card(channel_id), true).await
+            respond(
+                ctx,
+                interaction,
+                views::delete_confirm_card(channel_id),
+                true,
+            )
+            .await
         }
         "delok" => {
             store::delete_record(&services.db, guild_id.get(), channel_id).await?;
@@ -639,15 +663,7 @@ pub async fn handle_component(
             let Some(channel_id) = channel.parse::<u64>().ok() else {
                 return Ok(());
             };
-            panel_action(
-                ctx,
-                services,
-                interaction,
-                guild_id,
-                channel_id,
-                parts[1],
-            )
-            .await
+            panel_action(ctx, services, interaction, guild_id, channel_id, parts[1]).await
         }
         ["tempvc", "pick" | "pickrole", action, channel] => {
             let Some(channel_id) = channel.parse::<u64>().ok() else {
@@ -834,30 +850,34 @@ pub async fn handle_modal(
         }
         ["tempvc", "admin", "namem", _] => {
             if !may_manage(ctx, services, guild_id, modal.user.id) {
-                return respond_modal(ctx, modal, error_card("Only staff can manage generators.")).await;
+                return respond_modal(ctx, modal, error_card("Only staff can manage generators."))
+                    .await;
             }
             let name = truncate_chars(value.trim(), MAX_CHANNEL_NAME);
             if name.is_empty() {
                 return respond_modal(ctx, modal, error_card("Give the template some text.")).await;
             }
-            store::update_generator(&services.db, guild_id.get(), channel_id, Some(name.clone()), None)
-                .await?;
+            store::update_generator(
+                &services.db,
+                guild_id.get(),
+                channel_id,
+                Some(name.clone()),
+                None,
+            )
+            .await?;
             respond_generator(ctx, services, modal, guild_id.get(), channel_id).await
         }
         ["tempvc", "admin", "limitm", _] => {
             if !may_manage(ctx, services, guild_id, modal.user.id) {
-                return respond_modal(ctx, modal, error_card("Only staff can manage generators.")).await;
+                return respond_modal(ctx, modal, error_card("Only staff can manage generators."))
+                    .await;
             }
             let Ok(limit) = value.parse::<i32>() else {
-                return respond_modal(
-                    ctx,
-                    modal,
-                    error_card("Enter 0-99 (0 = unlimited)."),
-                )
-                .await;
+                return respond_modal(ctx, modal, error_card("Enter 0-99 (0 = unlimited).")).await;
             };
             let limit = limit.clamp(0, MAX_USER_LIMIT);
-            store::update_generator(&services.db, guild_id.get(), channel_id, None, Some(limit)).await?;
+            store::update_generator(&services.db, guild_id.get(), channel_id, None, Some(limit))
+                .await?;
             respond_generator(ctx, services, modal, guild_id.get(), channel_id).await
         }
         _ => Ok(()),
@@ -904,11 +924,7 @@ mod tests {
         let cmd = tempvc();
         assert_eq!(cmd.name, "tempvc");
         assert_eq!(cmd.subcommands.len(), 2);
-        let names: Vec<String> = cmd
-            .subcommands
-            .iter()
-            .map(|s| s.name.to_string())
-            .collect();
+        let names: Vec<String> = cmd.subcommands.iter().map(|s| s.name.to_string()).collect();
         assert_eq!(names, ["panel", "admin"]);
         let admin = &cmd.subcommands[1];
         assert_eq!(

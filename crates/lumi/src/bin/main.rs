@@ -5,7 +5,11 @@ use anyhow::Result;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "lumi", version, about = "Lumi Discord Bot & Distributed Microservices")]
+#[command(
+    name = "lumi",
+    version,
+    about = "Lumi Discord Bot & Distributed Microservices"
+)]
 struct Cli {
     #[arg(default_value = "all")]
     role: String,
@@ -95,7 +99,9 @@ async fn start_gateway(cfg: lumi_kernel::Config) -> Result<()> {
                 total,
                 "starting shard range"
             );
-            client.start_shard_range(range.start..range.end, total).await?;
+            client
+                .start_shard_range(range.start..range.end, total)
+                .await?;
         }
         (None, Some(total)) => {
             tracing::info!(total, "starting forced shard count");
@@ -159,7 +165,7 @@ async fn start_scheduler(cfg: lumi_kernel::Config) -> Result<()> {
 }
 
 fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
 
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,lumi=debug"));

@@ -69,6 +69,9 @@ mod tests {
     fn page_footer_handles_empty_hint() {
         assert_eq!(format_page_footer(0, 0, None), "Page 1 of 1");
         assert_eq!(format_page_footer(2, 5, Some("")), "Page 3 of 5");
-        assert_eq!(format_page_footer(2, 5, Some("12 items")), "Page 3 of 5 · 12 items");
+        assert_eq!(
+            format_page_footer(2, 5, Some("12 items")),
+            "Page 3 of 5 · 12 items"
+        );
     }
 }

@@ -44,11 +44,12 @@ pub async fn confirm(
     let reply = ctx.send(card.into_reply().reply()).await?;
     let message = reply.message().await?;
 
-    let interaction = serenity::collector::ComponentInteractionCollector::new(ctx.serenity_context())
-        .message_id(message.id)
-        .author_id(ctx.author().id)
-        .timeout(Duration::from_secs(30))
-        .await;
+    let interaction =
+        serenity::collector::ComponentInteractionCollector::new(ctx.serenity_context())
+            .message_id(message.id)
+            .author_id(ctx.author().id)
+            .timeout(Duration::from_secs(30))
+            .await;
 
     let Some(press) = interaction else {
         let _ = reply

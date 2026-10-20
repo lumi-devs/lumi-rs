@@ -86,7 +86,10 @@ pub async fn handle_component(
         return Ok(());
     }
 
-    let Some(delta) = action.strip_prefix("p_").and_then(|d| d.parse::<i64>().ok()) else {
+    let Some(delta) = action
+        .strip_prefix("p_")
+        .and_then(|d| d.parse::<i64>().ok())
+    else {
         return Ok(());
     };
 

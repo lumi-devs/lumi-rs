@@ -1,5 +1,5 @@
-use sea_orm::entity::prelude::*;
 use crate::ids::GuildId;
+use sea_orm::entity::prelude::*;
 
 /// A named, per-guild monotonically increasing counter (e.g. moderation case
 /// numbers). Incremented atomically through `db::next_counter`.

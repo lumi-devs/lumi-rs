@@ -110,7 +110,10 @@ pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
                         if member.membership_state == serenity::MembershipState::Accepted {
                             let id = member.user.id.get();
                             if !cfg.owner_ids.contains(&id) {
-                                tracing::info!(member_id = id, "resolved team member owner from Discord");
+                                tracing::info!(
+                                    member_id = id,
+                                    "resolved team member owner from Discord"
+                                );
                                 cfg.owner_ids.push(id);
                             }
                         }
@@ -157,7 +160,9 @@ pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
                     let data = ctx.framework.user_data();
                     let db = &data.db;
                     let guild_id = ctx.guild_id.map(serenity::all::GuildId::get);
-                    let p = lumi_db::get_prefix(db, guild_id).await.unwrap_or_else(|_| ",".to_string());
+                    let p = lumi_db::get_prefix(db, guild_id)
+                        .await
+                        .unwrap_or_else(|_| ",".to_string());
                     Ok(Some(p.into()))
                 })
             }),

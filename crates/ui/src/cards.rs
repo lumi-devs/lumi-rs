@@ -250,7 +250,11 @@ impl Card {
                 if i > 0 {
                     children.push(separator(true));
                 }
-                let combined = chunk.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+                let combined = chunk
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 children.push(text(combined));
             }
         }
@@ -388,7 +392,10 @@ mod tests {
     #[test]
     fn badge_matches_layout_port() {
         assert_eq!(format_status_badge("success", None), "\u{1f7e2} `SUCCESS`");
-        assert_eq!(format_status_badge("x", Some("Custom")), "\u{1f518} `Custom`");
+        assert_eq!(
+            format_status_badge("x", Some("Custom")),
+            "\u{1f518} `Custom`"
+        );
     }
 
     #[test]
@@ -401,7 +408,7 @@ mod tests {
 
     #[test]
     fn oversized_cards_are_clamped() {
-        use crate::panels::{action_row_of, MAX_ACTION_ROWS, MAX_ROW_COMPONENTS};
+        use crate::panels::{MAX_ACTION_ROWS, MAX_ROW_COMPONENTS, action_row_of};
         use serenity::all::CreateButton;
         let rows: Vec<CreateActionRow<'static>> = (0..MAX_ACTION_ROWS + 3)
             .map(|i| {
@@ -421,14 +428,12 @@ mod tests {
         let Ok(json) = serde_json::to_value(&card.components[0]) else {
             panic!("card serializes");
         };
-        let rows = json["components"]
-            .as_array()
-            .map_or(0, |components| {
-                components
-                    .iter()
-                    .filter(|component| component["type"] == 1)
-                    .count()
-            });
+        let rows = json["components"].as_array().map_or(0, |components| {
+            components
+                .iter()
+                .filter(|component| component["type"] == 1)
+                .count()
+        });
         assert_eq!(rows, MAX_ACTION_ROWS);
     }
 
