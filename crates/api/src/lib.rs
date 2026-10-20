@@ -72,14 +72,16 @@ pub async fn serve(addr: SocketAddr, token: Option<String>, config: &Config, ser
 
     let interactions_router = interactions::router(config);
 
-    let app = Router::new()
-        .merge(interactions_router)
+    let api_routes = Router::new()
         .route("/action", post(action))
         .route_layer(GovernorLayer::new(governor_conf))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics))
-        .with_state(state)
+        .with_state(state);
+
+    let app = api_routes
+        .merge(interactions_router)
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

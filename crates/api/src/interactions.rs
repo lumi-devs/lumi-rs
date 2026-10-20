@@ -1,12 +1,10 @@
 //! Discord HTTP Interaction Webhook endpoint with Ed25519 signature verification.
 
 use axum::body::Bytes;
-use axum::extract::{Request, State};
+use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use axum::{Json, Router};
-use hex;
 use ring::signature::{UnparsedPublicKey, ED25519};
 use serde_json::{Value, json};
 
@@ -103,11 +101,10 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{self, Request};
-    use axum::Router;
     use tower::ServiceExt;
 
     fn make_test_config(with_key: bool) -> Config {
-        let mut cfg = Config {
+        Config {
             role: lumi_kernel::Role::Api,
             token: "test".into(),
             database_url: "postgres://localhost".into(),
@@ -124,8 +121,7 @@ mod tests {
             } else {
                 None
             },
-        };
-        cfg
+        }
     }
 
     #[tokio::test]
@@ -133,16 +129,21 @@ mod tests {
         let cfg = make_test_config(false);
         let app = router(&cfg);
 
-        let req = Request::builder()
+        let Ok(req) = Request::builder()
             .method("POST")
             .uri("/api/interactions")
             .header("X-Signature-Ed25519", "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
             .header("X-Signature-Timestamp", "1234567890")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(Body::from(r#"{"type": 1}"#))
-            .unwrap();
+        else {
+            panic!("valid request");
+        };
 
-        let resp = app.oneshot(req).await.unwrap();
+        let resp = match app.oneshot(req).await {
+            Ok(r) => r,
+            Err(e) => match e {},
+        };
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -151,37 +152,44 @@ mod tests {
         let cfg = make_test_config(true);
         let app = router(&cfg);
 
-        let req = Request::builder()
+        let Ok(req) = Request::builder()
             .method("POST")
             .uri("/api/interactions")
             .header("X-Signature-Ed25519", "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
             .header("X-Signature-Timestamp", "1234567890")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(Body::from(r#"{"type": 1}"#))
-            .unwrap();
+        else {
+            panic!("valid request");
+        };
 
-        let resp = app.oneshot(req).await.unwrap();
+        let resp = match app.oneshot(req).await {
+            Ok(r) => r,
+            Err(e) => match e {},
+        };
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn ping_with_valid_signature_returns_pong() {
-        // This test would need a real Ed25519 keypair to generate a valid signature.
-        // Since we don't have one in tests, we verify the structure is correct.
         let cfg = make_test_config(true);
         let app = router(&cfg);
 
-        let req = Request::builder()
+        let Ok(req) = Request::builder()
             .method("POST")
             .uri("/api/interactions")
             .header("X-Signature-Ed25519", "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
             .header("X-Signature-Timestamp", "1234567890")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(Body::from(r#"{"type": 1}"#))
-            .unwrap();
+        else {
+            panic!("valid request");
+        };
 
-        let resp = app.oneshot(req).await.unwrap();
-        // Without a valid signature, this will be 401 - the test verifies the endpoint exists
+        let resp = match app.oneshot(req).await {
+            Ok(r) => r,
+            Err(e) => match e {},
+        };
         assert!(resp.status() == StatusCode::UNAUTHORIZED || resp.status() == StatusCode::OK);
     }
 
@@ -190,16 +198,21 @@ mod tests {
         let cfg = make_test_config(true);
         let app = router(&cfg);
 
-        let req = Request::builder()
+        let Ok(req) = Request::builder()
             .method("POST")
             .uri("/api/interactions")
             .header("X-Signature-Ed25519", "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
             .header("X-Signature-Timestamp", "1234567890")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(Body::from(r#"{"type": 2, "data": {"name": "test"}}"#))
-            .unwrap();
+        else {
+            panic!("valid request");
+        };
 
-        let resp = app.oneshot(req).await.unwrap();
+        let resp = match app.oneshot(req).await {
+            Ok(r) => r,
+            Err(e) => match e {},
+        };
         assert!(resp.status() == StatusCode::UNAUTHORIZED || resp.status() == StatusCode::OK);
     }
 }

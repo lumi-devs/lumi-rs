@@ -2199,6 +2199,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tower-http",
  "tower_governor",
  "tracing",
