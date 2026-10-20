@@ -206,6 +206,9 @@ async fn collect_fresh(services: &Services, ctx: &SerenityContext) -> PingData {
 
         channels,
         os_uptime_secs: System::uptime(),
+        collected_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs()),
         avatar_url,
     }
 }

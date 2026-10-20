@@ -15,7 +15,6 @@ use crate::shared::{
     claim_cooldown, cooldown_key, format_seconds, require_guild, secs_ceil, truncate_chars,
 };
 
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MediaType {
     Avatar,
@@ -68,9 +67,7 @@ fn build_media_card(user: &User, kind: MediaType, show_media: bool, ephemeral: b
     if let Some(u) = &url {
         if show_media {
             opts.media_gallery = Some(gallery(u.clone()));
-            buttons.push(
-                CreateButton::new_link(u.clone()).label(format!("Open {}", kind.label())),
-            );
+            buttons.push(CreateButton::new_link(u.clone()).label(format!("Open {}", kind.label())));
         } else {
             buttons.push(
                 CreateButton::new(format!("media:view:{}:{}", kind.key(), user.id))
@@ -134,10 +131,7 @@ async fn media_request(
     {
         let card = Card::new(
             "⏳ Slow Down",
-            format!(
-                "Try again in **{}**.",
-                format_seconds(secs_ceil(remaining))
-            ),
+            format!("Try again in **{}**.", format_seconds(secs_ceil(remaining))),
         )
         .kind(CardKind::Error)
         .ephemeral();
@@ -208,7 +202,12 @@ pub async fn whois(
                 .roles
                 .iter()
                 .filter(|r| r.get() != guild.id.get())
-                .filter_map(|r| guild.roles.get(r).map(|role| (role.position, role.id, role.colour)))
+                .filter_map(|r| {
+                    guild
+                        .roles
+                        .get(r)
+                        .map(|role| (role.position, role.id, role.colour))
+                })
                 .collect();
             sorted_roles.sort_by_key(|r| std::cmp::Reverse(r.0));
 
@@ -247,7 +246,14 @@ pub async fn whois(
                     list.join(", ")
                 }
             };
-            (joined_at, nick, premium_since, role_ids, key_perms_str, accent_color)
+            (
+                joined_at,
+                nick,
+                premium_since,
+                role_ids,
+                key_perms_str,
+                accent_color,
+            )
         } else {
             (None, None, None, Vec::new(), "None".to_string(), None)
         }
@@ -272,7 +278,10 @@ pub async fn whois(
         lines.push(format!("**Nickname**: `{n}`"));
     }
     if let Some(ps) = premium_since {
-        lines.push(format!("💎 **Server Booster** since: <t:{}:R>", ps.timestamp()));
+        lines.push(format!(
+            "💎 **Server Booster** since: <t:{}:R>",
+            ps.timestamp()
+        ));
     }
 
     if !role_ids.is_empty() {
@@ -297,9 +306,11 @@ pub async fn whois(
 
     lines.push(format!("**Key Permissions**: {key_perms_str}"));
 
-    let mut buttons = vec![CreateButton::new_link(format!("discord://-/users/{target_id}"))
-        .label("Profile")
-        .emoji('👤')];
+    let mut buttons = vec![
+        CreateButton::new_link(format!("discord://-/users/{target_id}"))
+            .label("Profile")
+            .emoji('👤'),
+    ];
 
     let avatar_url = target_user.face();
     buttons.push(
@@ -315,9 +326,7 @@ pub async fn whois(
     let bot_tag = if target_user.bot() { " [BOT]" } else { "" };
     let title = format!("👤 User Information — {}{bot_tag}", target_user.name);
 
-    let mut card = Card::lines(title, lines)
-        .kind(CardKind::Info)
-        .options(opts);
+    let mut card = Card::lines(title, lines).kind(CardKind::Info).options(opts);
 
     if let Some(color) = accent_color {
         card = card.accent(Some(color));
@@ -353,7 +362,10 @@ pub async fn serverinfo(ctx: Context<'_>) -> Result<(), Error> {
             format!("**Guild ID**: `{}`", guild.id),
             "### 👥 Members & Boosts".to_string(),
             format!("**Total Members**: `{}`", guild.member_count),
-            format!("**Server Boosts**: `{boosts}` (Tier {:?})", guild.premium_tier),
+            format!(
+                "**Server Boosts**: `{boosts}` (Tier {:?})",
+                guild.premium_tier
+            ),
             "### 🌐 Channels".to_string(),
             format!(
                 "**Text**: `{text}` · **Voice**: `{voice}` · **Categories**: `{categories}` · **Total**: `{}`",
@@ -389,7 +401,12 @@ pub async fn serverinfo(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Change or reset a member's nickname.
-#[poise::command(slash_command, prefix_command, guild_only, default_member_permissions = "MANAGE_NICKNAMES")]
+#[poise::command(
+    slash_command,
+    prefix_command,
+    guild_only,
+    default_member_permissions = "MANAGE_NICKNAMES"
+)]
 pub async fn nick(
     ctx: Context<'_>,
     #[description = "Member to rename"] member: UserId,
@@ -448,8 +465,7 @@ async fn run_purge(
     let message_ids: Vec<MessageId> = messages
         .into_iter()
         .filter(|m| {
-            now.saturating_sub(m.timestamp.unix_timestamp()) < BULK_DELETE_MAX_AGE_SECS
-                && keep(m)
+            now.saturating_sub(m.timestamp.unix_timestamp()) < BULK_DELETE_MAX_AGE_SECS && keep(m)
         })
         .map(|m| m.id)
         .collect();
@@ -549,8 +565,8 @@ pub async fn purge_links(
     ctx: Context<'_>,
     #[description = "How many matching messages to delete (default 100)"] amount: Option<u16>,
 ) -> Result<(), Error> {
-    let re = regex::Regex::new(r"https?://\S+")
-        .map_err(|e| anyhow::anyhow!("link pattern: {e}"))?;
+    let re =
+        regex::Regex::new(r"https?://\S+").map_err(|e| anyhow::anyhow!("link pattern: {e}"))?;
     run_purge(ctx, amount.unwrap_or(100), move |m| {
         re.is_match(m.content.as_str())
     })
@@ -609,12 +625,5 @@ async fn autocomplete_duration<'a>(
 }
 
 pub fn commands() -> Vec<Command> {
-    vec![
-        avatar(),
-        whois(),
-        serverinfo(),
-        banner(),
-        nick(),
-        purge(),
-    ]
+    vec![avatar(), whois(), serverinfo(), banner(), nick(), purge()]
 }

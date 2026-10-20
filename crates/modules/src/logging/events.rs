@@ -149,7 +149,11 @@ pub async fn on_message_update(
             color: ORANGE,
             title: "Message Edited",
             lines: vec![
-                format!("**Author**: <@{}> ({})", new.author.id.get(), new.author.id.get()),
+                format!(
+                    "**Author**: <@{}> ({})",
+                    new.author.id.get(),
+                    new.author.id.get()
+                ),
                 format!("**Channel**: <#{}>", new.channel_id.get()),
                 format!("**Before**: {}", cut(&before, 450)),
                 format!("**After**: {}", cut(&after, 450)),

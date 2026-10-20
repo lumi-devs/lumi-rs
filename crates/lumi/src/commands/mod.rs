@@ -7,8 +7,8 @@ pub mod general;
 pub mod hub;
 pub mod security;
 
-pub use hub::{handle_component as handle_hub_component, handle_modal as handle_hub_modal};
 pub use crate::interactions::confirm;
+pub use hub::{handle_component as handle_hub_component, handle_modal as handle_hub_modal};
 
 /// Resolve the interaction/command guild, or return a user-facing error.
 ///

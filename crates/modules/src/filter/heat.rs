@@ -160,7 +160,11 @@ pub async fn record_mentions(
         .await?;
     let _: Result<(), _> = redis::cmd("EXPIRE")
         .arg(&key)
-        .arg(if window_seconds > 0 { window_seconds } else { 10 })
+        .arg(if window_seconds > 0 {
+            window_seconds
+        } else {
+            10
+        })
         .arg("NX")
         .query_async(&mut conn)
         .await;
@@ -239,8 +243,8 @@ pub async fn check_mention_flood(
     tracing::warn!(guild_id = guild_id.get(), %detail, "filter: auto-lockdown triggered");
 
     if let Some(log_channel) = rules.log_channel {
-        let card = Card::lines("🚨 Auto-Lockdown Triggered", vec![detail.clone()])
-            .kind(CardKind::Error);
+        let card =
+            Card::lines("🚨 Auto-Lockdown Triggered", vec![detail.clone()]).kind(CardKind::Error);
         let _ = GenericChannelId::new(log_channel)
             .send_message(&ctx.http, card.into_reply().message())
             .await;
@@ -261,7 +265,10 @@ pub async fn check_mention_flood(
         let mut conn = cache.redis();
         let key = format!("lumi:filter:{guild_id}:autolockdown");
         let _: Result<(), _> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
-        tracing::info!(guild_id = guild_id.get(), "filter: auto-lockdown expired and lifted");
+        tracing::info!(
+            guild_id = guild_id.get(),
+            "filter: auto-lockdown expired and lifted"
+        );
     });
 }
 
@@ -345,9 +352,11 @@ pub async fn check_heat(
 
     match action {
         HeatAction::Warn => {
-            let reason = format!("Slow down: your messages are triggering spam thresholds ({heat:.1} heat).");
-            let card = Card::lines("⚠️ Activity Warning", vec![reason.clone()])
-                .kind(CardKind::Warning);
+            let reason = format!(
+                "Slow down: your messages are triggering spam thresholds ({heat:.1} heat)."
+            );
+            let card =
+                Card::lines("⚠️ Activity Warning", vec![reason.clone()]).kind(CardKind::Warning);
             let _ = message
                 .channel_id
                 .send_message(&ctx.http, card.into_reply().message())
@@ -375,7 +384,10 @@ pub async fn check_heat(
                     .saturating_add(duration_mins.saturating_mul(60)),
             );
             if let Ok(until) = until {
-                let reason = format!("Heat escalation: exceeded {} heat ({heat:.1})", rules.heat_timeout);
+                let reason = format!(
+                    "Heat escalation: exceeded {} heat ({heat:.1})",
+                    rules.heat_timeout
+                );
                 if let Err(err) = guild_id
                     .edit_member(
                         &ctx.http,
@@ -406,7 +418,10 @@ pub async fn check_heat(
         }
         HeatAction::Quarantine => {
             clear_heat(services, guild_id.get(), user_id.get()).await;
-            let reason = format!("Heat escalation: exceeded {} heat ({heat:.1})", rules.heat_quarantine);
+            let reason = format!(
+                "Heat escalation: exceeded {} heat ({heat:.1})",
+                rules.heat_quarantine
+            );
             if let Ok(Some(quarantine_role)) =
                 crate::moderation::store::quarantine_role(&services.db, guild_id.get()).await
             {
@@ -474,6 +489,8 @@ mod tests {
     #[test]
     fn test_zalgo_detection() {
         assert!(!is_zalgo("Clean normal string"));
-        assert!(is_zalgo("z\u{0300}\u{0301}\u{0302}\u{0303}\u{0304}a\u{0305}\u{0306}l\u{0307}\u{0308}g\u{0309}o"));
+        assert!(is_zalgo(
+            "z\u{0300}\u{0301}\u{0302}\u{0303}\u{0304}a\u{0305}\u{0306}l\u{0307}\u{0308}g\u{0309}o"
+        ));
     }
 }

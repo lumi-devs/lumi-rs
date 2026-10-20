@@ -53,8 +53,8 @@ fn count_lines(dir: &Path) -> u64 {
                 total += count_lines(&path);
             }
         } else if path.extension().is_some_and(|ext| ext == "rs") {
-            total += std::fs::read_to_string(&path)
-                .map_or(0, |source| source.lines().count() as u64);
+            total +=
+                std::fs::read_to_string(&path).map_or(0, |source| source.lines().count() as u64);
         }
     }
     total
@@ -62,8 +62,9 @@ fn count_lines(dir: &Path) -> u64 {
 
 /// Every crate the build resolves, direct or transitive.
 fn count_lock_packages(lockfile: &Path) -> u64 {
-    std::fs::read_to_string(lockfile)
-        .map_or(0, |lock| lock.lines().filter(|line| *line == "[[package]]").count() as u64)
+    std::fs::read_to_string(lockfile).map_or(0, |lock| {
+        lock.lines().filter(|line| *line == "[[package]]").count() as u64
+    })
 }
 
 #[cfg(test)]

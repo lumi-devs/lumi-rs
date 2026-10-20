@@ -1,15 +1,16 @@
 use poise::serenity_prelude as serenity;
 use serenity::all::{ButtonStyle, ComponentInteractionDataKind, CreateActionRow, CreateButton};
 
-use lumi_kernel::bot::Error;
-use lumi_kernel::permits::{explain_permit, ExplainSubject, PermitKind, PermitTargetType, Verdict};
 use lumi_kernel::Services;
+use lumi_kernel::bot::Error;
+use lumi_kernel::permits::{ExplainSubject, PermitKind, PermitTargetType, Verdict, explain_permit};
 use lumi_ui::panels::{
-    action_row_of, back_button, pagination_row, role_select, setting_row, string_select, user_select,
+    action_row_of, back_button, pagination_row, role_select, setting_row, string_select,
+    user_select,
 };
-use lumi_ui::{format_page_footer, Card, CardKind, CardOptions, CardReply};
+use lumi_ui::{Card, CardKind, CardOptions, CardReply, format_page_footer};
 
-use super::{cid, tab_row, GuildCtx, HubId, HubOutcome, HubView};
+use super::{GuildCtx, HubId, HubOutcome, HubView, cid, tab_row};
 
 const PERMS_PER_PAGE: usize = 4;
 const PERMIT_ORDER_PER_PAGE: usize = 3;
@@ -25,7 +26,9 @@ pub async fn list_card(
     let assignments = lumi_db::list_assignments(&services.db, guild.id).await?;
     let total = page_count(assignments.len(), PERMS_PER_PAGE);
     let safe_page = page.min(total - 1);
-    let start = safe_page.saturating_mul(PERMS_PER_PAGE).min(assignments.len());
+    let start = safe_page
+        .saturating_mul(PERMS_PER_PAGE)
+        .min(assignments.len());
     let end = start.saturating_add(PERMS_PER_PAGE).min(assignments.len());
 
     let sections = assignments[start..end]
@@ -102,7 +105,11 @@ pub async fn list_card(
 }
 
 /// Permit display order with up/down nudge buttons.
-async fn order_card(services: &Services, guild: &GuildCtx, page: usize) -> Result<CardReply, Error> {
+async fn order_card(
+    services: &Services,
+    guild: &GuildCtx,
+    page: usize,
+) -> Result<CardReply, Error> {
     let permits = lumi_db::list_permits(&services.db, guild.id).await?;
     let total = page_count(permits.len(), PERMIT_ORDER_PER_PAGE);
     let safe_page = page.min(total - 1);
@@ -154,7 +161,11 @@ async fn order_card(services: &Services, guild: &GuildCtx, page: usize) -> Resul
     };
 
     let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Hub".to_string(), "Permissions".to_string(), "Order".to_string()];
+    opts.breadcrumbs = vec![
+        "Hub".to_string(),
+        "Permissions".to_string(),
+        "Order".to_string(),
+    ];
     opts.separator_above_action_rows = true;
     opts.action_rows = action_rows;
 
@@ -165,9 +176,17 @@ async fn order_card(services: &Services, guild: &GuildCtx, page: usize) -> Resul
 }
 
 /// Pick which permit of `kind` to assign.
-async fn picker_card(services: &Services, guild: &GuildCtx, kind: PermitKind) -> Result<CardReply, Error> {
+async fn picker_card(
+    services: &Services,
+    guild: &GuildCtx,
+    kind: PermitKind,
+) -> Result<CardReply, Error> {
     let permits = lumi_db::list_permits_for_kind(&services.db, guild.id, kind).await?;
-    let kind_label = if kind == PermitKind::Enforced { "Enforced" } else { "Custom" };
+    let kind_label = if kind == PermitKind::Enforced {
+        "Enforced"
+    } else {
+        "Custom"
+    };
     let back = back_button(cid(&["tab", "permissions"]));
 
     let (body, action_rows) = if permits.is_empty() {
@@ -191,7 +210,11 @@ async fn picker_card(services: &Services, guild: &GuildCtx, kind: PermitKind) ->
         (
             "Pick which permit to assign.".to_string(),
             vec![
-                string_select(cid(&["permit", "pick", kind_str(kind)]), "Pick a permit…", options),
+                string_select(
+                    cid(&["permit", "pick", kind_str(kind)]),
+                    "Pick a permit…",
+                    options,
+                ),
                 back,
             ],
         )
@@ -254,8 +277,12 @@ async fn explain_picker_card(
     let names = node_names(services, guild).await?;
     let total = page_count(names.len(), EXPLAIN_NODES_PER_PAGE);
     let safe_page = node_page.min(total - 1);
-    let start = safe_page.saturating_mul(EXPLAIN_NODES_PER_PAGE).min(names.len());
-    let end = start.saturating_add(EXPLAIN_NODES_PER_PAGE).min(names.len());
+    let start = safe_page
+        .saturating_mul(EXPLAIN_NODES_PER_PAGE)
+        .min(names.len());
+    let end = start
+        .saturating_add(EXPLAIN_NODES_PER_PAGE)
+        .min(names.len());
 
     let mut action_rows = vec![user_select(cid(&["permexplainuser"]), "Pick a member…")];
     if let Some(user_id) = subject {
@@ -281,11 +308,17 @@ async fn explain_picker_card(
 
     let body = subject.map_or_else(
         || "-# Pick a member first, then a permit.".to_string(),
-        |user_id| format!("Subject: <@{user_id}>\n-# Pick a permit to see every tier that decides it."),
+        |user_id| {
+            format!("Subject: <@{user_id}>\n-# Pick a permit to see every tier that decides it.")
+        },
     );
 
     let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Hub".to_string(), "Permissions".to_string(), "Explain".to_string()];
+    opts.breadcrumbs = vec![
+        "Hub".to_string(),
+        "Permissions".to_string(),
+        "Explain".to_string(),
+    ];
     opts.separator_above_action_rows = true;
     opts.action_rows = action_rows;
 
@@ -325,7 +358,10 @@ async fn explain_card(
                 Verdict::Deny => "deny",
                 Verdict::Pass => "pass",
             };
-            let detail = row.detail.as_ref().map_or(String::new(), |d| format!(" ({d})"));
+            let detail = row
+                .detail
+                .as_ref()
+                .map_or(String::new(), |d| format!(" ({d})"));
             format!("-# {mark} `{}` → {word}{detail}", row.tier)
         })
         .collect();
@@ -338,19 +374,24 @@ async fn explain_card(
     };
 
     let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Hub".to_string(), "Permissions".to_string(), "Explain".to_string()];
+    opts.breadcrumbs = vec![
+        "Hub".to_string(),
+        "Permissions".to_string(),
+        "Explain".to_string(),
+    ];
     opts.separator_above_action_rows = true;
     opts.action_rows = vec![back_button(cid(&["permexplain"]))];
 
-    Ok(
-        Card::lines(
-            format!("🛡️ Why <@{subject}> {} use `{node}`", if denied { "can't" } else { "can" }),
-            body,
-        )
-        .kind(CardKind::Primary)
-        .options(opts)
-        .into_reply(),
+    Ok(Card::lines(
+        format!(
+            "🛡️ Why <@{subject}> {} use `{node}`",
+            if denied { "can't" } else { "can" }
+        ),
+        body,
     )
+    .kind(CardKind::Primary)
+    .options(opts)
+    .into_reply())
 }
 
 /// Every permit node known to the guild, unique and sorted.
@@ -372,13 +413,22 @@ pub async fn dispatch(
 ) -> Result<HubOutcome, Error> {
     match id.head().unwrap_or_default() {
         "permdel" => {
-            if let Some((permit_id, target_type, target_str_id)) = id.get(1).and_then(parse_target) {
+            if let Some((permit_id, target_type, target_str_id)) = id.get(1).and_then(parse_target)
+            {
                 if let Ok(target_snowflake) = target_str_id.parse::<lumi_db::ids::SnowflakeId>() {
-                    lumi_db::unassign_permit(&services.db, guild.id, permit_id, target_type, target_snowflake)
-                        .await?;
+                    lumi_db::unassign_permit(
+                        &services.db,
+                        guild.id,
+                        permit_id,
+                        target_type,
+                        target_snowflake,
+                    )
+                    .await?;
                 }
             }
-            Ok(HubOutcome::Update(list_card(services, guild, 0, user_id).await?))
+            Ok(HubOutcome::Update(
+                list_card(services, guild, 0, user_id).await?,
+            ))
         }
         "permpage" => Ok(HubOutcome::Update(
             list_card(services, guild, parse_page(id.get(1)), user_id).await?,
@@ -438,19 +488,27 @@ pub async fn dispatch(
         "permit" => match id.get(1) {
             Some("grant") => {
                 let kind = parse_kind(&id.tail(2));
-                Ok(HubOutcome::Update(picker_card(services, guild, kind).await?))
+                Ok(HubOutcome::Update(
+                    picker_card(services, guild, kind).await?,
+                ))
             }
             Some("pick") => {
                 let kind = parse_kind(&id.tail(2));
                 let permit = match first_value(data).and_then(|v| v.parse::<i32>().ok()) {
-                    Some(permit_id) => lumi_db::get_permit(&services.db, guild.id, permit_id).await?,
+                    Some(permit_id) => {
+                        lumi_db::get_permit(&services.db, guild.id, permit_id).await?
+                    }
                     None => None,
                 };
                 match permit {
-                    Some(permit) => {
-                        Ok(HubOutcome::Update(assign_target_card(permit.id, &permit.name, kind)))
-                    }
-                    None => Ok(HubOutcome::Update(list_card(services, guild, 0, user_id).await?)),
+                    Some(permit) => Ok(HubOutcome::Update(assign_target_card(
+                        permit.id,
+                        &permit.name,
+                        kind,
+                    ))),
+                    None => Ok(HubOutcome::Update(
+                        list_card(services, guild, 0, user_id).await?,
+                    )),
                 }
             }
             Some("assign") => {
@@ -458,16 +516,23 @@ pub async fn dispatch(
                     ComponentInteractionDataKind::RoleSelect { .. } => PermitTargetType::Role,
                     _ => PermitTargetType::User,
                 };
-                if let (Some(permit_id), Some(target_val)) = (
-                    id.tail(2).parse::<i32>().ok(),
-                    first_value(data),
-                ) {
+                if let (Some(permit_id), Some(target_val)) =
+                    (id.tail(2).parse::<i32>().ok(), first_value(data))
+                {
                     if let Ok(target_snowflake) = target_val.parse::<lumi_db::ids::SnowflakeId>() {
-                        lumi_db::assign_permit(&services.db, guild.id, permit_id, target_type, target_snowflake)
-                            .await?;
+                        lumi_db::assign_permit(
+                            &services.db,
+                            guild.id,
+                            permit_id,
+                            target_type,
+                            target_snowflake,
+                        )
+                        .await?;
                     }
                 }
-                Ok(HubOutcome::Update(list_card(services, guild, 0, user_id).await?))
+                Ok(HubOutcome::Update(
+                    list_card(services, guild, 0, user_id).await?,
+                ))
             }
             _ => Ok(HubOutcome::Done),
         },

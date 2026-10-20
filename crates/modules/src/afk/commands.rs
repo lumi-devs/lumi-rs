@@ -85,10 +85,7 @@ async fn apply_nick_prefix(
     if !claimed {
         return Ok(());
     }
-    let nick = crate::shared::truncate_chars(
-        &format!("{NICK_PREFIX}{name}"),
-        MAX_NICKNAME,
-    );
+    let nick = crate::shared::truncate_chars(&format!("{NICK_PREFIX}{name}"), MAX_NICKNAME);
     if let Err(error) = guild_id
         .edit_member(ctx.http(), user_id, EditMember::new().nickname(nick))
         .await

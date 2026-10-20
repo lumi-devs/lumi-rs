@@ -26,7 +26,9 @@ static ERRORS: LazyLock<Mutex<BTreeMap<String, ErrorRecord>>> =
 /// ago this key was first seen (seconds).
 fn record(key: String, traceback: String) -> (u64, u64) {
     let now = Instant::now();
-    let mut errors = ERRORS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut errors = ERRORS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let entry = errors.entry(key).or_insert_with(|| ErrorRecord {
         count: 0,
         first_seen: now,
@@ -53,8 +55,13 @@ pub fn distinct_count() -> usize {
 /// Snapshot of every deduplicated error, newest first.
 #[must_use]
 pub fn snapshot() -> Vec<(String, ErrorRecord)> {
-    let errors = ERRORS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut rows: Vec<_> = errors.iter().map(|(key, rec)| (key.clone(), rec.clone())).collect();
+    let errors = ERRORS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut rows: Vec<_> = errors
+        .iter()
+        .map(|(key, rec)| (key.clone(), rec.clone()))
+        .collect();
     drop(errors);
     rows.sort_by_key(|row| std::cmp::Reverse(row.1.last_seen));
     rows
@@ -68,11 +75,10 @@ pub fn snapshot() -> Vec<(String, ErrorRecord)> {
 fn traceback(error: &poise::FrameworkError<'_, Data, Error>) -> String {
     match error {
         poise::FrameworkError::Command { error, .. } => format!("{error:#}"),
-        poise::FrameworkError::CommandPanic { payload, .. } => payload
-            .as_deref()
-            .map_or_else(|| "command panicked".to_string(), |payload| {
-                format!("command panicked: {payload}")
-            }),
+        poise::FrameworkError::CommandPanic { payload, .. } => payload.as_deref().map_or_else(
+            || "command panicked".to_string(),
+            |payload| format!("command panicked: {payload}"),
+        ),
         other => other.to_string(),
     }
 }

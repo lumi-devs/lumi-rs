@@ -10,8 +10,6 @@
     clippy::cast_sign_loss
 )]
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use serenity::all::{
     ButtonStyle, ConnectionStage, CreateActionRow, CreateButton, CreateComponent,
     SeparatorSpacingSize,
@@ -87,6 +85,8 @@ pub struct PingData {
     pub channels: u64,
     pub os_uptime_secs: u64,
     pub avatar_url: String,
+    /// Unix seconds when this snapshot was collected.
+    pub collected_at: u64,
 }
 
 fn fmt_ms(ms: Option<f64>) -> String {
@@ -190,21 +190,16 @@ fn shard_pager(
     page: usize,
     total_pages: usize,
 ) -> CreateActionRow<'static> {
-    let mut previous = CreateButton::new(format!(
-        "{prefix}:p:{}:{user_id}",
-        page.saturating_sub(1)
-    ))
-    .style(ButtonStyle::Secondary)
-    .disabled(page == 0);
+    let mut previous =
+        CreateButton::new(format!("{prefix}:p:{}:{user_id}", page.saturating_sub(1)))
+            .style(ButtonStyle::Secondary)
+            .disabled(page == 0);
     if let Some(emoji) = component_emoji("\u{25c0}\u{fe0f}") {
         previous = previous.emoji(emoji);
     }
-    let mut next = CreateButton::new(format!(
-        "{prefix}:n:{}:{user_id}",
-        page.saturating_add(1)
-    ))
-    .style(ButtonStyle::Secondary)
-    .disabled(page + 1 >= total_pages);
+    let mut next = CreateButton::new(format!("{prefix}:n:{}:{user_id}", page.saturating_add(1)))
+        .style(ButtonStyle::Secondary)
+        .disabled(page + 1 >= total_pages);
     if let Some(emoji) = component_emoji("\u{25b6}\u{fe0f}") {
         next = next.emoji(emoji);
     }
@@ -221,10 +216,7 @@ pub fn build_overview_card(data: &PingData, user_id: u64, page: usize, prefix: &
     let shards = effective_shards(data);
     let total_pages = shard_page_count(data);
     let page = page.min(total_pages - 1);
-    let updated = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs());
-
+    let updated = data.collected_at;
     let mut container = Container::new()
         .text(format!(
             "__## {} Status:__\n-# Updated <t:{updated}:R>",
@@ -247,9 +239,10 @@ pub fn build_overview_card(data: &PingData, user_id: u64, page: usize, prefix: &
             "### External Services:\n\
              {SPACE}🧠 **Cache:** {cache} \n\
              {SPACE} 🐘 **Database:** `{db}`",
-            cache = data
-                .redis_hit_ratio
-                .map_or_else(|| "no reads since boot".to_string(), |r| format!("{r:.1}% hit ratio")),
+            cache = data.redis_hit_ratio.map_or_else(
+                || "no reads since boot".to_string(),
+                |r| format!("{r:.1}% hit ratio")
+            ),
             db = fmt_ms(data.db_latency_ms),
         ))
         .separator(true, SeparatorSpacingSize::Small)

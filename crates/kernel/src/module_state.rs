@@ -120,11 +120,18 @@ pub async fn list_feature_rows(
                 emoji: meta.emoji,
                 description: meta.description,
                 version: meta.version,
-                enabled: resolve_enabled(global_rows.get(name).copied(), guild_rows.get(name).copied()),
+                enabled: resolve_enabled(
+                    global_rows.get(name).copied(),
+                    guild_rows.get(name).copied(),
+                ),
             }
         })
         .collect();
-    rows.sort_by(|a, b| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()));
+    rows.sort_by(|a, b| {
+        a.display_name
+            .to_lowercase()
+            .cmp(&b.display_name.to_lowercase())
+    });
     rows
 }
 
@@ -155,7 +162,10 @@ pub async fn get_config(
         .all(db)
         .await
     {
-        Ok(rows) => rows.into_iter().map(|row| (row.config_key, row.value)).collect(),
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| (row.config_key, row.value))
+            .collect(),
         Err(err) => {
             tracing::warn!(error = %err, module, "failed to load module config; treating as unset");
             Map::new()
@@ -288,7 +298,13 @@ pub fn format_field_value(field: &ConfigField, value: Option<&Value>) -> String 
         ConfigFieldKind::RoleArray => {
             let ids: Vec<String> = value
                 .as_array()
-                .map(|array| array.iter().filter_map(parse_id).map(|id| format!("<@&{id}>")).collect())
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(parse_id)
+                        .map(|id| format!("<@&{id}>"))
+                        .collect()
+                })
                 .unwrap_or_default();
             if ids.is_empty() {
                 "-# *(not set)*".to_string()
@@ -300,7 +316,12 @@ pub fn format_field_value(field: &ConfigField, value: Option<&Value>) -> String 
         ConfigFieldKind::StringArray => {
             let items: Vec<String> = value
                 .as_array()
-                .map(|array| array.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default();
             if items.is_empty() {
                 "-# *(not set)*".to_string()
@@ -356,7 +377,10 @@ mod tests {
 
     #[test]
     fn resolve_enabled_precedence() {
-        assert!(!resolve_enabled(Some(false), Some(true)), "global disable wins");
+        assert!(
+            !resolve_enabled(Some(false), Some(true)),
+            "global disable wins"
+        );
         assert!(!resolve_enabled(None, Some(false)), "guild disable");
         assert!(resolve_enabled(None, None), "default enabled");
         assert!(resolve_enabled(Some(true), None));
@@ -371,9 +395,18 @@ mod tests {
 
     #[test]
     fn coerce_value_types() {
-        assert_eq!(coerce_value("yes", &ConfigFieldKind::Boolean).ok(), Some(Value::Bool(true)));
-        assert_eq!(coerce_value("nope", &ConfigFieldKind::Boolean).ok(), Some(Value::Bool(false)));
-        assert_eq!(coerce_value(" 7 ", &ConfigFieldKind::Integer).ok(), Some(json!(7)));
+        assert_eq!(
+            coerce_value("yes", &ConfigFieldKind::Boolean).ok(),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            coerce_value("nope", &ConfigFieldKind::Boolean).ok(),
+            Some(Value::Bool(false))
+        );
+        assert_eq!(
+            coerce_value(" 7 ", &ConfigFieldKind::Integer).ok(),
+            Some(json!(7))
+        );
         assert!(coerce_value("7.5", &ConfigFieldKind::Integer).is_err());
         assert_eq!(
             coerce_value("hi", &ConfigFieldKind::String).ok(),

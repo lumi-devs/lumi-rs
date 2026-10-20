@@ -22,7 +22,8 @@ impl Module for TempVcModule {
         ModuleMeta {
             display_name: "Temporary Voice Channels".to_string(),
             emoji: "🔊".to_string(),
-            description: "Automatically create and manage dynamic temporary voice channels.".to_string(),
+            description: "Automatically create and manage dynamic temporary voice channels."
+                .to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }

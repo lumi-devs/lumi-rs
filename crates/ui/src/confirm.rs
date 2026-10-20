@@ -2,8 +2,8 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use serenity::all::{ChannelId, Context, CreateInteractionResponse, UserId};
 use serenity::Error;
+use serenity::all::{ChannelId, Context, CreateInteractionResponse, UserId};
 
 use crate::cards::{Card, CardKind, CardOptions};
 use crate::panels::confirm_row;

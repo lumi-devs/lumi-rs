@@ -19,7 +19,11 @@ impl serenity::EventHandler for Events {
                 // propagation, no duplicates); drop any leftover global set.
                 if !GLOBAL_COMMANDS_CLEARED.swap(true, Ordering::AcqRel) {
                     // PUT with an empty list deletes the global commands.
-                    if let Err(error) = ctx.http.create_global_commands(&Vec::<serenity::CreateCommand>::new()).await {
+                    if let Err(error) = ctx
+                        .http
+                        .create_global_commands(&Vec::<serenity::CreateCommand>::new())
+                        .await
+                    {
                         GLOBAL_COMMANDS_CLEARED.store(false, Ordering::Release);
                         tracing::error!(%error, "failed to clear global slash commands");
                     }
@@ -35,12 +39,9 @@ impl serenity::EventHandler for Events {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
                 match interaction {
                     serenity::Interaction::Component(component) => {
-                        if let Err(error) = crate::interactions::handle_component(
-                            ctx,
-                            services.as_ref(),
-                            component,
-                        )
-                        .await
+                        if let Err(error) =
+                            crate::interactions::handle_component(ctx, services.as_ref(), component)
+                                .await
                         {
                             tracing::warn!(%error, "component interaction failed");
                         }
@@ -120,17 +121,19 @@ impl serenity::EventHandler for Events {
             serenity::FullEvent::GuildMemberAddition { new_member, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
                 if let Err(error) =
-                    lumi_modules::logging::events::on_member_add(ctx, services.as_ref(), new_member).await
+                    lumi_modules::logging::events::on_member_add(ctx, services.as_ref(), new_member)
+                        .await
                 {
                     tracing::warn!(%error, "logging member add failed");
                 }
             }
-            serenity::FullEvent::GuildMemberRemoval {
-                guild_id, user, ..
-            } => {
+            serenity::FullEvent::GuildMemberRemoval { guild_id, user, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
                 if let Err(error) = lumi_modules::logging::events::on_member_remove(
-                    ctx, services.as_ref(), *guild_id, user,
+                    ctx,
+                    services.as_ref(),
+                    *guild_id,
+                    user,
                 )
                 .await
                 {
@@ -233,7 +236,9 @@ impl serenity::EventHandler for Events {
                     tracing::warn!(%error, "security role update handler failed");
                 }
             }
-            serenity::FullEvent::GuildAuditLogEntryCreate { entry, guild_id, .. } => {
+            serenity::FullEvent::GuildAuditLogEntryCreate {
+                entry, guild_id, ..
+            } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
                 if let Err(error) = lumi_modules::security::events::on_audit_log_entry(
                     ctx,
@@ -249,12 +254,14 @@ impl serenity::EventHandler for Events {
             serenity::FullEvent::VoiceStateUpdate { old, new, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
                 if let Err(error) =
-                    lumi_modules::tempvc::on_voice_state_update(ctx, services.as_ref(), old, new).await
+                    lumi_modules::tempvc::on_voice_state_update(ctx, services.as_ref(), old, new)
+                        .await
                 {
                     tracing::warn!(%error, "tempvc voice state update handler failed");
                 }
                 if let Err(error) =
-                    lumi_modules::leveling::on_voice_state_update(ctx, services.as_ref(), old, new).await
+                    lumi_modules::leveling::on_voice_state_update(ctx, services.as_ref(), old, new)
+                        .await
                 {
                     tracing::warn!(%error, "leveling voice state update handler failed");
                 }

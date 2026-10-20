@@ -163,7 +163,10 @@ impl ActionTracker {
         entry.window = window;
 
         let cooldown = Duration::from_secs(DEFAULT_COOLDOWN_SECS);
-        if entry.tripped_at.is_some_and(|t| now.duration_since(t) < cooldown) {
+        if entry
+            .tripped_at
+            .is_some_and(|t| now.duration_since(t) < cooldown)
+        {
             return None;
         }
         if entry.tripped_at.is_some() {
@@ -181,7 +184,9 @@ impl ActionTracker {
         entry.events.push_back(now);
 
         // Only `limit + 1` events are ever needed to decide `count > limit`.
-        let cap = usize::try_from(limit).unwrap_or(usize::MAX).saturating_add(1);
+        let cap = usize::try_from(limit)
+            .unwrap_or(usize::MAX)
+            .saturating_add(1);
         while entry.events.len() > cap {
             entry.events.pop_front();
         }
@@ -265,7 +270,9 @@ impl SecurityManager {
             started_at: Some(state.started_at),
         };
 
-        self.panic_cache.insert(guild_id.to_string(), status.clone()).await;
+        self.panic_cache
+            .insert(guild_id.to_string(), status.clone())
+            .await;
         Ok(Some(status))
     }
 
@@ -314,7 +321,9 @@ impl SecurityManager {
             started_at: Some(now),
         };
 
-        self.panic_cache.insert(guild_id.to_string(), status.clone()).await;
+        self.panic_cache
+            .insert(guild_id.to_string(), status.clone())
+            .await;
         Ok(status)
     }
 
@@ -353,7 +362,9 @@ impl SecurityManager {
             .get(&kind)
             .copied()
             .unwrap_or_else(|| kind.default_limit());
-        let (count, limit) = self.tracker.record(guild_id, actor_id, kind, window, limit)?;
+        let (count, limit) = self
+            .tracker
+            .record(guild_id, actor_id, kind, window, limit)?;
         let response = config
             .responses
             .get(&kind)
@@ -382,12 +393,12 @@ impl SecurityManager {
         let case_number = i32::try_from(case_num)
             .map_err(|_| LumiError::Other(format!("case counter overflow for guild {guild_id}")))?;
 
-        let target_snowflake: lumi_db::ids::UserId = target_user_id
-            .parse()
-            .map_err(|_| LumiError::Invalid(format!("target user id '{target_user_id}' is not numeric")))?;
-        let mod_snowflake: lumi_db::ids::UserId = moderator_id
-            .parse()
-            .map_err(|_| LumiError::Invalid(format!("moderator id '{moderator_id}' is not numeric")))?;
+        let target_snowflake: lumi_db::ids::UserId = target_user_id.parse().map_err(|_| {
+            LumiError::Invalid(format!("target user id '{target_user_id}' is not numeric"))
+        })?;
+        let mod_snowflake: lumi_db::ids::UserId = moderator_id.parse().map_err(|_| {
+            LumiError::Invalid(format!("moderator id '{moderator_id}' is not numeric"))
+        })?;
 
         let row = lumi_db::entities::moderation_case::ActiveModel {
             guild_id: Set(lumi_db::ids::GuildId::from(guild_id_u64)),
@@ -434,7 +445,10 @@ mod tests {
         let tracker = ActionTracker::default();
         let window = Duration::from_secs(60);
         for _ in 0..5 {
-            assert_eq!(tracker.record("1", "3", DestructiveActionKind::Kick, window, 5), None);
+            assert_eq!(
+                tracker.record("1", "3", DestructiveActionKind::Kick, window, 5),
+                None
+            );
         }
     }
 
@@ -445,7 +459,11 @@ mod tests {
         for _ in 0..50 {
             let _ = tracker.record("1", "9", DestructiveActionKind::RoleDelete, window, 3);
         }
-        let key = ("1".to_string(), "9".to_string(), DestructiveActionKind::RoleDelete);
+        let key = (
+            "1".to_string(),
+            "9".to_string(),
+            DestructiveActionKind::RoleDelete,
+        );
         let len = tracker.windows.get(&key).map_or(0, |w| w.events.len());
         assert!(len <= 4, "window kept {len} events");
     }

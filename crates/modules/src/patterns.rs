@@ -2,7 +2,8 @@
 //! validated once.
 
 /// Discord invite link; capture 1 is the invite code.
-pub const INVITE_PATTERN: &str = r"(?i)(?:discord\.(?:gg|com/invite)|discordapp\.com/invite)/([\w-]+)";
+pub const INVITE_PATTERN: &str =
+    r"(?i)(?:discord\.(?:gg|com/invite)|discordapp\.com/invite)/([\w-]+)";
 /// URL with a host in capture 1 (mirrors lumi's `UrlRe`).
 pub const URL_PATTERN: &str = r#"(?i)https?://([^\s/<>"']+)"#;
 /// Custom Discord emoji token, e.g. `<:kek:123>` or `<a:cat:456>`.
