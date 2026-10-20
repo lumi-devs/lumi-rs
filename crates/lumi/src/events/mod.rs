@@ -1,7 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use poise::serenity_prelude as serenity;
 
@@ -14,12 +14,7 @@ fn get_or_init_dispatcher(
     ctx: &serenity::Context,
     services: &lumi_kernel::bot::Data,
 ) -> &'static EventDispatcher {
-    DISPATCHER.get_or_init(|| {
-        EventDispatcher::new(
-            ctx.clone(),
-            Arc::clone(services),
-        )
-    })
+    DISPATCHER.get_or_init(|| EventDispatcher::new(ctx.clone(), Arc::clone(services)))
 }
 
 /// Global commands were stale once we moved to guild-only sync; clearing them
@@ -155,10 +150,7 @@ impl serenity::EventHandler for Events {
                     guild_id: *guild_id,
                 });
             }
-            serenity::FullEvent::MessageUpdate {
-                event,
-                ..
-            } => {
+            serenity::FullEvent::MessageUpdate { event, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
                 let dispatcher = get_or_init_dispatcher(ctx, services.as_ref());
                 dispatcher.dispatch(DispatchedEvent::MessageUpdate {

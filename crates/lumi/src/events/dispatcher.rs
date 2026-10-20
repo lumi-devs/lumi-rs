@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use poise::serenity_prelude as serenity;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
@@ -66,7 +66,9 @@ impl EventDispatcher {
         match self.sender.try_send(event) {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!("event queue full (10000 capacity reached); shedding event to preserve gateway stability");
+                tracing::warn!(
+                    "event queue full (10000 capacity reached); shedding event to preserve gateway stability"
+                );
                 false
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -103,11 +105,7 @@ async fn process_event(
             guild_id,
         } => {
             if let Err(error) = lumi_modules::logging::events::on_message_delete(
-                ctx,
-                services,
-                channel_id,
-                message_id,
-                guild_id,
+                ctx, services, channel_id, message_id, guild_id,
             )
             .await
             {
@@ -115,13 +113,8 @@ async fn process_event(
             }
         }
         DispatchedEvent::MessageUpdate { event } => {
-            if let Err(error) = lumi_modules::logging::events::on_message_update(
-                ctx,
-                services,
-                None,
-                *event,
-            )
-            .await
+            if let Err(error) =
+                lumi_modules::logging::events::on_message_update(ctx, services, None, *event).await
             {
                 tracing::warn!(%error, "logging message update failed");
             }
@@ -135,7 +128,8 @@ async fn process_event(
         }
         DispatchedEvent::MemberRemoval { guild_id, user, .. } => {
             if let Err(error) =
-                lumi_modules::logging::events::on_member_remove(ctx, services, guild_id, &user).await
+                lumi_modules::logging::events::on_member_remove(ctx, services, guild_id, &user)
+                    .await
             {
                 tracing::warn!(%error, "logging member remove failed");
             }
