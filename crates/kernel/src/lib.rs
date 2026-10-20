@@ -1,6 +1,7 @@
 pub mod bot;
 pub mod cache;
 pub mod config;
+pub mod coordinator;
 pub mod downloader;
 pub mod error;
 pub mod module;

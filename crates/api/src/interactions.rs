@@ -126,6 +126,8 @@ mod tests {
             } else {
                 None
             },
+            shard_coordinator: false,
+            max_shards_per_node: 16,
         }
     }
 
