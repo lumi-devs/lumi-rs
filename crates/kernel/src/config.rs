@@ -49,6 +49,12 @@ pub struct Config {
     pub intents_guild_members: bool,
     /// Discord application public key (Ed25519) for verifying HTTP interactions.
     pub discord_public_key: Option<String>,
+    /// Whether dynamic Redis shard leasing coordinator is enabled.
+    #[serde(default)]
+    pub shard_coordinator: bool,
+    /// Maximum number of shards allocated per node when coordinator is enabled.
+    #[serde(default = "default_max_shards_per_node")]
+    pub max_shards_per_node: u16,
 }
 
 fn default_redis_url() -> String {
@@ -61,6 +67,10 @@ fn default_rpc_port() -> u16 {
 
 fn default_custom_dir() -> String {
     "addons".into()
+}
+
+fn default_max_shards_per_node() -> u16 {
+    16
 }
 
 impl Config {
@@ -130,6 +140,15 @@ impl Config {
 
         let discord_public_key = std::env::var("DISCORD_PUBLIC_KEY").ok();
 
+        let shard_coordinator = std::env::var("SHARD_COORDINATOR")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+
+        let max_shards_per_node = std::env::var("MAX_SHARDS_PER_NODE")
+            .ok()
+            .and_then(|v| v.trim().parse::<u16>().ok())
+            .unwrap_or_else(default_max_shards_per_node);
+
         let cfg = Self {
             role: Role::All,
             token,
@@ -143,6 +162,8 @@ impl Config {
             shard_range,
             intents_guild_members,
             discord_public_key,
+            shard_coordinator,
+            max_shards_per_node,
         };
         cfg.validate()?;
         Ok(cfg)

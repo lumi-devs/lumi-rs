@@ -79,7 +79,48 @@ async fn start_api(cfg: lumi_kernel::Config) -> Result<()> {
 }
 
 async fn start_gateway(cfg: lumi_kernel::Config) -> Result<()> {
-    let shards = (cfg.shard_range, cfg.shard_count);
+    let dynamic_range = if cfg.shard_coordinator && cfg.shard_range.is_none() {
+        if let Some(total) = cfg.shard_count {
+            let cache = lumi_kernel::Cache::connect(&cfg.redis_url).await?;
+            let node_id = std::env::var("HOSTNAME")
+                .unwrap_or_else(|_| format!("node-{}", std::process::id()));
+            let leased = lumi_kernel::coordinator::lease_shard_range(
+                &cache,
+                total,
+                cfg.max_shards_per_node,
+                &node_id,
+            )
+            .await?;
+            if let Some(range) = leased {
+                tracing::info!(
+                    node = %node_id,
+                    start = range.start,
+                    end = range.end,
+                    total,
+                    "leased shard range from coordinator"
+                );
+                lumi_kernel::coordinator::spawn_lease_heartbeat(
+                    std::sync::Arc::new(cache),
+                    range,
+                    node_id,
+                );
+                Some(range)
+            } else {
+                return Err(anyhow::anyhow!(
+                    "no unleased shard slots available in fleet of {total} shards"
+                ));
+            }
+        } else {
+            return Err(anyhow::anyhow!(
+                "SHARD_COORDINATOR requires SHARDS (fleet total) to be configured"
+            ));
+        }
+    } else {
+        None
+    };
+
+    let shard_range = cfg.shard_range.or(dynamic_range);
+    let shards = (shard_range, cfg.shard_count);
     let mut client = lumi::client::build(cfg).await?;
     let shutdown_trigger = client.shard_manager.get_shutdown_trigger();
 
