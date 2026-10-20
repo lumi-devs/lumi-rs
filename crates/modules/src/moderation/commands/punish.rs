@@ -142,7 +142,7 @@ pub async fn warn(
 ) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = guild_id(ctx)?.get();
-    let config = store::config(&ctx.data().db, guild_id).await;
+    let config = store::config(&ctx.data().cache, &ctx.data().db, guild_id).await;
 
     let case = store::create_case(
         &ctx.data().db,
@@ -265,7 +265,7 @@ pub async fn kick(
     )
     .await;
 
-    let config = store::config(&ctx.data().db, guild.get()).await;
+    let config = store::config(&ctx.data().cache, &ctx.data().db, guild.get()).await;
     notify_outcome(ctx, &config, &outcome, reason.as_deref()).await;
     ctx.send(punishment_card(&outcome, reason.as_deref()).reply())
         .await?;
@@ -345,7 +345,7 @@ pub async fn ban(
     )
     .await;
 
-    let config = store::config(&ctx.data().db, guild.get()).await;
+    let config = store::config(&ctx.data().cache, &ctx.data().db, guild.get()).await;
     notify_outcome(ctx, &config, &outcome, reason.as_deref()).await;
     ctx.send(punishment_card(&outcome, reason.as_deref()).reply())
         .await?;
@@ -371,7 +371,7 @@ pub async fn unban(
     let guild = guild_id(ctx)?;
     guild.unban(ctx.http(), user, reason.as_deref()).await?;
 
-    let config = store::config(&ctx.data().db, guild.get()).await;
+    let config = store::config(&ctx.data().cache, &ctx.data().db, guild.get()).await;
     let case = actions::record_case(
         &ctx.data().db,
         guild.get(),
@@ -449,7 +449,7 @@ pub async fn mute(
     )
     .await?;
 
-    let config = store::config(&ctx.data().db, guild.get()).await;
+    let config = store::config(&ctx.data().cache, &ctx.data().db, guild.get()).await;
     let case = actions::record_case(
         &ctx.data().db,
         guild.get(),
@@ -500,7 +500,7 @@ pub async fn unmute(
     )
     .await?;
 
-    let config = store::config(&ctx.data().db, guild.get()).await;
+    let config = store::config(&ctx.data().cache, &ctx.data().db, guild.get()).await;
     let case = actions::record_case(
         &ctx.data().db,
         guild.get(),
@@ -552,7 +552,7 @@ pub async fn softban(
     guild
         .ban(ctx.http(), target, u32::from(days), reason.as_deref())
         .await?;
-    let config = store::config(&ctx.data().db, guild.get()).await;
+    let config = store::config(&ctx.data().cache, &ctx.data().db, guild.get()).await;
     let case = actions::record_case(
         &ctx.data().db,
         guild.get(),
@@ -658,7 +658,7 @@ pub async fn quarantine_add(
 ) -> Result<(), Error> {
     ctx.defer().await?;
     let guild = guild_id(ctx)?;
-    let config = store::config(&ctx.data().db, guild.get()).await;
+    let config = store::config(&ctx.data().cache, &ctx.data().db, guild.get()).await;
     let Some(role) = quarantine_role_or_reply(ctx, &config).await? else {
         return Ok(());
     };
@@ -718,7 +718,7 @@ pub async fn quarantine_remove(
 ) -> Result<(), Error> {
     ctx.defer().await?;
     let guild = guild_id(ctx)?;
-    let config = store::config(&ctx.data().db, guild.get()).await;
+    let config = store::config(&ctx.data().cache, &ctx.data().db, guild.get()).await;
     let Some(role) = quarantine_role_or_reply(ctx, &config).await? else {
         return Ok(());
     };

@@ -1,7 +1,6 @@
 use chrono::{TimeDelta, Utc};
 use lumi_db::entities::{enums::CaseAction, mod_note, moderation_case, warn_threshold};
-use lumi_kernel::Result;
-use lumi_kernel::module_state;
+use lumi_kernel::{Cache, Result, module_state};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect, Set,
@@ -20,8 +19,8 @@ pub struct ModConfig {
     pub quarantine_role: Option<u64>,
 }
 
-pub async fn config(db: &DatabaseConnection, guild_id: u64) -> ModConfig {
-    let map = module_state::get_config(db, guild_id, CONFIG_MODULE).await;
+pub async fn config(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> ModConfig {
+    let map = module_state::config_cached(cache, db, guild_id, CONFIG_MODULE).await;
     ModConfig {
         dm_on_action: config::boolean(&map, "dm_on_action", true),
         log_channel: config::id(&map, "mod_log_channel"),
@@ -193,6 +192,8 @@ pub async fn list_notes(
 }
 
 /// The configured quarantine role id, or `None` when quarantine is unconfigured.
-pub async fn quarantine_role(db: &DatabaseConnection, guild_id: u64) -> Result<Option<u64>> {
-    Ok(module_state::config_u64(db, guild_id, CONFIG_MODULE, "quarantine_role_id").await?)
+pub async fn quarantine_role(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> Result<Option<u64>> {
+    Ok(module_state::config_cached_value(cache, db, guild_id, CONFIG_MODULE, "quarantine_role_id")
+        .await
+        .and_then(|v| module_state::parse_id(&v)))
 }

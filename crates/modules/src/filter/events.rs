@@ -33,7 +33,7 @@ async fn screen(ctx: &serenity::Context, services: &Services, message: &Message)
     if message.author.bot() {
         return false;
     }
-    let rules = store::rules_for(&services.db, guild_id.get()).await;
+    let rules = store::rules_for(&services.cache, &services.db, guild_id.get()).await;
     if !rules.active() {
         return false;
     }
