@@ -5,7 +5,7 @@ pub mod events;
 pub mod store;
 pub mod views;
 
-pub use commands::{commands, handle_component};
+pub use commands::{commands, handle_component, handle_modal};
 pub use events::on_voice_state_update;
 
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};

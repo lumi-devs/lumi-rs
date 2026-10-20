@@ -1,4 +1,8 @@
-//! Faithful port of lumi's `src/modules/onboarding/ui/PingCards.ts`.
+//! The `ping` health dashboard: a per-shard status board with a pager.
+//!
+//! The layout mirrors the reference dashboard exactly: a `__## <bot> Status:__`
+//! header, one block per shard (three per page) separated by dividers, an
+//! external-services block, and a `◀️ · Close · ▶️` pager.
 
 #![allow(
     clippy::cast_precision_loss,
@@ -7,150 +11,80 @@
 )]
 
 use serenity::all::{
-    ButtonStyle, CreateActionRow, CreateButton, CreateComponent, CreateSection,
-    CreateSectionComponent, SeparatorSpacingSize,
+    ButtonStyle, ConnectionStage, CreateActionRow, CreateButton, CreateComponent,
+    SeparatorSpacingSize,
 };
 
 use crate::cards::CardReply;
-use crate::container::{Container, section_with_thumbnail, text_display};
+use crate::container::Container;
 use crate::panels::{action_row_of, component_emoji};
 
-/// Per-shard connection info.
+/// Shards shown per page before the pager is needed.
+pub const SHARDS_PER_PAGE: usize = 3;
+
+/// The braille blank Discord panels use for indentation.
+const SPACE: char = '\u{2800}';
+
+/// Connection state of a shard, condensed from serenity's `ConnectionStage`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShardStatus {
+    #[default]
+    Connecting,
+    Online,
+    Offline,
+}
+
+impl ShardStatus {
+    /// Status dot rendered next to the shard id.
+    #[must_use]
+    pub const fn dot(self) -> &'static str {
+        match self {
+            Self::Online => "🟢",
+            Self::Connecting => "🟡",
+            Self::Offline => "🔴",
+        }
+    }
+
+    /// Condense a serenity gateway stage.
+    #[must_use]
+    pub const fn from_stage(stage: ConnectionStage) -> Self {
+        match stage {
+            ConnectionStage::Connected => Self::Online,
+            ConnectionStage::Disconnected => Self::Offline,
+            _ => Self::Connecting,
+        }
+    }
+}
+
+/// Per-shard connection info plus the slice of the bot that shard serves.
 #[derive(Clone, Debug, Default)]
 pub struct ShardInfo {
     pub id: u64,
     pub ping: f64,
-    pub status: String,
-    pub sequence: u64,
-}
-
-/// Every value the ping dashboard can render.
-#[derive(Clone, Debug, Default)]
-pub struct PingData {
-    pub round_trip: Option<f64>,
-    pub ws_ping: f64,
-    pub loop_lag_ms: f64,
-    pub jitter_ms: f64,
-    pub shards: Vec<ShardInfo>,
-    pub active_handles: u64,
-    pub active_requests: u64,
-    pub gateway_node: String,
-    pub identifies: u64,
-    pub resumes: u64,
-    pub heap_used: u64,
-    pub heap_total: u64,
-    pub rss: u64,
-    pub external: u64,
-    pub array_buffers: u64,
-    pub runtime: String,
-    pub kernel: String,
-    pub platform: String,
-    pub arch: String,
-    pub cpu_model: String,
-    pub cpu_cores: u64,
-    pub cpu_speed_mhz: f64,
-    pub load_avg: [f64; 3],
-    pub ram_used: u64,
-    pub ram_total: u64,
-    pub swap_used_kb: u64,
-    pub swap_total_kb: u64,
-    pub os_uptime_secs: u64,
-    pub ctx_switch_vol: u64,
-    pub ctx_switch_nonvol: u64,
-    pub disk_read_bytes: u64,
-    pub disk_write_bytes: u64,
-    pub thermal_celsius: Option<f64>,
-    pub cpu_percent: f64,
-    pub cpu_flags: String,
-    pub io_wait: u64,
-    pub db_latency_ms: Option<f64>,
-    pub db_size: Option<String>,
-    pub db_uptime_secs: Option<u64>,
-    pub table_sizes: Vec<(String, u64)>,
-    pub db_commits: Option<u64>,
-    pub db_rollbacks: Option<u64>,
-    pub tx_rate: f64,
-    pub redis_read_ms: Option<f64>,
-    pub redis_write_ms: Option<f64>,
-    pub redis_version: String,
-    pub redis_uptime_secs: u64,
-    pub redis_mem_used_bytes: u64,
-    pub redis_mem_peak_bytes: u64,
-    pub redis_frag_ratio: f64,
-    pub redis_hit_ratio: f64,
-    pub redis_hits: u64,
-    pub redis_misses: u64,
-    pub redis_evicted: u64,
-    pub redis_clients: u64,
-    pub redis_total_keys: u64,
-    pub uptime: f64,
+    pub status: ShardStatus,
     pub guilds: u64,
     pub users: u64,
-    pub channels: u64,
-    pub modules: Vec<String>,
-    pub avatar_url: String,
+}
+
+/// Every value the ping dashboard renders.
+#[derive(Clone, Debug, Default)]
+pub struct PingData {
     pub bot_name: String,
-    pub bot_id: String,
-    pub session_command_count: u64,
-    pub dep_count: u64,
-    pub code_lines: u64,
-    pub commands_per_sec: f64,
-    pub messages_per_min: f64,
-    pub discord_lib: String,
-    pub orm_lib: String,
-}
+    pub ws_ping: f64,
+    pub shards: Vec<ShardInfo>,
+    pub uptime: f64,
+    pub rss: u64,
+    pub ram_total: u64,
+    pub cpu_percent: f64,
+    pub guilds: u64,
+    pub users: u64,
+    pub redis_hit_ratio: Option<f64>,
+    pub db_latency_ms: Option<f64>,
 
-/// Custom-id prefix shared by every ping button.
-pub const PING_ID_PREFIX: &str = "ping";
-
-/// Overview view pseudo-category.
-pub const OVERVIEW: &str = "overview";
-
-const DEFAULT_AVATAR: &str = "https://cdn.discordapp.com/embed/avatars/0.png";
-const SPACE: char = '\u{2800}';
-
-/// Build a ping button custom id: `ping:{category}:{user_id}`.
-#[must_use]
-pub fn ping_custom_id(category: &str, user_id: u64) -> String {
-    format!("{PING_ID_PREFIX}:{category}:{user_id}")
-}
-
-/// A detail card category.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PingCategory {
-    Gateway,
-    Engine,
-    Host,
-    Postgres,
-    Redis,
-    Bot,
-}
-
-impl PingCategory {
-    #[must_use]
-    pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "gateway" => Some(Self::Gateway),
-            "engine" => Some(Self::Engine),
-            "host" => Some(Self::Host),
-            "postgres" => Some(Self::Postgres),
-            "redis" => Some(Self::Redis),
-            "bot" => Some(Self::Bot),
-            _ => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Gateway => "gateway",
-            Self::Engine => "engine",
-            Self::Host => "host",
-            Self::Postgres => "postgres",
-            Self::Redis => "redis",
-            Self::Bot => "bot",
-        }
-    }
+    /// Instance counters and host uptime shared with `about`.
+    pub channels: u64,
+    pub os_uptime_secs: u64,
+    pub avatar_url: String,
 }
 
 fn fmt_ms(ms: Option<f64>) -> String {
@@ -164,16 +98,6 @@ fn fmt_mb(bytes: u64) -> String {
     format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
 }
 
-fn fmt_bytes(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 {
-        format!("{:.1} GB", bytes as f64 / 1024.0 / 1024.0)
-    } else if bytes >= 1024 {
-        format!("{:.1} MB", bytes as f64 / 1024.0)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
 fn fmt_count(count: u64) -> String {
     if count >= 1000 {
         format!("{:.1}K", count as f64 / 1000.0)
@@ -182,17 +106,12 @@ fn fmt_count(count: u64) -> String {
     }
 }
 
-fn format_number(n: u64) -> String {
-    let digits = n.to_string();
-    let len = digits.len();
-    let mut out = String::with_capacity(len + len / 3);
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
+/// Share of the machine's RAM this process holds, as the dashboard's percentage.
+fn ram_share(rss: u64, total: u64) -> String {
+    if total == 0 {
+        return "0.00%".to_string();
     }
-    out
+    format!("{:.2}%", rss as f64 / total as f64 * 100.0)
 }
 
 fn format_duration(ms: f64) -> String {
@@ -217,450 +136,114 @@ fn format_duration(ms: f64) -> String {
     parts.join(" ")
 }
 
-fn executive_section(title: &str, fields: &[(String, String)]) -> String {
-    let header = format!("{SPACE}__{title}__:");
-    let lines = fields
-        .iter()
-        .map(|(label, value)| format!("{SPACE}{SPACE}**{label}:** {value}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("{header}\n{lines}")
-}
-
-/// `## {botName}{sub}\n-# {55× ⠀}` with a thumbnail accessory.
-fn header(data: &PingData, subtitle: Option<&str>) -> CreateSection<'static> {
-    let sub = subtitle.map_or_else(String::new, |s| format!("\n*{s}*"));
-    let anchor = format!("-# {}", SPACE.to_string().repeat(55));
-    let content = format!("## {}{sub}\n{anchor}", data.bot_name);
-    let avatar = if data.avatar_url.is_empty() {
-        DEFAULT_AVATAR
-    } else {
-        &data.avatar_url
-    };
-    section_with_thumbnail(
-        vec![CreateSectionComponent::TextDisplay(text_display(content))],
-        avatar.to_string(),
-    )
-}
-
-fn detail_card(subtitle: &str, data: &PingData) -> Container {
-    Container::new()
-        .section(header(data, Some(subtitle)))
-        .separator(true, SeparatorSpacingSize::Small)
-}
-
-/// Pagination row: ◀️ (disabled) · Close · ▶️ (disabled when single page).
-fn overview_nav_row(user_id: u64, page: usize, total: usize) -> CreateActionRow<'static> {
-    let prev = CreateButton::new(format!("{PING_ID_PREFIX}:p_-1:{user_id}:{page}"))
-        .emoji('◀')
-        .style(ButtonStyle::Secondary)
-        .disabled(page == 0);
-    let close = CreateButton::new(ping_custom_id("close", user_id))
-        .label("Close")
-        .style(ButtonStyle::Danger);
-    let next = CreateButton::new(format!("{PING_ID_PREFIX}:p_1:{user_id}:{page}"))
-        .emoji('▶')
-        .style(ButtonStyle::Secondary)
-        .disabled(page + 1 >= total);
-    action_row_of(vec![prev, close, next])
-}
-
-#[must_use]
-pub fn build_overview_card_paged(data: &PingData, page: usize, user_id: u64) -> CardReply {
-    const PAGE_SIZE: usize = 5;
-    let fallback = [ShardInfo {
+/// The shards to render: the live snapshot, or a stand-in for tiers that run none.
+fn effective_shards(data: &PingData) -> Vec<ShardInfo> {
+    if !data.shards.is_empty() {
+        return data.shards.clone();
+    }
+    vec![ShardInfo {
         id: 0,
         ping: data.ws_ping,
-        status: String::new(),
-        sequence: 0,
-    }];
-    let shards: &[ShardInfo] = if data.shards.is_empty() {
-        &fallback
-    } else {
-        &data.shards
-    };
-
-    let total_pages = shards.len().div_ceil(PAGE_SIZE).max(1);
-    let page = page.min(total_pages - 1);
-    let start = page.saturating_mul(PAGE_SIZE).min(shards.len());
-    let end = start.saturating_add(PAGE_SIZE).min(shards.len());
-    let page_shards = &shards[start..end];
-
-    let ram_mb = data.rss as f64 / 1024.0 / 1024.0;
-    let ram_pct = if data.ram_total > 0 {
-        data.rss as f64 / data.ram_total as f64 * 100.0
-    } else {
-        0.0
-    };
-
-    let mut c = Container::new()
-        .text(format!("__## {} Status:__", data.bot_name));
-
-    for shard in page_shards {
-        c = c.separator(true, SeparatorSpacingSize::Small);
-        let shard_text = format!(
-            "__🟢 **Shard [{}]:** __\n{SPACE}📡 {} · ⏱️ {}\n{SPACE}**CPU**: {:.0}% . 📊 **RAM:** {:.1} MB . **({:.2}%)**  \n{SPACE}📈 **Servers:** {}· 👥 **Members:** {}",
-            shard.id,
-            fmt_ms(Some(shard.ping)),
-            format_duration(data.uptime),
-            data.cpu_percent,
-            ram_mb,
-            ram_pct,
-            fmt_count(data.guilds),
-            fmt_count(data.users),
-        );
-        c = c.text(shard_text);
-    }
-
-    c = c.separator(true, SeparatorSpacingSize::Small);
-    c = c.text(format!(
-        "### External Services:\n{SPACE}🧠 **Cache:** {:.1}% hit ratio \n{SPACE} 🐘 **Database:** `{}`",
-        data.redis_hit_ratio,
-        fmt_ms(data.db_latency_ms),
-    ));
-    c = c.separator(true, SeparatorSpacingSize::Small);
-    c = c.action_row(overview_nav_row(user_id, page, total_pages));
-
-    container_reply(c)
+        status: if data.ws_ping >= 0.0 {
+            ShardStatus::Online
+        } else {
+            ShardStatus::Connecting
+        },
+        guilds: data.guilds,
+        users: data.users,
+    }]
 }
 
-fn build_gateway_card(data: &PingData) -> Container {
-    let mut card = detail_card("📡 Gateway & Connection Status", data);
-
-    let node = if data.gateway_node == "Unknown" {
-        "Analyzing…".to_string()
-    } else {
-        data.gateway_node.clone()
-    };
-
-    let body = [
-        executive_section(
-            "Connection Health",
-            &[
-                ("Average Latency".to_string(), fmt_ms(Some(data.ws_ping))),
-                ("Jitter".to_string(), format!("±{:.0}ms", data.jitter_ms)),
-            ],
-        ),
-        executive_section(
-            "Session Details",
-            &[
-                (
-                    "Initial Handshakes".to_string(),
-                    format!("{} times", data.identifies),
-                ),
-                (
-                    "Successful Resumes".to_string(),
-                    format!("{} times", data.resumes),
-                ),
-                ("Regional Gateway".to_string(), format!("{node} Hub")),
-            ],
-        ),
-        executive_section(
-            "Traffic Activity",
-            &[
-                (
-                    "Incoming Messages".to_string(),
-                    format!("{:.0} msg/min", data.messages_per_min),
-                ),
-                (
-                    "Active Requests".to_string(),
-                    format!("{} concurrent", data.active_requests),
-                ),
-            ],
-        ),
-    ]
-    .join("\n");
-    card = card.text(body);
-
-    if !data.shards.is_empty() {
-        card = card.separator(true, SeparatorSpacingSize::Small);
-        card = card.text(format!("{SPACE}__Active Shards__:"));
-        let lines = data
-            .shards
-            .iter()
-            .map(|s| {
-                format!(
-                    "{SPACE}{SPACE}**Shard {}:** {} | {} | Sequence {}",
-                    s.id,
-                    fmt_ms(Some(s.ping)),
-                    s.status,
-                    s.sequence
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        card = card.text(lines);
-    }
-
-    card
-}
-
-fn build_engine_card(data: &PingData) -> Container {
-    let heap_pct = if data.heap_total > 0 {
-        data.heap_used as f64 / data.heap_total as f64 * 100.0
-    } else {
-        0.0
-    };
-    let body = [
-        executive_section(
-            "Memory Allocation",
-            &[
-                (
-                    "JS Heap Used".to_string(),
-                    format!("{} ({heap_pct:.1}%)", fmt_mb(data.heap_used)),
-                ),
-                ("External Heap".to_string(), fmt_mb(data.external)),
-                ("Total RSS Cost".to_string(), fmt_mb(data.rss)),
-            ],
-        ),
-        executive_section(
-            "Execution Lag",
-            &[
-                (
-                    "Event Loop Lag".to_string(),
-                    format!("{:.0}ms", data.loop_lag_ms),
-                ),
-                (
-                    "Timer Handles".to_string(),
-                    format!("{} Active", data.active_handles),
-                ),
-            ],
-        ),
-        executive_section(
-            "Core Environment",
-            &[
-                ("Engine Runtime".to_string(), data.runtime.clone()),
-                (
-                    "Library Stack".to_string(),
-                    format!("{} | {}", data.discord_lib, data.orm_lib),
-                ),
-            ],
-        ),
-    ]
-    .join("\n");
-    detail_card("🏎️ Performance & Memory", data).text(body)
-}
-
-fn build_host_card(data: &PingData) -> Container {
-    let temp = data
-        .thermal_celsius
-        .map_or_else(|| "N/A".to_string(), |c| format!("{c:.1}°C"));
-    let body = [
-        executive_section(
-            "Processor Topology",
-            &[
-                ("CPU Model".to_string(), data.cpu_model.clone()),
-                (
-                    "Logic Cores".to_string(),
-                    format!("{} Cores ({})", data.cpu_cores, data.arch),
-                ),
-            ],
-        ),
-        executive_section(
-            "Memory & Swap",
-            &[
-                (
-                    "System RAM".to_string(),
-                    format!(
-                        "{:.2} GB / {:.2} GB",
-                        data.ram_used as f64 / 1024.0 / 1024.0 / 1024.0,
-                        data.ram_total as f64 / 1024.0 / 1024.0 / 1024.0
-                    ),
-                ),
-                (
-                    "Swap Used".to_string(),
-                    format!("{:.0} MB", data.swap_used_kb as f64 / 1024.0),
-                ),
-            ],
-        ),
-        executive_section(
-            "Host Environment",
-            &[
-                (
-                    "OS / Kernel".to_string(),
-                    format!("{} {}", data.platform, data.kernel),
-                ),
-                ("CPU Temp".to_string(), temp),
-            ],
-        ),
-    ]
-    .join("\n");
-    detail_card("🖥️ System Infrastructure", data).text(body)
-}
-
-fn build_postgres_card(data: &PingData) -> Container {
-    let mut card = detail_card("🐘 Database Health", data);
-
-    let body = [
-        executive_section(
-            "Performance",
-            &[
-                (
-                    "Transaction Speed".to_string(),
-                    format!("{:.1} ops/sec", data.tx_rate),
-                ),
-                ("Query Response".to_string(), fmt_ms(data.db_latency_ms)),
-            ],
-        ),
-        executive_section(
-            "Database Details",
-            &[
-                (
-                    "Database Size".to_string(),
-                    data.db_size.clone().unwrap_or_else(|| "N/A".to_string()),
-                ),
-                (
-                    "Database Uptime".to_string(),
-                    data.db_uptime_secs
-                        .map_or_else(|| "N/A".to_string(), |s| format_duration(s as f64 * 1000.0)),
-                ),
-            ],
-        ),
-    ]
-    .join("\n");
-    card = card.text(body);
-
-    if !data.table_sizes.is_empty() {
-        card = card.separator(true, SeparatorSpacingSize::Small);
-        card = card.text(format!("{SPACE}__📊 Table Storage__:"));
-        let lines = data
-            .table_sizes
-            .iter()
-            .map(|(name, bytes)| format!("{SPACE}{SPACE}**{name}:** {}", fmt_bytes(*bytes)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        card = card.text(lines);
-    }
-
-    card
-}
-
-fn build_redis_card(data: &PingData) -> Container {
-    let body = [
-        executive_section(
-            "Memory Usage",
-            &[
-                (
-                    "Current Usage".to_string(),
-                    fmt_mb(data.redis_mem_used_bytes),
-                ),
-                (
-                    "Peak Usage".to_string(),
-                    fmt_mb(data.redis_mem_peak_bytes),
-                ),
-            ],
-        ),
-        executive_section(
-            "Cache Hits & Efficiency",
-            &[
-                (
-                    "Hit Ratio".to_string(),
-                    format!("{:.2}%", data.redis_hit_ratio),
-                ),
-                (
-                    "Tracked Keys".to_string(),
-                    format_number(data.redis_total_keys),
-                ),
-            ],
-        ),
-        executive_section(
-            "Connection",
-            &[
-                (
-                    "Redis Version".to_string(),
-                    format!("v{}", data.redis_version),
-                ),
-                (
-                    "Active Clients".to_string(),
-                    format!("{} connected", data.redis_clients),
-                ),
-            ],
-        ),
-    ]
-    .join("\n");
-    detail_card("🧠 Cache Performance", data).text(body)
-}
-
-fn build_bot_card(data: &PingData) -> Container {
-    let mem_per_guild = if data.guilds > 0 {
-        format!(
-            "{:.2}",
-            data.rss as f64 / 1024.0 / 1024.0 / data.guilds as f64
-        )
-    } else {
-        "0".to_string()
-    };
-    let body = [
-        executive_section(
-            "Interaction Analytics",
-            &[
-                (
-                    "Command Rate".to_string(),
-                    format!("{:.0}/sec", data.commands_per_sec),
-                ),
-                (
-                    "Message Traffic".to_string(),
-                    format!("{:.0}/min", data.messages_per_min),
-                ),
-            ],
-        ),
-        executive_section(
-            "Efficiency Metrics",
-            &[
-                ("Memory/Guild".to_string(), format!("{mem_per_guild} MB")),
-                ("System RSS".to_string(), fmt_mb(data.rss)),
-            ],
-        ),
-        executive_section(
-            "Software Architecture",
-            &[
-                (
-                    "Source Lines".to_string(),
-                    format!("{} TS", format_number(data.code_lines)),
-                ),
-                (
-                    "Feature Modules".to_string(),
-                    format!("{} Loaded", data.modules.len()),
-                ),
-            ],
-        ),
-    ]
-    .join("\n");
-    detail_card("🤖 Bot System Summary", data).text(body)
-}
-
-/// Detail card for `category`, ending with a `Back to Overview` button.
+/// Pages of shards this dataset renders, never zero.
 #[must_use]
-pub fn build_detail_card(category: PingCategory, data: &PingData, user_id: u64) -> CardReply {
-    let card = match category {
-        PingCategory::Gateway => build_gateway_card(data),
-        PingCategory::Engine => build_engine_card(data),
-        PingCategory::Host => build_host_card(data),
-        PingCategory::Postgres => build_postgres_card(data),
-        PingCategory::Redis => build_redis_card(data),
-        PingCategory::Bot => build_bot_card(data),
-    };
-    container_reply(
-        card.separator(true, SeparatorSpacingSize::Small)
-            .action_row(back_row(user_id)),
+pub fn shard_page_count(data: &PingData) -> usize {
+    effective_shards(data)
+        .len()
+        .div_ceil(SHARDS_PER_PAGE)
+        .max(1)
+}
+
+fn shard_block(data: &PingData, shard: &ShardInfo) -> String {
+    format!(
+        "__{dot} **Shard [{id}]:** __\n\
+         {SPACE}📡 {latency} · ⏱️ {uptime}\n\
+         {SPACE}**CPU**: {cpu:.0}% . 📊 **RAM:** {ram} . **({share})**  \n\
+         {SPACE}📈 **Servers:** {guilds}· 👥 **Members:** {users}",
+        dot = shard.status.dot(),
+        id = shard.id,
+        latency = fmt_ms(Some(shard.ping)),
+        uptime = format_duration(data.uptime),
+        cpu = data.cpu_percent,
+        ram = fmt_mb(data.rss),
+        share = ram_share(data.rss, data.ram_total),
+        guilds = fmt_count(shard.guilds),
+        users = fmt_count(shard.users),
     )
 }
 
-fn back_row(user_id: u64) -> CreateActionRow<'static> {
-    let button = CreateButton::new(ping_custom_id(OVERVIEW, user_id))
-        .label("Back to Overview")
-        .style(ButtonStyle::Secondary);
-    let button = match component_emoji("⬅️") {
-        Some(emoji) => button.emoji(emoji),
-        None => button,
-    };
-    action_row_of(vec![button])
+/// The `◀️ · Close · ▶️` pager, disabled at either end, keyed to the viewer.
+fn shard_pager(
+    prefix: &str,
+    user_id: u64,
+    page: usize,
+    total_pages: usize,
+) -> CreateActionRow<'static> {
+    let mut previous = CreateButton::new(format!("{prefix}:p_-1:{user_id}"))
+        .style(ButtonStyle::Secondary)
+        .disabled(page == 0);
+    if let Some(emoji) = component_emoji("\u{25c0}\u{fe0f}") {
+        previous = previous.emoji(emoji);
+    }
+    let mut next = CreateButton::new(format!("{prefix}:p_1:{user_id}"))
+        .style(ButtonStyle::Secondary)
+        .disabled(page + 1 >= total_pages);
+    if let Some(emoji) = component_emoji("\u{25b6}\u{fe0f}") {
+        next = next.emoji(emoji);
+    }
+    let close = CreateButton::new(format!("{prefix}:close:{user_id}"))
+        .label("Close")
+        .style(ButtonStyle::Danger);
+
+    action_row_of(vec![previous, close, next])
 }
 
-fn container_reply(container: Container) -> CardReply {
+/// The dashboard page: header, three shards, external services and the pager.
+#[must_use]
+pub fn build_overview_card(data: &PingData, user_id: u64, page: usize, prefix: &str) -> CardReply {
+    let shards = effective_shards(data);
+    let total_pages = shard_page_count(data);
+    let page = page.min(total_pages - 1);
+
+    let mut container = Container::new()
+        .text(format!("__## {} Status:__", data.bot_name))
+        .separator(true, SeparatorSpacingSize::Small);
+
+    for shard in shards
+        .iter()
+        .skip(page * SHARDS_PER_PAGE)
+        .take(SHARDS_PER_PAGE)
+    {
+        container = container
+            .text(shard_block(data, shard))
+            .separator(true, SeparatorSpacingSize::Small);
+    }
+
+    container = container
+        .text(format!(
+            "### External Services:\n\
+             {SPACE}🧠 **Cache:** {cache} \n\
+             {SPACE} 🐘 **Database:** `{db}`",
+            cache = data
+                .redis_hit_ratio
+                .map_or_else(|| "no reads since boot".to_string(), |r| format!("{r:.1}% hit ratio")),
+            db = fmt_ms(data.db_latency_ms),
+        ))
+        .separator(true, SeparatorSpacingSize::Small)
+        .action_row(shard_pager(prefix, user_id, page, total_pages));
+
     CardReply {
         components: vec![CreateComponent::Container(container.into_create())],
-        ephemeral: false,
+        ephemeral: true,
     }
 }
 
@@ -668,43 +251,130 @@ fn container_reply(container: Container) -> CardReply {
 mod tests {
     use super::*;
 
+    fn two_shards() -> PingData {
+        PingData {
+            bot_name: "Lumi".to_string(),
+            uptime: 109_000.0,
+            rss: 168_099_430,
+            ram_total: 140_000_000_000,
+            cpu_percent: 0.0,
+            guilds: 3,
+            users: 32,
+            redis_hit_ratio: Some(45.3),
+            db_latency_ms: Some(3.0),
+            shards: vec![
+                ShardInfo {
+                    id: 0,
+                    ping: 424.0,
+                    status: ShardStatus::Online,
+                    guilds: 3,
+                    users: 32,
+                },
+                ShardInfo {
+                    id: 1,
+                    ping: 338.0,
+                    status: ShardStatus::Online,
+                    guilds: 0,
+                    users: 0,
+                },
+            ],
+            ..PingData::default()
+        }
+    }
+
+    fn texts(card: &CardReply) -> Vec<String> {
+        let Ok(json) = serde_json::to_value(&card.components[0]) else {
+            panic!("card serializes");
+        };
+        json["components"]
+            .as_array()
+            .map(|children| {
+                children
+                    .iter()
+                    .filter(|child| child["type"] == 10)
+                    .filter_map(|child| child["content"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     #[test]
-    fn formatters_match_ts() {
+    fn formatters_match_the_dashboard() {
         assert_eq!(fmt_ms(None), "Analyzing…");
         assert_eq!(fmt_ms(Some(-1.0)), "Analyzing…");
         assert_eq!(fmt_ms(Some(12.4)), "12ms");
         assert_eq!(fmt_mb(1024 * 1024), "1.0 MB");
-        assert_eq!(fmt_bytes(2048), "2.0 MB");
-        assert_eq!(fmt_bytes(1024 * 1024), "1.0 GB");
-        assert_eq!(fmt_bytes(512), "512 B");
         assert_eq!(fmt_count(999), "999");
         assert_eq!(fmt_count(1500), "1.5K");
-        assert_eq!(format_number(1_234_567), "1,234,567");
         assert_eq!(format_duration(0.0), "0s");
         assert_eq!(format_duration(90_000.0), "1m 30s");
+        assert_eq!(ram_share(50, 0), "0.00%");
+        assert_eq!(ram_share(1_048_576, 104_857_600), "1.00%");
     }
 
     #[test]
-    fn custom_id_round_trips() {
-        assert_eq!(ping_custom_id(OVERVIEW, 42), "ping:overview:42");
+    fn renders_one_block_per_shard_like_the_reference() {
+        let card = build_overview_card(&two_shards(), 7, 0, "ping");
+        assert!(card.ephemeral);
+        let texts = texts(&card);
+        assert_eq!(texts[0], "__## Lumi Status:__");
         assert_eq!(
-            ping_custom_id(PingCategory::Postgres.as_str(), 7),
-            "ping:postgres:7"
+            texts[1],
+            "__🟢 **Shard [0]:** __\n\
+             \u{2800}📡 424ms · ⏱️ 1m 49s\n\
+             \u{2800}**CPU**: 0% . 📊 **RAM:** 160.3 MB . **(0.12%)**  \n\
+             \u{2800}📈 **Servers:** 3· 👥 **Members:** 32"
+        );
+        assert!(texts[2].contains("**Shard [1]:**"));
+        assert!(texts[2].ends_with("**Servers:** 0· 👥 **Members:** 0"));
+        assert_eq!(
+            texts[3],
+            "### External Services:\n\u{2800}🧠 **Cache:** 45.3% hit ratio \n\u{2800} 🐘 **Database:** `3ms`"
         );
     }
 
     #[test]
-    fn categories_round_trip() {
-        for category in [
-            PingCategory::Gateway,
-            PingCategory::Engine,
-            PingCategory::Host,
-            PingCategory::Postgres,
-            PingCategory::Redis,
-            PingCategory::Bot,
-        ] {
-            assert_eq!(PingCategory::from_id(category.as_str()), Some(category));
-        }
-        assert_eq!(PingCategory::from_id("nope"), None);
+    fn paginates_every_three_shards() {
+        let mut data = two_shards();
+        data.shards = (0..7)
+            .map(|id| ShardInfo {
+                id,
+                ping: 100.0,
+                status: ShardStatus::Online,
+                guilds: id,
+                users: id * 2,
+            })
+            .collect();
+        assert_eq!(shard_page_count(&data), 3);
+
+        let last = build_overview_card(&data, 7, 2, "ping");
+        let texts = texts(&last);
+        assert!(texts[1].contains("**Shard [6]:**"));
+        assert_eq!(texts.len(), 3);
+
+        let first = build_overview_card(&data, 7, 0, "ping");
+        let Ok(json) = serde_json::to_value(&first.components[0]) else {
+            panic!("card serializes");
+        };
+        let buttons = json["components"]
+            .as_array()
+            .and_then(|children| children.iter().find(|child| child["type"] == 1))
+            .and_then(|row| row["components"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        let ids: Vec<&str> = buttons
+            .iter()
+            .filter_map(|button| button["custom_id"].as_str())
+            .collect();
+        assert_eq!(ids, ["ping:p_-1:7", "ping:close:7", "ping:p_1:7"]);
+        assert_eq!(buttons[0]["disabled"], true);
+        assert_eq!(buttons[2]["disabled"], false);
+        assert_eq!(buttons[1]["style"], 4);
+    }
+
+    #[test]
+    fn out_of_range_page_clamps_to_the_last() {
+        let card = build_overview_card(&two_shards(), 1, 99, "ping");
+        assert_eq!(texts(&card).len(), 4);
     }
 }

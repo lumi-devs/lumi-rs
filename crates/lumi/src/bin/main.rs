@@ -75,6 +75,7 @@ async fn start_api(cfg: lumi_kernel::Config) -> Result<()> {
 }
 
 async fn start_gateway(cfg: lumi_kernel::Config) -> Result<()> {
+    let shards = cfg.shard_count;
     let mut client = lumi::client::build(cfg).await?;
     let shutdown_trigger = client.shard_manager.get_shutdown_trigger();
 
@@ -84,7 +85,13 @@ async fn start_gateway(cfg: lumi_kernel::Config) -> Result<()> {
         shutdown_trigger();
     });
 
-    client.start().await?;
+    match shards {
+        Some(total) => {
+            tracing::info!(total, "starting forced shard count");
+            client.start_shards(total).await?;
+        }
+        None => client.start_autosharded().await?,
+    }
     Ok(())
 }
 

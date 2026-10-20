@@ -44,7 +44,6 @@ impl CardKind {
     }
 }
 
-#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug)]
 pub struct CardOptions {
     pub subtitle: Option<String>,

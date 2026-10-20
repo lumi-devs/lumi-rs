@@ -31,6 +31,9 @@ pub struct Config {
     pub owner_ids: Vec<u64>,
     #[serde(default = "default_custom_dir")]
     pub custom_dir: String,
+    /// Shards this process should run, overriding Discord's recommendation.
+    #[serde(default)]
+    pub shard_count: Option<u16>,
 }
 
 fn default_redis_url() -> String {
@@ -66,6 +69,19 @@ impl Config {
 
         let custom_dir = std::env::var("CUSTOM_DIR").unwrap_or_else(|_| default_custom_dir());
 
+        let shard_count = match std::env::var("SHARDS") {
+            Ok(raw) => Some(
+                raw.trim()
+                    .parse()
+                    .ok()
+                    .filter(|count| *count > 0)
+                    .ok_or_else(|| {
+                        LumiError::Config(format!("SHARDS must be a positive count, got '{raw}'"))
+                    })?,
+            ),
+            Err(_) => None,
+        };
+
         let mut owner_ids = Vec::new();
         if let Ok(owners) = std::env::var("OWNER")
             .or_else(|_| std::env::var("OWNERS"))
@@ -93,6 +109,7 @@ impl Config {
             rpc_port,
             owner_ids,
             custom_dir,
+            shard_count,
         };
         cfg.validate()?;
         Ok(cfg)

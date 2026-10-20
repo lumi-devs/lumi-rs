@@ -1,4 +1,5 @@
 pub mod client;
+pub mod codebase;
 pub mod commands;
 pub mod errors;
 pub mod events;

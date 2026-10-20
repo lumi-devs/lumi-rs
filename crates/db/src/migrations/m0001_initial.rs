@@ -1,6 +1,6 @@
 use sea_orm_migration::prelude::*;
 
-use crate::entities::{economy_transaction, level_account, moderation_case};
+use crate::entities::{afk_entry, economy_transaction, level_account, moderation_case};
 
 /// One composite index: name, table entity, then the columns.
 macro_rules! composite {
@@ -25,7 +25,6 @@ pub struct Migration;
 /// declared in `lumi_db::entities::*`, then adds the composite indexes the
 /// entity attributes cannot express.
 #[sea_orm_migration::async_trait::async_trait]
-#[allow(elided_lifetimes_in_paths)]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
@@ -48,6 +47,8 @@ impl MigrationTrait for Migration {
             economy_transaction::Column::GuildId, economy_transaction::Column::UserId);
         composite!(manager, "idx_economy_transactions_guild_created", economy_transaction::Entity,
             economy_transaction::Column::GuildId, economy_transaction::Column::CreatedAt);
+        composite!(manager, "idx_afk_entries_guild_since", afk_entry::Entity,
+            afk_entry::Column::GuildId, afk_entry::Column::Since);
         Ok(())
     }
 }

@@ -167,25 +167,6 @@ pub async fn handle_component(
     }
     let guild = guild_ctx(ctx, raw_guild_id);
 
-    // Prefix, config field and addon modals open without a permission round-trip; the modal
-    // submission re-checks. Everything else requires `admin.*`.
-    let opens_modal =
-        (parsed.head() == Some("prefix") && parsed.get(1) == Some("set"))
-            || (parsed.head() == Some("cfg") && parsed.get(1) == Some("modal"))
-            || (parsed.head() == Some("addon")
-                && matches!(parsed.get(1), Some("add_repo" | "rm_repo" | "install" | "uninstall")));
-
-    if opens_modal {
-        if !caller_may_manage(ctx, services, component).await {
-            return deny(ctx, component).await;
-        }
-        let outcome = dispatch(services, &guild, &parsed, &component.data, component.user.id.get())
-            .await?;
-        return respond_outcome(ctx, component, outcome).await;
-    }
-
-    acknowledge(ctx, component).await?;
-
     if !caller_may_manage(ctx, services, component).await {
         return deny(ctx, component).await;
     }
@@ -384,38 +365,27 @@ async fn caller_may_manage_modal(
     services.permits.resolve(&check).allowed
 }
 
+/// Send the single response an interaction is allowed: exactly one of these is
+/// ever created per button or select press.
 async fn respond_outcome(
     ctx: &serenity::Context,
     component: &ComponentInteraction,
     outcome: HubOutcome,
 ) -> Result<(), Error> {
-    match outcome {
+    let response = match outcome {
         HubOutcome::Update(card) => {
-            component
-                .create_response(
-                    &ctx.http,
-                    CreateInteractionResponse::UpdateMessage(v2_message(card.components)),
-                )
-                .await?;
+            CreateInteractionResponse::UpdateMessage(v2_message(card.components))
         }
-        HubOutcome::Ephemeral(card) => {
-            component
-                .create_followup(
-                    &ctx.http,
-                    serenity::CreateInteractionResponseFollowup::new()
-                        .components(card.components)
-                        .flags(MessageFlags::IS_COMPONENTS_V2)
-                        .ephemeral(true),
-                )
-                .await?;
-        }
-        HubOutcome::Modal(modal) => {
-            component
-                .create_response(&ctx.http, CreateInteractionResponse::Modal(modal))
-                .await?;
-        }
-        HubOutcome::Done => {}
-    }
+        HubOutcome::Ephemeral(card) => CreateInteractionResponse::Message(
+            CreateInteractionResponseMessage::new()
+                .components(card.components)
+                .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
+                .allowed_mentions(CreateAllowedMentions::new()),
+        ),
+        HubOutcome::Modal(modal) => CreateInteractionResponse::Modal(modal),
+        HubOutcome::Done => CreateInteractionResponse::Acknowledge,
+    };
+    component.create_response(&ctx.http, response).await?;
     Ok(())
 }
 
@@ -459,16 +429,6 @@ async fn respond_modal(
                 .await?;
         }
     }
-    Ok(())
-}
-
-async fn acknowledge(
-    ctx: &serenity::Context,
-    component: &ComponentInteraction,
-) -> Result<(), Error> {
-    component
-        .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
-        .await?;
     Ok(())
 }
 

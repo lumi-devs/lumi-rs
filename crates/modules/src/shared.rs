@@ -162,7 +162,8 @@ pub fn secs_ceil(ms: i64) -> i64 {
     ms.max(0).saturating_add(999) / 1000
 }
 
-/// Human-readable duration, clamped at zero.
+/// Human-readable duration, clamped at zero, at most the two largest units
+/// (`90_000` -> `1d 1h`, `3_725` -> `1h 2m`, `65` -> `1m 5s`, `5` -> `5s`).
 pub fn format_seconds(seconds: i64) -> String {
     let total = seconds.max(0);
     let (days, rest) = (total / 86_400, total % 86_400);

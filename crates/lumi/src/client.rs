@@ -80,8 +80,17 @@ fn command_check(ctx: Context<'_>) -> poise::BoxFuture<'_, Result<bool, Error>> 
 }
 
 pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
+    // The per-shard guild/member split uses Discord's shard math, so it needs the
+    // fleet total as well as this process's shard latencies.
+    let mut shard_total = cfg.shard_count.map_or(1, u64::from);
     if let Ok(token) = cfg.token.parse::<serenity::Token>() {
         let http = serenity::Http::new(token);
+        if cfg.shard_count.is_none() {
+            match http.get_bot_gateway().await {
+                Ok(gateway) => shard_total = u64::from(gateway.shards.get()),
+                Err(e) => tracing::warn!(error = %e, "failed to read the recommended shard count"),
+            }
+        }
         match http.get_current_application_info().await {
             Ok(info) => {
                 if let Some(owner) = info.owner {
@@ -169,6 +178,30 @@ pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
         .framework(Box::new(framework))
         .event_handler(Arc::new(crate::events::Events))
         .await?;
+
+    let runners = Arc::clone(&client.shard_manager.runners);
+    crate::ping::track_shards(move || {
+        let mut shards: Vec<lumi_ui::ping::ShardInfo> = runners
+            .iter()
+            .map(|entry| {
+                let info = entry.value().info.read();
+                lumi_ui::ping::ShardInfo {
+                    id: u64::from(entry.key().get()),
+                    ping: info
+                        .latency
+                        .map_or(-1.0, |latency| latency.as_secs_f64() * 1000.0),
+                    status: lumi_ui::ping::ShardStatus::from_stage(info.stage),
+                    guilds: 0,
+                    users: 0,
+                }
+            })
+            .collect();
+        shards.sort_unstable_by_key(|shard| shard.id);
+        crate::ping::ShardSnapshot {
+            shards,
+            total: shard_total,
+        }
+    });
 
     Ok(client)
 }

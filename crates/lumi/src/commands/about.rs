@@ -11,7 +11,7 @@ use crate::ping::collect;
 pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
 
-    let data = collect(0, ctx.serenity_context()).await;
+    let data = collect(ctx.data().as_ref(), ctx.serenity_context()).await;
 
     let fmt_count = |count: u64| {
         if count >= 1000 {
@@ -38,6 +38,18 @@ pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
     let boot_time_sec = now.saturating_sub((data.uptime / 1000.0) as u64);
     let host_boot_time_sec = now.saturating_sub(data.os_uptime_secs);
 
+    let codebase = tokio::task::spawn_blocking(crate::codebase::stats)
+        .await
+        .unwrap_or_default();
+
+    let services = ctx.data();
+    let (postgres, redis) = tokio::join!(
+        lumi_db::server_version(&services.db),
+        services.cache.server_version()
+    );
+    let postgres = postgres.unwrap_or_else(|_| "unknown".to_string());
+    let redis = redis.unwrap_or_else(|_| "unknown".to_string());
+
     let body = vec![
         "# __Lumi__\n\nLumi is a powerful, self-hosted Discord administration platform designed for communities that demand full control and rock-solid reliability. Powered by native Rust. Lumi guarantees instant command responses, modular capability, and enterprise-grade uptime for your server. The all-in-one administration platform you host yourself - moderation, leveling, economy, and logging, engineered for reliability.".to_string(),
         format!(
@@ -52,13 +64,19 @@ pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
             data.cpu_percent
         ),
         format!(
-            "### ⚙️ __Core Architecture__\n_Lumi version_ v{}\n*Rust* v{} · *Serenity* Next · *SeaORM* 2.0\n*PostgreSQL* · *Redis*",
+            "### ⚙️ __Core Architecture__\n_Lumi version_ v{}\n*Rust* v{} · *Serenity* Next · *SeaORM* 2.0\n*PostgreSQL* v{} · *Redis* v{}",
             env!("CARGO_PKG_VERSION"),
-            env!("CARGO_PKG_VERSION")
+            env!("CARGO_PKG_VERSION"),
+            postgres,
+            redis,
         ),
-        "### 📦 __Codebase__\n**Self-hosted, open source, and allergic to downtime.**".to_string(),
+        format!(
+            "### 📦 __Codebase__\n**{}** lines of Rust · **{}** modules · **{}** dependencies\n-# *Self-hosted, open source, and allergic to downtime.*",
+            codebase.lines,
+            ctx.data().registry.len(),
+            codebase.dependencies,
+        ),
     ];
-
     let row1 = CreateActionRow::Buttons(vec![
         CreateButton::new_link("https://github.com/lumi-devs/lumi-rs")
             .label("Source Code"),

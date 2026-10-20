@@ -27,6 +27,13 @@ const BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// How long a Redis connection may take to establish or answer.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Read one field out of a Redis `INFO` payload.
+fn info_field<T: std::str::FromStr>(info: &str, name: &str) -> Option<T> {
+    info.lines()
+        .find_map(|line| Some(line.strip_prefix(name)?.strip_prefix(':')?.trim()))
+        .and_then(|value| value.parse().ok())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 enum Invalidation {
     Keys(Vec<String>),
@@ -84,6 +91,35 @@ impl Cache {
         let mut conn = self.redis.clone();
         let ttl: i64 = conn.pttl(key).await?;
         Ok(ttl.max(0))
+    }
+
+    /// Round-trip time of a Redis command, in milliseconds. Uses `PING` so the
+    /// health dashboard's polling does not inflate `keyspace_misses` (a `GET`
+    /// on a missing key counts as a miss and would drag the hit ratio to 0%).
+    pub async fn probe_read_ms(&self) -> Result<f64> {
+        let mut conn = self.redis.clone();
+        let started = std::time::Instant::now();
+        let _: String = redis::cmd("PING").query_async(&mut conn).await?;
+        Ok(started.elapsed().as_secs_f64() * 1000.0)
+    }
+
+    /// Share of Redis key lookups that hit, in percent. `None` until the server
+    /// has served at least one lookup, so a fresh instance is not reported as
+    /// "0%" (which reads as a broken cache rather than no traffic).
+    pub async fn hit_ratio(&self) -> Result<Option<f64>> {
+        let mut conn = self.redis.clone();
+        let info: String = redis::cmd("INFO").query_async(&mut conn).await?;
+        let hits = info_field::<u64>(&info, "keyspace_hits").unwrap_or(0);
+        let misses = info_field::<u64>(&info, "keyspace_misses").unwrap_or(0);
+        let lookups = hits + misses;
+        Ok((lookups > 0).then(|| hits as f64 / lookups as f64 * 100.0))
+    }
+
+    /// Version reported by the connected Redis, e.g. `8.10.2`.
+    pub async fn server_version(&self) -> Result<String> {
+        let mut conn = self.redis.clone();
+        let info: String = redis::cmd("INFO").arg("server").query_async(&mut conn).await?;
+        Ok(info_field::<String>(&info, "redis_version").unwrap_or_else(|| "unknown".to_string()))
     }
 
     pub async fn get_json(&self, key: &str) -> Result<Option<Value>> {

@@ -7,7 +7,6 @@ pub mod general;
 pub mod hub;
 pub mod security;
 
-pub use general::handle_component;
 pub use hub::{handle_component as handle_hub_component, handle_modal as handle_hub_modal};
 pub use crate::interactions::confirm;
 

@@ -1,14 +1,17 @@
 use poise::serenity_prelude as serenity;
-use serenity::all::{ChannelId, ChannelType, CreateChannel, GuildId, VoiceState};
+use serenity::all::{ChannelId, ChannelType, CreateChannel, GenericChannelId, GuildId, VoiceState};
 use tracing::{error, info, warn};
 
 use lumi_kernel::{Result, Services};
+use lumi_ui::Card;
 
 use crate::shared::truncate_chars;
 
-use super::store;
+use super::{store, views};
 
 const MAX_CHANNEL_NAME: usize = 100;
+/// Per-user delay between generator joins; a faster attempt is refused.
+const CREATE_COOLDOWN_MS: u64 = 30_000;
 
 fn channel_is_empty(ctx: &serenity::Context, guild_id: GuildId, channel_id: ChannelId) -> bool {
     ctx.cache
@@ -70,6 +73,27 @@ pub async fn on_voice_state_update(
         Some(member) => member,
         None => guild_id.member(&ctx.http, user_id).await?,
     };
+
+    let cooldown_key = format!("lumi:tempvc:cd:create:{gid}:{}", user_id.get());
+    if !services.cache.claim_cooldown(&cooldown_key, CREATE_COOLDOWN_MS).await? {
+        if let Err(error) = guild_id.disconnect_member(&ctx.http, user_id).await {
+            warn!(%error, user_id = user_id.get(), "tempvc cooldown disconnect failed");
+        }
+        if let Ok(dm) = user_id.create_dm_channel(&ctx.http).await {
+            let card = Card::warning(
+                "\u{23f3} Slow Down",
+                format!("Wait {} seconds before creating another channel.", CREATE_COOLDOWN_MS / 1000),
+            );
+            if let Err(error) = GenericChannelId::new(dm.id.get())
+                .send_message(&ctx.http, card.into_reply().message())
+                .await
+            {
+                warn!(%error, user_id = user_id.get(), "tempvc cooldown dm failed");
+            }
+        }
+        return Ok(());
+    }
+
     let channel_name = truncate_chars(
         &generator.name.replace("{user}", member.display_name()),
         MAX_CHANNEL_NAME,
@@ -108,6 +132,21 @@ pub async fn on_voice_state_update(
     .await
     {
         error!(%error, channel_id = created.id.get(), "failed to persist tempvc record");
+        if let Err(error) = GenericChannelId::new(created.id.get())
+            .delete(&ctx.http, Some("TempVC record write failed"))
+            .await
+        {
+            warn!(%error, channel_id = created.id.get(), "tempvc rollback delete failed");
+        }
+        return Ok(());
+    }
+
+    let card = views::panel_card(created.id.get(), user_id.get(), false, false, generator.limit);
+    if let Err(error) = GenericChannelId::new(created.id.get())
+        .send_message(&ctx.http, card.message())
+        .await
+    {
+        warn!(%error, channel_id = created.id.get(), "tempvc panel send failed");
     }
 
     Ok(())

@@ -1,29 +1,23 @@
-use lumi_ui::ping::{
-    OVERVIEW, PING_ID_PREFIX, PingCategory, build_detail_card, build_overview_card_paged,
-};
-use lumi_ui::Card;
 use poise::serenity_prelude as serenity;
-use serenity::{
-    CreateAllowedMentions, CreateInteractionResponse, CreateInteractionResponseMessage,
-    MessageFlags,
+use serenity::all::{
+    CacheHttp, ComponentInteraction, CreateAllowedMentions, CreateInteractionResponse,
+    CreateInteractionResponseMessage, MessageFlags,
 };
 
+use lumi_kernel::Services;
 use lumi_kernel::bot::{Context, Error};
-use crate::interactions::{caller_is_owner, reply_ephemeral, update_message};
-use crate::ping::collect;
+use lumi_ui::ping::{build_overview_card, shard_page_count};
 
-enum PingView {
-    Overview { page: usize },
-    Close,
-    Category(PingCategory),
-}
+use crate::interactions::PING_PREFIX;
+use crate::ping::{collect, forget_page, move_page, reset_page, spawn_live_updates};
 
-/// Health dashboard — bot status, latency and system health.
-#[poise::command(slash_command, prefix_command)]
+/// Health dashboard — per-shard status, latency and system health.
+#[poise::command(slash_command, prefix_command, aliases("pong", "latency"))]
 pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
+    let data = collect(ctx.data().as_ref(), ctx.serenity_context()).await;
     let user_id = ctx.author().id.get();
-    let data = collect(0, ctx.serenity_context()).await;
-    let card = build_overview_card_paged(&data, 0, user_id);
+    reset_page(user_id);
+    let card = build_overview_card(&data, user_id, 0, PING_PREFIX);
 
     match ctx {
         poise::Context::Application(app) => {
@@ -33,11 +27,18 @@ pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
                     CreateInteractionResponse::Message(
                         CreateInteractionResponseMessage::new()
                             .components(card.components)
-                            .flags(MessageFlags::IS_COMPONENTS_V2)
+                            .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
                             .allowed_mentions(CreateAllowedMentions::new()),
                     ),
                 )
                 .await?;
+
+            spawn_live_updates(
+                std::sync::Arc::clone(ctx.data().as_ref()),
+                ctx.serenity_context().clone(),
+                app.interaction.token.to_string(),
+                user_id,
+            );
         }
         poise::Context::Prefix(pfx) => {
             pfx.msg
@@ -57,66 +58,61 @@ pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Handle a `ping:{category|p_±1|close}:{user_id}` button press.
+/// Pager and Close buttons on a rendered dashboard: `ping:p_<delta>:<user>` and
+/// `ping:close:<user>`.
 pub async fn handle_component(
     ctx: &serenity::Context,
-    addon_count: usize,
-    component: &serenity::ComponentInteraction,
+    services: &Services,
+    component: &ComponentInteraction,
 ) -> Result<(), Error> {
-    let Some((view, user_id)) = parse_view(&component.data.custom_id) else {
+    let mut parts = component.data.custom_id.split(':').skip(1);
+    let (Some(action), Some(user_id)) = (parts.next(), parts.next().and_then(|id| id.parse().ok()))
+    else {
         return Ok(());
     };
-    if !caller_is_owner(component, user_id) {
-        reply_ephemeral(&ctx.http, component, "This panel belongs to someone else.").await?;
+
+    if component.user.id.get() != user_id {
         return Ok(());
     }
 
-    if matches!(view, PingView::Close) {
-        if component.message.delete(&ctx.http, None).await.is_ok() {
-            let _ = component
-                .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
-                .await;
-            return Ok(());
-        }
-        let card = Card::info("Closed", "This dashboard has been closed.").into_reply();
-        let _ = update_message(&ctx.http, component, &card).await;
+    if action == "close" {
+        component
+            .create_response(ctx.http(), CreateInteractionResponse::Acknowledge)
+            .await?;
+        forget_page(user_id);
+        ctx.http
+            .delete_original_interaction_response(&component.token)
+            .await?;
         return Ok(());
     }
 
-    let data = collect(addon_count, ctx).await;
-    let card = match view {
-        PingView::Overview { page } => build_overview_card_paged(&data, page, user_id),
-        PingView::Category(category) => build_detail_card(category, &data, user_id),
-        PingView::Close => return Ok(()),
+    let Some(delta) = action.strip_prefix("p_").and_then(|d| d.parse::<i64>().ok()) else {
+        return Ok(());
     };
 
-    update_message(&ctx.http, component, &card).await?;
+    let data = collect(services, ctx).await;
+    let page = move_page(user_id, delta, shard_page_count(&data));
+    let card = build_overview_card(&data, user_id, page, PING_PREFIX);
+
+    let mut flags = MessageFlags::IS_COMPONENTS_V2;
+    if component
+        .message
+        .flags
+        .is_some_and(|flags| flags.contains(MessageFlags::EPHEMERAL))
+    {
+        flags |= MessageFlags::EPHEMERAL;
+    }
+    component
+        .create_response(
+            ctx.http(),
+            CreateInteractionResponse::UpdateMessage(
+                CreateInteractionResponseMessage::new()
+                    .components(card.components)
+                    .flags(flags)
+                    .allowed_mentions(CreateAllowedMentions::new()),
+            ),
+        )
+        .await?;
 
     Ok(())
-}
-
-fn parse_view(custom_id: &str) -> Option<(PingView, u64)> {
-    let mut parts = custom_id.split(':');
-    if parts.next()? != PING_ID_PREFIX {
-        return None;
-    }
-    let action = parts.next()?;
-    let user_id: u64 = parts.next()?.parse().ok()?;
-
-    let view = match action {
-        "close" => PingView::Close,
-        OVERVIEW => PingView::Overview { page: 0 },
-        action => match action.strip_prefix("p_") {
-            Some(delta) => {
-                let delta: i64 = delta.parse().ok()?;
-                let page = parts.next().and_then(|p| p.parse::<i64>().ok()).unwrap_or(0);
-                let new_page = page.saturating_add(delta).max(0);
-                PingView::Overview {
-                    page: usize::try_from(new_page).unwrap_or(usize::MAX),
-                }
-            }
-            None => PingView::Category(PingCategory::from_id(action)?),
-        },
-    };
-    Some((view, user_id))
 }

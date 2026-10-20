@@ -20,10 +20,37 @@ async fn display_name(ctx: Context<'_>, guild_id: GuildId, user: UserId) -> Stri
     if let Some(name) = cached_name(ctx, guild_id, user) {
         return name;
     }
+    if let Ok(member) = guild_id.member(ctx.http(), user).await {
+        return member.display_name().to_string();
+    }
     user.to_user(ctx.http())
         .await
         .ok()
-        .map_or_else(|| format!("<@{}>", user.get()), |u| u.name.to_string())
+        .map_or_else(|| format!("<@{}>", user.get()), |u| u.display_name().to_string())
+}
+
+/// Guild display name plus avatar, preferring the cache, then one REST lookup.
+async fn identity(ctx: Context<'_>, guild_id: GuildId, user: UserId) -> (String, Option<String>) {
+    if let Some(member) = ctx
+        .cache()
+        .guild(guild_id)
+        .and_then(|guild| guild.members.get(&user).cloned())
+    {
+        return (
+            member.display_name().to_string(),
+            Some(member.user.face()),
+        );
+    }
+    if let Ok(member) = guild_id.member(ctx.http(), user).await {
+        return (
+            member.display_name().to_string(),
+            Some(member.user.face()),
+        );
+    }
+    match user.to_user(ctx.http()).await {
+        Ok(user) => (user.display_name().to_string(), Some(user.face())),
+        Err(_) => (format!("<@{}>", user.get()), None),
+    }
 }
 
 /// View your rank and XP progress, or check another member's.
@@ -38,12 +65,7 @@ pub async fn rank(
     let target_id = target_user_id.get();
 
     let account = store::get_account(&ctx.data().db, guild_id.get(), target_id).await?;
-    let user_obj = target_user_id.to_user(ctx.http()).await.ok();
-    let username = user_obj.as_ref().map_or_else(
-        || format!("User {target_id}"),
-        |u| u.name.to_string(),
-    );
-    let avatar_url = user_obj.as_ref().map(|u| u.face());
+    let (username, avatar_url) = identity(ctx, guild_id, target_user_id).await;
 
     let Some(acc) = account else {
         ctx.send(views::no_rank_card(&username).reply()).await?;

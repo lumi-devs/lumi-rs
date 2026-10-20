@@ -20,7 +20,8 @@ pub const HUB_PREFIX: &str = crate::commands::hub::PREFIX;
 pub const TEMPVC_PREFIX: &str = "tempvc";
 pub const MEDIA_PREFIX: &str = "media";
 pub const ECONOMY_PREFIX: &str = "econ";
-pub const PING_PREFIX: &str = lumi_ui::ping::PING_ID_PREFIX;
+pub const PING_PREFIX: &str = "ping";
+pub const AFK_PREFIX: &str = lumi_modules::afk::PREFIX;
 
 /// Component surfaces routed by the gateway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub enum ComponentRoute {
     Media,
     Economy,
     Ping,
+    Afk,
 }
 
 /// Prefix registry: the single source of truth for component routing.
@@ -39,6 +41,7 @@ pub const COMPONENT_ROUTES: &[(&str, ComponentRoute)] = &[
     (MEDIA_PREFIX, ComponentRoute::Media),
     (ECONOMY_PREFIX, ComponentRoute::Economy),
     (PING_PREFIX, ComponentRoute::Ping),
+    (AFK_PREFIX, ComponentRoute::Afk),
 ];
 
 impl ComponentRoute {
@@ -57,6 +60,7 @@ impl ComponentRoute {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalRoute {
     Hub,
+    TempVc,
 }
 
 impl ModalRoute {
@@ -64,6 +68,7 @@ impl ModalRoute {
     pub fn from_custom_id(custom_id: &str) -> Option<Self> {
         match custom_id.split(':').next()? {
             HUB_PREFIX => Some(Self::Hub),
+            TEMPVC_PREFIX => Some(Self::TempVc),
             _ => None,
         }
     }
@@ -89,7 +94,10 @@ pub async fn handle_component(
             lumi_modules::economy::handle_component(ctx, services, component).await
         }
         Some(ComponentRoute::Ping) => {
-            crate::commands::handle_component(ctx, 0, component).await
+            crate::commands::general::handle_component(ctx, services, component).await
+        }
+        Some(ComponentRoute::Afk) => {
+            lumi_modules::afk::handle_component(ctx, services, component).await
         }
         None => Ok(()),
     }
@@ -103,6 +111,7 @@ pub async fn handle_modal(
 ) -> Result<(), Error> {
     match ModalRoute::from_custom_id(&modal.data.custom_id) {
         Some(ModalRoute::Hub) => crate::commands::handle_hub_modal(ctx, services, modal).await,
+        Some(ModalRoute::TempVc) => lumi_modules::tempvc::handle_modal(ctx, services, modal).await,
         None => Ok(()),
     }
 }
@@ -237,7 +246,8 @@ mod tests {
         assert_eq!(ComponentRoute::from_custom_id("tempvc:lock:1"), Some(ComponentRoute::TempVc));
         assert_eq!(ComponentRoute::from_custom_id("media:view:avatar:1"), Some(ComponentRoute::Media));
         assert_eq!(ComponentRoute::from_custom_id("econ:lb:2"), Some(ComponentRoute::Economy));
-        assert_eq!(ComponentRoute::from_custom_id("ping:overview:3"), Some(ComponentRoute::Ping));
+        assert_eq!(ComponentRoute::from_custom_id("ping:p_1:3"), Some(ComponentRoute::Ping));
+        assert_eq!(ComponentRoute::from_custom_id("afk:mentions:1:0"), Some(ComponentRoute::Afk));
         assert_eq!(ComponentRoute::from_custom_id("nope:1"), None);
         assert_eq!(ComponentRoute::from_custom_id(""), None);
         // Multi-byte prefix must not hit a byte slice.

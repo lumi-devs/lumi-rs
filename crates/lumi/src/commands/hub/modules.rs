@@ -17,8 +17,10 @@ use lumi_ui::{cut_text, format_page_footer, Card, CardKind, CardOptions, CardRep
 
 use super::{cid, tab_row, GuildCtx, HubId, HubOutcome, HubView};
 
-const FEATURES_PER_PAGE: usize = 8;
-const FIELDS_PER_PAGE: usize = 8;
+/// Mirrors lumi's `FeaturesPerPage` / `FieldsPerPage`: a V2 container rejects
+/// more than 40 components in total, and every row costs a section plus a button.
+const FEATURES_PER_PAGE: usize = 4;
+const FIELDS_PER_PAGE: usize = 5;
 const MAX_SELECT_OPTIONS: usize = 25;
 const MAX_MULTI_VALUES: u8 = 25;
 /// Custom-id prefix of the field-edit modal (`lumi:cfgmodal:<module>:<key>:<section>`).
@@ -55,21 +57,6 @@ pub async fn list_card(
     }
 
     let mut action_rows: Vec<CreateActionRow<'static>> = Vec::new();
-    let toggles: Vec<CreateButton<'static>> = page_rows
-        .iter()
-        .map(|row| {
-            CreateButton::new(cid(&["cfg", "toggle", row.name.as_str()]))
-                .label(cut_text(&row.display_name, 80))
-                .style(if row.enabled {
-                    ButtonStyle::Success
-                } else {
-                    ButtonStyle::Secondary
-                })
-        })
-        .collect();
-    for chunk in toggles.chunks(5) {
-        action_rows.push(action_row_of(chunk.to_vec()));
-    }
     if let Some(pagination) =
         pagination_row(&cid(&["cfg", "list"]), safe_page, total_pages)
     {

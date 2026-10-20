@@ -90,8 +90,31 @@ fn http_client() -> Option<&'static reqwest::Client> {
         .as_ref()
 }
 
+/// Rewrite a Discord CDN image URL to its PNG raster.
+///
+/// Serenity hands out WEBP (or GIF) avatar URLs while the data URI built below
+/// declares `image/png`; that mismatch made resvg drop the image, so rank cards
+/// rendered no avatar at all. Discord serves a static PNG for any avatar hash.
+fn png_url(url: &str) -> String {
+    let (path, query) = url
+        .split_once('?')
+        .map_or((url, ""), |(path, query)| (path, query));
+    let stem = path
+        .strip_suffix(".webp")
+        .or_else(|| path.strip_suffix(".gif"))
+        .or_else(|| path.strip_suffix(".jpg"))
+        .or_else(|| path.strip_suffix(".jpeg"))
+        .or_else(|| path.strip_suffix(".png"))
+        .unwrap_or(path);
+    if query.is_empty() {
+        format!("{stem}.png")
+    } else {
+        format!("{stem}.png?{query}")
+    }
+}
+
 pub async fn fetch_avatar_base64(url: Option<&str>) -> Option<String> {
-    let url = url?;
+    let url = png_url(url?);
     let bytes = http_client()?.get(url).send().await.ok()?.bytes().await.ok()?;
     Some(format!("data:image/png;base64,{}", BASE64.encode(&bytes)))
 }
@@ -253,6 +276,53 @@ mod tests {
             panic!("render should succeed");
         };
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
+    }
+
+    #[test]
+    fn avatar_url_is_forced_to_png() {
+        assert_eq!(
+            png_url("https://cdn.discordapp.com/avatars/1/abc.webp?size=1024"),
+            "https://cdn.discordapp.com/avatars/1/abc.png?size=1024"
+        );
+        assert_eq!(
+            png_url("https://cdn.discordapp.com/avatars/1/a_abc.gif"),
+            "https://cdn.discordapp.com/avatars/1/a_abc.png"
+        );
+        assert_eq!(
+            png_url("https://cdn.discordapp.com/embed/avatars/0.png"),
+            "https://cdn.discordapp.com/embed/avatars/0.png"
+        );
+    }
+
+    #[test]
+    fn avatar_image_is_clipped_to_a_circle() {
+        use resvg::tiny_skia::{Color, Pixmap};
+        let Some(mut source) = Pixmap::new(150, 150) else {
+            panic!("pixmap");
+        };
+        source.fill(Color::from_rgba8(255, 0, 0, 255));
+        let Some(png) = source.encode_png().ok() else {
+            panic!("encode");
+        };
+        let avatar = format!(
+            r##"<clipPath id="avatar-clip"><circle cx="130" cy="150" r="75"/></clipPath>
+               <image href="data:image/png;base64,{}" x="55" y="75" width="150" height="150" clip-path="url(#avatar-clip)"/>"##,
+            BASE64.encode(png)
+        );
+        let svg = format!(
+            r##"<svg width="300" height="300" xmlns="http://www.w3.org/2000/svg">{avatar}</svg>"##
+        );
+        let Ok(rendered) = svg_to_png(&svg).and_then(|png| {
+            Pixmap::decode_png(&png).map_err(|err| anyhow::anyhow!("{err}"))
+        }) else {
+            panic!("render");
+        };
+        let (Some(corner), Some(center)) = (rendered.pixel(60, 80), rendered.pixel(130, 150))
+        else {
+            panic!("pixels");
+        };
+        assert_eq!(corner.alpha(), 0, "corner clipped away");
+        assert_eq!(center.alpha(), 255, "center painted");
     }
 
     #[test]

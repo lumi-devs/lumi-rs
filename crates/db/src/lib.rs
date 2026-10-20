@@ -7,8 +7,9 @@ use std::collections::HashMap;
 use sea_orm::entity::prelude::{ChronoUtc, DateTimeWithTimeZone};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseBackend as DbBackend,
+    DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QueryResult,
+    QuerySelect, Set, Statement, TransactionTrait,
 };
 use sea_orm_migration::MigratorTrait;
 
@@ -139,6 +140,40 @@ pub async fn count_enabled_modules(db: &DatabaseConnection, guild_id: u64) -> Re
         .filter(entities::guild_module_state::Column::Enabled.eq(true))
         .count(db)
         .await
+}
+
+/// Server version reported by the connected PostgreSQL, e.g. `18.6`.
+pub async fn server_version(db: &DatabaseConnection) -> Result<String> {
+    let row = db
+        .query_one_raw(Statement::from_string(
+            DbBackend::Postgres,
+            "SHOW server_version".to_owned(),
+        ))
+        .await?;
+    Ok(row
+        .and_then(|row| row.try_get::<String>("", "server_version").ok())
+        .unwrap_or_else(|| "unknown".to_string()))
+}
+
+/// Lifetime commit total of the connected database, for the dashboard's
+/// transaction rate.
+pub async fn committed_transactions(db: &DatabaseConnection) -> Result<u64> {
+    let row = db
+        .query_one_raw(Statement::from_string(
+            DbBackend::Postgres,
+            "SELECT xact_commit AS commits FROM pg_stat_database WHERE datname = current_database()"
+                .to_owned(),
+        ))
+        .await?;
+    Ok(row.as_ref().map_or(0, |row| counter(row, "commits")))
+}
+
+/// Read a non-negative `bigint` column, treating anything unexpected as zero.
+fn counter(row: &QueryResult, column: &str) -> u64 {
+    row.try_get::<i64>("", column)
+        .ok()
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(0)
 }
 
 /// A guild's permits ordered by their display position.

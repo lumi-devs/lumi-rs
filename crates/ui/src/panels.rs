@@ -2,7 +2,7 @@
 //! Ported from lumi's `src/lib/ui/Panels.ts`.
 
 use serenity::all::{
-    ButtonStyle, CreateActionRow, CreateButton, CreateSelectMenu, CreateSelectMenuKind,
+    ButtonStyle, ChannelType, CreateActionRow, CreateButton, CreateSelectMenu, CreateSelectMenuKind,
     CreateSelectMenuOption, CreateSection, CreateSectionAccessory, CreateSectionComponent,
     CreateTextDisplay, ReactionType,
 };
@@ -75,15 +75,55 @@ pub fn string_select(
     placeholder: impl Into<String>,
     options: Vec<(String, String)>,
 ) -> CreateActionRow<'static> {
+    string_select_options(
+        custom_id,
+        placeholder,
+        options
+            .into_iter()
+            .map(|(label, value)| (label, value, None))
+            .collect(),
+    )
+}
+
+/// A string-select action row with an optional emoji on each option.
+pub fn string_select_options(
+    custom_id: impl Into<String>,
+    placeholder: impl Into<String>,
+    options: Vec<(String, String, Option<&str>)>,
+) -> CreateActionRow<'static> {
     let opts = options
         .into_iter()
-        .map(|(label, value)| CreateSelectMenuOption::new(label, value))
+        .map(|(label, value, emoji)| {
+            let mut option = CreateSelectMenuOption::new(label, value);
+            if let Some(emoji) = emoji.and_then(component_emoji) {
+                option = option.emoji(emoji);
+            }
+            option
+        })
         .collect::<Vec<_>>();
     CreateActionRow::SelectMenu(
         CreateSelectMenu::new(
             custom_id.into(),
             CreateSelectMenuKind::String {
                 options: opts.into(),
+            },
+        )
+        .placeholder(placeholder.into()),
+    )
+}
+
+/// A channel-select action row restricted to `types`.
+pub fn channel_select_of_types(
+    custom_id: impl Into<String>,
+    placeholder: impl Into<String>,
+    types: Vec<ChannelType>,
+) -> CreateActionRow<'static> {
+    CreateActionRow::SelectMenu(
+        CreateSelectMenu::new(
+            custom_id.into(),
+            CreateSelectMenuKind::Channel {
+                channel_types: Some(types.into()),
+                default_channels: None,
             },
         )
         .placeholder(placeholder.into()),

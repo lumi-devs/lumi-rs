@@ -1,4 +1,10 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use poise::serenity_prelude as serenity;
+
+/// Global commands were stale once we moved to guild-only sync; clearing them
+/// costs a REST call, so do it at most once per process boot, from one shard.
+static GLOBAL_COMMANDS_CLEARED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug)]
 pub struct Events;
@@ -9,17 +15,13 @@ impl serenity::EventHandler for Events {
         match event {
             serenity::FullEvent::Ready { data_about_bot, .. } => {
                 tracing::info!(user = %data_about_bot.user.name, "ready");
-                let services = ctx.data::<lumi_kernel::bot::Data>();
-                let commands = crate::commands::all_from_registry(&services.registry);
-                tracing::info!("syncing {} slash commands globally", commands.len());
-                if let Err(e) = poise::builtins::register_globally(&ctx.http, &commands).await {
-                    tracing::error!(error = %e, "failed to sync global slash commands");
-                } else {
-                    tracing::info!("slash commands synced successfully");
-                }
-                for guild in &data_about_bot.guilds {
-                    if let Err(e) = poise::builtins::register_in_guild(&ctx.http, &commands, guild.id).await {
-                        tracing::warn!(guild_id = %guild.id, error = %e, "failed to sync guild slash commands");
+                // Slash commands are synced guild-only in `GuildCreate` (instant
+                // propagation, no duplicates); drop any leftover global set.
+                if !GLOBAL_COMMANDS_CLEARED.swap(true, Ordering::AcqRel) {
+                    // PUT with an empty list deletes the global commands.
+                    if let Err(error) = ctx.http.create_global_commands(&Vec::<serenity::CreateCommand>::new()).await {
+                        GLOBAL_COMMANDS_CLEARED.store(false, Ordering::Release);
+                        tracing::error!(%error, "failed to clear global slash commands");
                     }
                 }
             }

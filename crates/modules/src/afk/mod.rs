@@ -2,12 +2,14 @@
 
 mod cards;
 mod commands;
+mod components;
+mod config;
+mod constants;
 mod data;
 mod listeners;
+mod mentions;
 
-pub use cards::{mention_card, welcome_back_card};
-pub use commands::commands;
-pub use data::{clear, count, get, list, set};
+pub use components::{PREFIX, handle_component};
 pub use listeners::on_message;
 
 use serde_json::json;
@@ -38,14 +40,35 @@ impl Module for AfkModule {
     }
 
     fn config_schema(&self) -> Vec<ConfigField> {
-        vec![ConfigField {
-            key: "nick_prefix_enabled".to_string(),
-            label: "Nickname Prefix".to_string(),
-            description: "Prepend [AFK] to nickname while AFK.".to_string(),
-            kind: ConfigFieldKind::Boolean,
-            default: json!(true),
-            subfields: Vec::new(),
-            group: None,
-        }]
+        vec![
+            ConfigField {
+                key: "nick_prefix_enabled".to_string(),
+                label: "Nickname Prefix".to_string(),
+                description: "Prepend [AFK] to nickname while AFK.".to_string(),
+                kind: ConfigFieldKind::Boolean,
+                default: json!(true),
+                subfields: Vec::new(),
+                group: None,
+            },
+            ConfigField {
+                key: "welcome_back_enabled".to_string(),
+                label: "Welcome Back Card".to_string(),
+                description: "Post a card when an AFK member returns.".to_string(),
+                kind: ConfigFieldKind::Boolean,
+                default: json!(true),
+                subfields: Vec::new(),
+                group: None,
+            },
+            ConfigField {
+                key: "welcome_ttl_seconds".to_string(),
+                label: "Welcome Card Lifetime".to_string(),
+                description: "Seconds before the welcome card and its mention list are removed."
+                    .to_string(),
+                kind: ConfigFieldKind::Integer,
+                default: json!(20),
+                subfields: Vec::new(),
+                group: None,
+            },
+        ]
     }
 }
