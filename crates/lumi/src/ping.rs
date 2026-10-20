@@ -6,19 +6,18 @@
 //! shard serving nothing reads zero instead of repeating the global count.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use poise::serenity_prelude as serenity;
-use serenity::all::{Context as SerenityContext, MessageFlags};
+use serenity::all::Context as SerenityContext;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 use lumi_kernel::Services;
-use lumi_ui::ping::{PingData, ShardInfo, ShardStatus, build_overview_card};
+use lumi_ui::ping::{PingData, ShardInfo, ShardStatus};
 
-/// How long a rendered dashboard keeps refreshing itself, and how often.
-const LIVE_WINDOW: Duration = Duration::from_secs(60);
-const LIVE_INTERVAL: Duration = Duration::from_secs(10);
+/// A burst of invocations and page turns shares one collection.
+const SNAPSHOT_TTL: Duration = Duration::from_secs(5);
 
 /// Linux reports process CPU time in `USER_HZ` ticks, which the kernel defines
 /// as 100 per second on every architecture.
@@ -41,53 +40,11 @@ pub fn track_shards(source: impl Fn() -> ShardSnapshot + Send + Sync + 'static) 
     let _ = SHARDS.set(Arc::new(source));
 }
 
-/// The dashboard page each viewer is on, forgotten when their message dies.
-static PAGES: OnceLock<Mutex<HashMap<u64, usize>>> = OnceLock::new();
+/// The last collected snapshot, shared by every dashboard viewer.
+static SNAPSHOT: OnceLock<tokio::sync::Mutex<Option<(Instant, Arc<PingData>)>>> = OnceLock::new();
 
-fn pages() -> &'static Mutex<HashMap<u64, usize>> {
-    PAGES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// The page a viewer is looking at.
-#[must_use]
-pub fn page_of(user_id: u64) -> usize {
-    pages()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(&user_id)
-        .copied()
-        .unwrap_or(0)
-}
-
-/// Render the first page and remember it as this viewer's current one.
-pub fn reset_page(user_id: u64) {
-    pages()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(user_id, 0);
-}
-
-/// Step a viewer's page by `delta`, clamped to the pages that exist.
-pub fn move_page(user_id: u64, delta: i64, total_pages: usize) -> usize {
-    let mut pages = pages().lock().unwrap_or_else(PoisonError::into_inner);
-    let current = pages.get(&user_id).copied().unwrap_or(0);
-    let step = usize::try_from(delta.unsigned_abs()).unwrap_or(0);
-    let next = if delta.is_negative() {
-        current.saturating_sub(step)
-    } else {
-        current.saturating_add(step)
-    }
-    .min(total_pages.saturating_sub(1));
-    pages.insert(user_id, next);
-    next
-}
-
-/// Forget a viewer's page once their dashboard is gone.
-pub fn forget_page(user_id: u64) {
-    pages()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .remove(&user_id);
+fn snapshot() -> &'static tokio::sync::Mutex<Option<(Instant, Arc<PingData>)>> {
+    SNAPSHOT.get_or_init(|| tokio::sync::Mutex::new(None))
 }
 
 /// This process's memory, runtime and CPU figures.
@@ -157,8 +114,22 @@ fn shard_infos(ctx: &SerenityContext) -> (Vec<ShardInfo>, u64) {
     )
 }
 
-/// Collect a best-effort snapshot of the bot, its backends and the host.
+/// Collect a snapshot, reusing a less-than-five-second-old one.
 pub async fn collect(services: &Services, ctx: &SerenityContext) -> PingData {
+    let mut memo = snapshot().lock().await;
+    if let Some((taken, data)) = memo.as_ref()
+        && taken.elapsed() < SNAPSHOT_TTL
+    {
+        return data.as_ref().clone();
+    }
+
+    let data = Arc::new(collect_fresh(services, ctx).await);
+    *memo = Some((Instant::now(), Arc::clone(&data)));
+    data.as_ref().clone()
+}
+
+/// Collect a best-effort snapshot of the bot, its backends and the host.
+async fn collect_fresh(services: &Services, ctx: &SerenityContext) -> PingData {
     let process_before = tokio::task::spawn_blocking(process_snapshot)
         .await
         .unwrap_or_default();
@@ -239,37 +210,6 @@ pub async fn collect(services: &Services, ctx: &SerenityContext) -> PingData {
     }
 }
 
-/// Keep a rendered dashboard refreshing itself for a minute, the way lumi's
-/// `Ping.ts` does, stopping as soon as the message is gone.
-pub fn spawn_live_updates(
-    services: Arc<Services>,
-    gateway: SerenityContext,
-    token: String,
-    user_id: u64,
-) {
-    tokio::spawn(async move {
-        let deadline = Instant::now() + LIVE_WINDOW;
-        while Instant::now() < deadline {
-            tokio::time::sleep(LIVE_INTERVAL).await;
-            let data = collect(&services, &gateway).await;
-            let card = build_overview_card(&data, user_id, page_of(user_id), crate::interactions::PING_PREFIX);
-            let edit = serenity::EditMessage::new()
-                .components(card.components)
-                .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
-                .allowed_mentions(serenity::CreateAllowedMentions::new());
-            if let Err(e) = gateway
-                .http
-                .edit_original_interaction_response(&token, &edit, Vec::new())
-                .await
-            {
-                tracing::debug!(error = %e, user_id, "ping dashboard refresh stopped");
-                forget_page(user_id);
-                break;
-            }
-        }
-    });
-}
-
 /// The gateway's reported round-trip latency in milliseconds, `-1` when unknown.
 fn ws_ping(ctx: &SerenityContext) -> f64 {
     ctx.runner_info
@@ -290,15 +230,5 @@ mod tests {
             snapshot.ram_total > snapshot.rss,
             "host memory must be refreshed, not left at zero"
         );
-    }
-
-    #[test]
-    fn pages_move_within_bounds() {
-        assert_eq!(move_page(1, -1, 3), 0);
-        assert_eq!(move_page(1, 1, 3), 1);
-        assert_eq!(move_page(1, 5, 3), 2);
-        assert_eq!(page_of(1), 2);
-        forget_page(1);
-        assert_eq!(page_of(1), 0);
     }
 }
