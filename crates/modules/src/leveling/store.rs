@@ -171,6 +171,14 @@ pub async fn award_xp(
     amount: i64,
     cooldown_seconds: i64,
 ) -> Result<Option<(level_account::Model, i32)>> {
+    // Cheap uncontended check; the locked check inside the transaction stays
+    // authoritative for concurrent awards.
+    if let Some(account) = get_account(db, guild_id, user_id).await? {
+        if is_on_cooldown(account.last_xp_at, cooldown_seconds) {
+            return Ok(None);
+        }
+    }
+
     let txn = db.begin().await?;
     let account = locked_account(&txn, guild_id, user_id).await?;
 

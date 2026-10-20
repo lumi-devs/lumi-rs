@@ -72,7 +72,7 @@ pub async fn rank(
         return Ok(());
     };
 
-    let rank = store::get_user_rank(&ctx.data().db, guild_id.get(), target_id).await?;
+    let rank = store::get_user_rank(ctx.data().reader(), guild_id.get(), target_id).await?;
     let next_xp = store::xp_for_level(acc.level);
 
     let png_res = images::render_rank_card(images::RankCardData {
@@ -122,7 +122,7 @@ pub async fn rank(
 pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = require_guild(ctx)?;
-    let entries = store::get_leaderboard(&ctx.data().db, guild_id.get(), 10, 0).await?;
+    let entries = store::get_leaderboard(ctx.data().reader(), guild_id.get(), 10, 0).await?;
 
     if entries.is_empty() {
         ctx.send(views::leaderboard_card(&entries).reply()).await?;

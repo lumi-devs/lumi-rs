@@ -16,6 +16,7 @@ use crate::Result;
 pub struct Services {
     pub cfg: Config,
     pub db: DatabaseConnection,
+    pub db_read: DatabaseConnection,
     pub cache: Arc<Cache>,
     pub permits: Arc<PermitResolver>,
     pub registry: ModuleRegistry,
@@ -24,6 +25,12 @@ pub struct Services {
 }
 
 impl Services {
+    /// The connection lag-tolerant, absolute-only reads should use.
+    #[must_use]
+    pub fn reader(&self) -> &DatabaseConnection {
+        &self.db_read
+    }
+
     /// Build every shared runtime service from `cfg`, one place to wire the
     /// infrastructure instead of repeating it in each binary entry point.
     ///
@@ -33,6 +40,10 @@ impl Services {
     /// listener is spawned here.
     pub async fn bootstrap(cfg: Config, registry: ModuleRegistry) -> Result<Arc<Self>> {
         let db = lumi_db::connect(&cfg.database_url).await?;
+        let db_read = match std::env::var("DATABASE_READ_URL") {
+            Ok(url) if !url.trim().is_empty() => lumi_db::connect_read(&url).await?,
+            _ => db.clone(),
+        };
         let cache = Arc::new(Cache::connect(&cfg.redis_url).await?);
         let permits = Arc::new(PermitResolver::load(&db).await?);
         let security = Arc::new(SecurityManager::new(db.clone()));
@@ -44,6 +55,7 @@ impl Services {
         Ok(Arc::new(Self {
             cfg,
             db,
+            db_read,
             cache,
             permits,
             registry,
