@@ -124,7 +124,9 @@ impl SingleFlight {
             match rx.recv().await {
                 Ok(Ok(val)) => Ok(val),
                 Ok(Err(err)) => Err(crate::LumiError::Cache(err)),
-                Err(_) => Err(crate::LumiError::Cache("singleflight sender dropped".into())),
+                Err(_) => Err(crate::LumiError::Cache(
+                    "singleflight sender dropped".into(),
+                )),
             }
         }
     }
@@ -357,12 +359,7 @@ impl Cache {
     }
 
     /// Alias for [`Cache::get_or_fetch_json`].
-    pub async fn get_or_fetch<F, Fut>(
-        &self,
-        key: &str,
-        ttl: Duration,
-        fetcher: F,
-    ) -> Result<Value>
+    pub async fn get_or_fetch<F, Fut>(&self, key: &str, ttl: Duration, fetcher: F) -> Result<Value>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<Value>>,
@@ -597,6 +594,9 @@ mod tests {
         let final_attempts = *attempt
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        assert_eq!(final_attempts, 1, "fetcher should run exactly once even on error");
+        assert_eq!(
+            final_attempts, 1,
+            "fetcher should run exactly once even on error"
+        );
     }
 }

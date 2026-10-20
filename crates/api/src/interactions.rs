@@ -5,7 +5,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::{Json, Router};
-use ring::signature::{UnparsedPublicKey, ED25519};
+use ring::signature::{ED25519, UnparsedPublicKey};
 use serde_json::{Value, json};
 
 use lumi_kernel::Config;
@@ -50,7 +50,10 @@ async fn handle_interaction_inner(
 
     let payload: Value = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let interaction_type = payload.get("type").and_then(Value::as_u64).ok_or(StatusCode::BAD_REQUEST)?;
+    let interaction_type = payload
+        .get("type")
+        .and_then(Value::as_u64)
+        .ok_or(StatusCode::BAD_REQUEST)?;
 
     match interaction_type {
         1 => {
@@ -93,7 +96,9 @@ pub fn router(config: &Config) -> Router {
 
     let state = InteractionState { public_key };
 
-    Router::new().route("/api/interactions", axum::routing::post(handle_interaction)).with_state(state)
+    Router::new()
+        .route("/api/interactions", axum::routing::post(handle_interaction))
+        .with_state(state)
 }
 
 #[cfg(test)]

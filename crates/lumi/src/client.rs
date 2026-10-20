@@ -182,8 +182,8 @@ pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
         ..Default::default()
     });
 
-    let mut intents = serenity::GatewayIntents::non_privileged()
-        | serenity::GatewayIntents::MESSAGE_CONTENT;
+    let mut intents =
+        serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
     if services.cfg.intents_guild_members {
         intents |= serenity::GatewayIntents::GUILD_MEMBERS;
     }

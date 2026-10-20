@@ -15,8 +15,8 @@ use serde_json::{Value, json};
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 
-use lumi_kernel::{Config, Result};
 use lumi_kernel::services::Services;
+use lumi_kernel::{Config, Result};
 
 mod interactions;
 
@@ -61,7 +61,12 @@ pub struct ActionResponse {
 
 /// Serve the RPC surface on `addr`. `token` is the expected bearer token;
 /// `None` leaves `/action` unauthenticated (loopback/dev only).
-pub async fn serve(addr: SocketAddr, token: Option<String>, config: &Config, services: Arc<Services>) -> Result<()> {
+pub async fn serve(
+    addr: SocketAddr,
+    token: Option<String>,
+    config: &Config,
+    services: Arc<Services>,
+) -> Result<()> {
     let state = RpcState { token, services };
 
     let governor_conf = GovernorConfigBuilder::default()

@@ -54,8 +54,9 @@ impl MigrationTrait for Migration {
 
         conn.execute_unprepared(
             "CREATE INDEX IF NOT EXISTS idx_level_accounts_part_guild_xp
-             ON level_accounts (guild_id, xp DESC) WHERE level_accounts IS NOT NULL;"
-        ).await?;
+             ON level_accounts (guild_id, xp DESC) WHERE level_accounts IS NOT NULL;",
+        )
+        .await?;
 
         conn.execute_unprepared(
             "CREATE INDEX IF NOT EXISTS idx_economy_accounts_part_guild_net
