@@ -154,7 +154,10 @@ pub async fn set_prefix(db: &DatabaseConnection, guild_id: u64, prefix: &str) ->
 /// Clear a guild's prefix override so it falls back to the global default.
 pub async fn reset_prefix(db: &DatabaseConnection, guild_id: u64) -> Result<()> {
     entities::guild::Entity::update_many()
-        .col_expr(entities::guild::Column::Prefix, Expr::value(Option::<String>::None))
+        .col_expr(
+            entities::guild::Column::Prefix,
+            Expr::value(Option::<String>::None),
+        )
         .col_expr(entities::guild::Column::UpdatedAt, Expr::value(now()))
         .filter(entities::guild::Column::Id.eq(GuildId::from(guild_id)))
         .exec(db)

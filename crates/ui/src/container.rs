@@ -1,10 +1,10 @@
 use serenity::all::{
-    CreateActionRow, CreateContainer, CreateContainerComponent, CreateMediaGallery,
-    CreateSection, CreateSectionAccessory, CreateSectionComponent, CreateSeparator,
-    CreateTextDisplay, CreateThumbnail, CreateUnfurledMediaItem, SeparatorSpacingSize,
+    CreateActionRow, CreateContainer, CreateContainerComponent, CreateMediaGallery, CreateSection,
+    CreateSectionAccessory, CreateSectionComponent, CreateSeparator, CreateTextDisplay,
+    CreateThumbnail, CreateUnfurledMediaItem, SeparatorSpacingSize,
 };
 
-use crate::panels::{clamp_action_row, MAX_ACTION_ROWS};
+use crate::panels::{MAX_ACTION_ROWS, clamp_action_row};
 
 /// Thin composition helper over `CreateContainer`, mirroring lumi's `ContainerBuilder`.
 #[derive(Clone, Debug)]

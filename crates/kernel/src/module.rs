@@ -72,11 +72,7 @@ pub trait Module: Send + Sync + 'static {
     ///
     /// A boxed future keeps the trait object-safe without an `async-trait`
     /// dependency, and `&self` borrows let the dispatcher loop the registry.
-    fn on_event<'a>(
-        &'a self,
-        _ctx: &'a Context,
-        _event: &'a FullEvent,
-    ) -> BoxFuture<'a, ()> {
+    fn on_event<'a>(&'a self, _ctx: &'a Context, _event: &'a FullEvent) -> BoxFuture<'a, ()> {
         Box::pin(async {})
     }
 }

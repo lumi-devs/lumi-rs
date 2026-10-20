@@ -1,13 +1,13 @@
 use poise::serenity_prelude as serenity;
 use serenity::all::{
-    EditMember, EditRole, GenericChannelId, Guild, GuildId, Member, PartialGuild, Permissions, Role,
-    RoleId, Timestamp, UserId,
+    EditMember, EditRole, GenericChannelId, Guild, GuildId, Member, PartialGuild, Permissions,
+    Role, RoleId, Timestamp, UserId,
 };
 use serenity::model::guild::audit_log as audit;
 
+use lumi_kernel::Services;
 use lumi_kernel::bot::Error;
 use lumi_kernel::security::{ActionThresholdViolation, AntiNukeResponse, DestructiveActionKind};
-use lumi_kernel::Services;
 use lumi_ui::{Card, CardKind};
 
 use super::store;
@@ -129,7 +129,9 @@ pub async fn on_member_update(
         return Ok(());
     }
     let guild_id = new.guild_id;
-    let Some(role) = crate::moderation::store::quarantine_role(&services.db, guild_id.get()).await? else {
+    let Some(role) =
+        crate::moderation::store::quarantine_role(&services.db, guild_id.get()).await?
+    else {
         return Ok(());
     };
 
@@ -208,7 +210,10 @@ async fn evaluate(
         count = violation.count,
         "anti-nuke threshold tripped"
     );
-    respond(ctx, services, guild_id, executor, kind, violation, &settings).await
+    respond(
+        ctx, services, guild_id, executor, kind, violation, &settings,
+    )
+    .await
 }
 
 /// The guild owner, the bot itself and trusted roles are never acted on.
@@ -230,10 +235,12 @@ fn is_exempt(
     if trusted_roles.is_empty() {
         return false;
     }
-    guild
-        .members
-        .get(&executor)
-        .is_some_and(|member| member.roles.iter().any(|role| trusted_roles.contains(&role.get())))
+    guild.members.get(&executor).is_some_and(|member| {
+        member
+            .roles
+            .iter()
+            .any(|role| trusted_roles.contains(&role.get()))
+    })
 }
 
 /// Execute the configured response, record an alert case and post the log card.
@@ -256,7 +263,9 @@ async fn respond(
     match violation.response {
         AntiNukeResponse::Log => {}
         AntiNukeResponse::Quarantine => {
-            if let Some(role) = crate::moderation::store::quarantine_role(&services.db, guild_id.get()).await? {
+            if let Some(role) =
+                crate::moderation::store::quarantine_role(&services.db, guild_id.get()).await?
+            {
                 if let Err(error) = guild_id
                     .add_member_role(&ctx.http, executor, RoleId::new(role), Some(&reason))
                     .await
@@ -273,14 +282,23 @@ async fn respond(
     }
 
     let bot_id = ctx.cache.current_user().id.get();
-    if let Err(error) =
-        store::create_alert_case(&services.db, guild_id.get(), executor.get(), bot_id, &reason).await
+    if let Err(error) = store::create_alert_case(
+        &services.db,
+        guild_id.get(),
+        executor.get(),
+        bot_id,
+        &reason,
+    )
+    .await
     {
         tracing::warn!(%error, "failed to record anti-nuke alert case");
     }
 
     let Some(channel) = settings.log_channel else {
-        tracing::warn!(guild_id = guild_id.get(), "anti-nuke alert with no log channel configured");
+        tracing::warn!(
+            guild_id = guild_id.get(),
+            "anti-nuke alert with no log channel configured"
+        );
         return Ok(());
     };
     let response_label = match violation.response {

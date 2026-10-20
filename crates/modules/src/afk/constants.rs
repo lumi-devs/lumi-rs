@@ -28,22 +28,33 @@ pub const DEFAULT_WELCOME_TTL_SECS: u64 = 20;
 /// Lifetime of an "is AFK" notice.
 pub const NOTICE_TTL: Duration = Duration::from_secs(600);
 
-pub fn mention_cooldown_key(channel_id: u64) -> String {
-    format!("lumi:afk:cd:mention:{channel_id}")
+/// How long a non-empty guild AFK map stays cached.
+pub const GUILD_MAP_TTL: Duration = Duration::from_secs(600);
+/// How long "nobody is AFK" stays cached before the next check.
+pub const GUILD_MAP_EMPTY_TTL: Duration = Duration::from_secs(60);
+/// How long the three AFK config values stay cached.
+pub const CONFIG_CACHE_TTL: Duration = Duration::from_secs(60);
+
+pub fn guild_map_key(guild_id: u64) -> String {
+    format!("lumi:afk:guild:{guild_id}")
 }
 
-pub fn welcome_cooldown_key(channel_id: u64, user_id: u64) -> String {
-    format!("lumi:afk:cd:welcome:{channel_id}:{user_id}")
-}
-
-pub fn removal_cooldown_key(guild_id: u64, user_id: u64) -> String {
-    format!("lumi:afk:cd:removal:{guild_id}:{user_id}")
-}
-
-pub fn nick_cooldown_key(user_id: u64) -> String {
-    format!("lumi:afk:cd:nick:{user_id}")
+pub fn config_key(guild_id: u64) -> String {
+    format!("lumi:afk:cfg:{guild_id}")
 }
 
 pub fn mentions_key(guild_id: u64, user_id: u64) -> String {
     format!("lumi:afk:mentions:{guild_id}:{user_id}")
+}
+
+pub fn welcome_claim_key(channel_id: u64, user_id: u64) -> String {
+    format!("afk:welcome:{channel_id}:{user_id}")
+}
+
+pub fn nick_claim_key(user_id: u64) -> String {
+    format!("afk:nick:{user_id}")
+}
+
+pub fn notice_claim_key(channel_id: u64) -> String {
+    format!("afk:notice:{channel_id}")
 }

@@ -96,8 +96,11 @@ pub async fn pay(
     let recipient_id = user.get();
 
     if amount <= 0 {
-        let card = Card::new("❌ Invalid Amount", "Payment amount must be greater than zero.")
-            .kind(CardKind::Error);
+        let card = Card::new(
+            "❌ Invalid Amount",
+            "Payment amount must be greater than zero.",
+        )
+        .kind(CardKind::Error);
         ctx.send(card.into_reply().reply()).await?;
         return Ok(());
     }
@@ -110,8 +113,15 @@ pub async fn pay(
     }
 
     let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
-    let result =
-        store::transfer(&ctx.data().db, guild_id, sender_id, recipient_id, amount, &cfg).await?;
+    let result = store::transfer(
+        &ctx.data().db,
+        guild_id,
+        sender_id,
+        recipient_id,
+        amount,
+        &cfg,
+    )
+    .await?;
 
     match result {
         Some(remaining) => {
@@ -173,8 +183,11 @@ pub async fn deposit_cmd(
     let user_id = ctx.author().id.get();
 
     if amount <= 0 {
-        let card = Card::new("❌ Invalid Amount", "Deposit amount must be greater than zero.")
-            .kind(CardKind::Error);
+        let card = Card::new(
+            "❌ Invalid Amount",
+            "Deposit amount must be greater than zero.",
+        )
+        .kind(CardKind::Error);
         ctx.send(card.into_reply().reply()).await?;
         return Ok(());
     }
@@ -289,8 +302,11 @@ async fn admin_adjust(
     }
 
     let Some(vault) = Vault::parse(vault.as_deref()) else {
-        let card = Card::new("❌ Invalid Vault", "Vault must be either `wallet` or `bank`.")
-            .kind(CardKind::Error);
+        let card = Card::new(
+            "❌ Invalid Vault",
+            "Vault must be either `wallet` or `bank`.",
+        )
+        .kind(CardKind::Error);
         ctx.send(card.into_reply().reply()).await?;
         return Ok(());
     };
@@ -328,7 +344,10 @@ async fn admin_adjust(
                 vault.label()
             ),
             format!("Reason: {reason}"),
-            format!("**New total**: **{}**", cfg.format_amount(balance.net_worth)),
+            format!(
+                "**New total**: **{}**",
+                cfg.format_amount(balance.net_worth)
+            ),
         ],
     )
     .kind(CardKind::Success);
@@ -418,8 +437,12 @@ pub async fn slots(
     }
 
     let key = cooldown_key("econ:slots", guild_id, user_id);
-    if let Some(remaining) =
-        claim_cooldown(&ctx.data().cache, &key, cfg.cooldown_ms(cfg.slot_cooldown_seconds)).await?
+    if let Some(remaining) = claim_cooldown(
+        &ctx.data().cache,
+        &key,
+        cfg.cooldown_ms(cfg.slot_cooldown_seconds),
+    )
+    .await?
     {
         let card = Card::new(
             "⏳ Slow Down",
@@ -518,7 +541,8 @@ pub async fn handle_component(
         .map_or_else(|| "this server".to_string(), |g| g.name.to_string());
     let caller_id = interaction.user.id.get();
 
-    let reply = leaderboard_reply(services.reader(), guild_id.get(), &guild_name, page, caller_id).await?;
+    let reply =
+        leaderboard_reply(services.reader(), guild_id.get(), &guild_name, page, caller_id).await?;
     interaction
         .create_response(
             &ctx.http,

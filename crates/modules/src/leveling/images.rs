@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use resvg::tiny_skia::{Pixmap, Transform};
-use resvg::usvg::{fontdb, Options, Tree};
+use resvg::usvg::{Options, Tree, fontdb};
 
 #[derive(Debug)]
 pub struct RankCardData<'a> {
@@ -115,7 +115,14 @@ fn png_url(url: &str) -> String {
 
 pub async fn fetch_avatar_base64(url: Option<&str>) -> Option<String> {
     let url = png_url(url?);
-    let bytes = http_client()?.get(url).send().await.ok()?.bytes().await.ok()?;
+    let bytes = http_client()?
+        .get(url)
+        .send()
+        .await
+        .ok()?
+        .bytes()
+        .await
+        .ok()?;
     Some(format!("data:image/png;base64,{}", BASE64.encode(&bytes)))
 }
 
@@ -128,7 +135,9 @@ pub async fn render_rank_card(data: RankCardData<'_>) -> Result<Vec<u8>, anyhow:
         1.0
     };
     let bar_width = 560;
-    let fill_width = (bar_width as f64 * progress).round().clamp(0.0, f64::from(bar_width)) as u32;
+    let fill_width = (bar_width as f64 * progress)
+        .round()
+        .clamp(0.0, f64::from(bar_width)) as u32;
 
     let clean_name = if data.username.chars().count() > 22 {
         let truncated: String = data.username.chars().take(21).collect();
@@ -153,7 +162,9 @@ pub async fn render_rank_card(data: RankCardData<'_>) -> Result<Vec<u8>, anyhow:
         )
     };
 
-    let rank_str = data.rank.map_or_else(|| "UNRANKED".to_string(), |r| format!("#{r}"));
+    let rank_str = data
+        .rank
+        .map_or_else(|| "UNRANKED".to_string(), |r| format!("#{r}"));
     let voice_str = format_voice(data.voice_minutes);
 
     let svg = format!(
@@ -312,9 +323,9 @@ mod tests {
         let svg = format!(
             r##"<svg width="300" height="300" xmlns="http://www.w3.org/2000/svg">{avatar}</svg>"##
         );
-        let Ok(rendered) = svg_to_png(&svg).and_then(|png| {
-            Pixmap::decode_png(&png).map_err(|err| anyhow::anyhow!("{err}"))
-        }) else {
+        let Ok(rendered) = svg_to_png(&svg)
+            .and_then(|png| Pixmap::decode_png(&png).map_err(|err| anyhow::anyhow!("{err}")))
+        else {
             panic!("render");
         };
         let (Some(corner), Some(center)) = (rendered.pixel(60, 80), rendered.pixel(130, 150))
@@ -343,7 +354,8 @@ mod tests {
                 progress: 0.5,
             },
         ];
-        let Ok(png) = render_leaderboard_card("Leaderboard", "Top members", &rows, "#6366f1") else {
+        let Ok(png) = render_leaderboard_card("Leaderboard", "Top members", &rows, "#6366f1")
+        else {
             panic!("leaderboard render should succeed");
         };
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));

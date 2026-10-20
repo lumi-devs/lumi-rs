@@ -95,9 +95,7 @@ fn render_mention(ctx: &serenity::Context, guild_id: u64, mention: &Mention) -> 
                 .map(|channel| channel.base.name.to_string())
         })
         .unwrap_or_else(|| "deleted channel".to_string());
-    let age = format_seconds(
-        (Utc::now().fixed_offset().timestamp() - mention.ts).max(0),
-    );
+    let age = format_seconds((Utc::now().fixed_offset().timestamp() - mention.ts).max(0));
     let link = MessageId::new(mention.message_id).link(
         GenericChannelId::new(mention.channel_id),
         Some(serenity::GuildId::new(guild_id)),

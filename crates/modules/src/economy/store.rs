@@ -387,9 +387,7 @@ pub async fn play_slots(
     };
     let payout = bid.saturating_mul(multiplier).max(0);
     let after_bid = acc.wallet - bid;
-    let new_wallet = after_bid
-        .saturating_add(payout)
-        .min(cfg.max_balance);
+    let new_wallet = after_bid.saturating_add(payout).min(cfg.max_balance);
 
     let mut active: economy_account::ActiveModel = acc.into();
     active.wallet = Set(new_wallet);

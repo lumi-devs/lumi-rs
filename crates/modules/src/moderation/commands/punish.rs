@@ -158,15 +158,14 @@ pub async fn warn(
     .await?;
 
     let total_warns = store::count_warns(&ctx.data().db, guild_id, user.get()).await?;
-    let escalation = match apply_warn_escalation(ctx, &config, guild_id, user.get(), total_warns)
-        .await
-    {
-        Ok(escalation) => escalation,
-        Err(error) => {
-            tracing::error!(%error, guild_id, user_id = user.get(), "warn escalation failed");
-            Some("Automatic escalation failed; check the logs.".to_string())
-        }
-    };
+    let escalation =
+        match apply_warn_escalation(ctx, &config, guild_id, user.get(), total_warns).await {
+            Ok(escalation) => escalation,
+            Err(error) => {
+                tracing::error!(%error, guild_id, user_id = user.get(), "warn escalation failed");
+                Some("Automatic escalation failed; check the logs.".to_string())
+            }
+        };
 
     actions::notify(
         ctx.http(),
@@ -240,7 +239,10 @@ pub async fn kick(
     if !confirm::confirm(ctx, "moderation", "⚠️ Confirm Kick", &body, "Confirm Kick").await? {
         return send_card(
             ctx,
-            Card::lines("Action Cancelled", vec!["Kick action was cancelled.".to_string()]),
+            Card::lines(
+                "Action Cancelled",
+                vec!["Kick action was cancelled.".to_string()],
+            ),
         )
         .await;
     }
@@ -313,7 +315,10 @@ pub async fn ban(
     if !confirm::confirm(ctx, "moderation", "⚠️ Confirm Ban", &body, "Confirm Ban").await? {
         return send_card(
             ctx,
-            Card::lines("Action Cancelled", vec!["Ban action was cancelled.".to_string()]),
+            Card::lines(
+                "Action Cancelled",
+                vec!["Ban action was cancelled.".to_string()],
+            ),
         )
         .await;
     }
@@ -387,10 +392,8 @@ pub async fn unban(
     )
     .await;
 
-    ctx.send(
-        action_success_card(&CaseAction::Unban, user.get(), case, reason.as_deref()).reply(),
-    )
-    .await?;
+    ctx.send(action_success_card(&CaseAction::Unban, user.get(), case, reason.as_deref()).reply())
+        .await?;
     Ok(())
 }
 
@@ -467,10 +470,8 @@ pub async fn mute(
     )
     .await;
 
-    ctx.send(
-        action_success_card(&CaseAction::Mute, user.get(), case, reason.as_deref()).reply(),
-    )
-    .await?;
+    ctx.send(action_success_card(&CaseAction::Mute, user.get(), case, reason.as_deref()).reply())
+        .await?;
     Ok(())
 }
 
@@ -520,10 +521,8 @@ pub async fn unmute(
     )
     .await;
 
-    ctx.send(
-        action_success_card(&CaseAction::Unmute, user.get(), case, reason.as_deref()).reply(),
-    )
-    .await?;
+    ctx.send(action_success_card(&CaseAction::Unmute, user.get(), case, reason.as_deref()).reply())
+        .await?;
     Ok(())
 }
 
@@ -538,7 +537,10 @@ pub async fn unmute(
 pub async fn softban(
     ctx: Context<'_>,
     #[description = "The target user"] target: UserId,
-    #[description = "Days of messages to delete (1-7)"] #[min = 1] #[max = 7] days: Option<u8>,
+    #[description = "Days of messages to delete (1-7)"]
+    #[min = 1]
+    #[max = 7]
+    days: Option<u8>,
     #[description = "Reason for softban"]
     #[autocomplete = "autocomplete_reason"]
     reason: Option<String>,
@@ -569,7 +571,10 @@ pub async fn softban(
             Card::lines(
                 "⚠️ Softban Partially Applied",
                 vec![
-                    format!("<@{}> was banned, but the automatic unban failed.", target.get()),
+                    format!(
+                        "<@{}> was banned, but the automatic unban failed.",
+                        target.get()
+                    ),
                     "The member is still banned. Unban them manually.".to_string(),
                 ],
             )
@@ -616,7 +621,10 @@ pub async fn quarantine(ctx: Context<'_>) -> Result<(), Error> {
     .await
 }
 
-async fn quarantine_role_or_reply(ctx: Context<'_>, config: &ModConfig) -> Result<Option<u64>, Error> {
+async fn quarantine_role_or_reply(
+    ctx: Context<'_>,
+    config: &ModConfig,
+) -> Result<Option<u64>, Error> {
     if let Some(role) = config.quarantine_role {
         return Ok(Some(role));
     }
@@ -656,12 +664,7 @@ pub async fn quarantine_add(
     };
 
     guild
-        .add_member_role(
-            ctx.http(),
-            member,
-            RoleId::new(role),
-            reason.as_deref(),
-        )
+        .add_member_role(ctx.http(), member, RoleId::new(role), reason.as_deref())
         .await?;
 
     let case = actions::record_case(
@@ -685,8 +688,13 @@ pub async fn quarantine_add(
     .await;
 
     ctx.send(
-        action_success_card(&CaseAction::Quarantine, member.get(), case, reason.as_deref())
-            .reply(),
+        action_success_card(
+            &CaseAction::Quarantine,
+            member.get(),
+            case,
+            reason.as_deref(),
+        )
+        .reply(),
     )
     .await?;
     Ok(())
@@ -751,4 +759,3 @@ pub async fn quarantine_remove(
     .await?;
     Ok(())
 }
-

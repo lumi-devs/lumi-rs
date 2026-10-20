@@ -7,8 +7,7 @@ pub mod panels;
 pub mod ping;
 
 pub use cards::{
-    cut_text, fit_lines, make_list_card, Card, CardKind, CardOptions, CardReply,
-    TEXT_DISPLAY_LIMIT,
+    Card, CardKind, CardOptions, CardReply, TEXT_DISPLAY_LIMIT, cut_text, fit_lines, make_list_card,
 };
 pub use confirm::{confirm, confirm_poise};
 pub use layout::{

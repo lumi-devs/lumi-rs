@@ -47,8 +47,7 @@ pub fn xp_for_level(level: i32) -> i64 {
 
 #[must_use]
 pub fn total_xp_for_level(level: i32) -> i64 {
-    (1..level.min(MAX_LEVEL))
-        .fold(0i64, |total, lv| total.saturating_add(xp_for_level(lv)))
+    (1..level.min(MAX_LEVEL)).fold(0i64, |total, lv| total.saturating_add(xp_for_level(lv)))
 }
 
 #[must_use]
@@ -220,8 +219,7 @@ pub async fn add_voice_minutes(
 
     let now = Utc::now().fixed_offset();
     let new_total_xp = account.total_xp.saturating_add(xp.max(0));
-    let (new_level, new_xp, _) =
-        calculate_level_up(account.level, account.xp.saturating_add(xp));
+    let (new_level, new_xp, _) = calculate_level_up(account.level, account.xp.saturating_add(xp));
     let voice_minutes = account.voice_minutes.saturating_add(minutes);
 
     let mut active: level_account::ActiveModel = account.into();
@@ -347,7 +345,9 @@ pub async fn get_user_rank(
         .count(db)
         .await?;
 
-    Ok(Some(i64::try_from(count).unwrap_or(i64::MAX).saturating_add(1)))
+    Ok(Some(
+        i64::try_from(count).unwrap_or(i64::MAX).saturating_add(1),
+    ))
 }
 
 pub async fn get_leaderboard(

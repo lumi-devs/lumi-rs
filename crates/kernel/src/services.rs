@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use sea_orm::DatabaseConnection;
 
+use crate::Result;
 use crate::cache::Cache;
 use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::module::ModuleRegistry;
 use crate::permits::PermitResolver;
 use crate::security::SecurityManager;
-use crate::Result;
 
 /// Everything a command, listener or addon needs at runtime.
 #[derive(Debug)]

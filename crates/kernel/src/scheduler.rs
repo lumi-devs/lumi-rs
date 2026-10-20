@@ -101,7 +101,11 @@ fn sink_error(err: impl std::fmt::Display) -> LumiError {
 }
 
 async fn dispatch(job: Job, state: Data<WorkerState>) -> std::result::Result<(), BoxDynError> {
-    let Job { name, payload, every } = job;
+    let Job {
+        name,
+        payload,
+        every,
+    } = job;
     if let Err(err) = (state.handler)(Job {
         name: name.clone(),
         payload: payload.clone(),
