@@ -53,7 +53,7 @@ fn now_ms() -> i64 {
 /// Request coalescer to prevent cache stampedes (Thundering Herd).
 /// When multiple tasks request the same missing key, only the first
 /// executes the fetcher; others wait on the broadcast channel.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct SingleFlight {
     in_flight: Mutex<HashMap<String, broadcast::Sender<std::result::Result<Value, String>>>>,
 }
@@ -123,8 +123,8 @@ impl SingleFlight {
             let mut rx = rx;
             match rx.recv().await {
                 Ok(Ok(val)) => Ok(val),
-                Ok(Err(err)) => Err(crate::Error::Other(err)),
-                Err(_) => Err(crate::Error::Other("singleflight sender dropped".into())),
+                Ok(Err(err)) => Err(crate::LumiError::Cache(err)),
+                Err(_) => Err(crate::LumiError::Cache("singleflight sender dropped".into())),
             }
         }
     }
@@ -490,8 +490,9 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::{Claims, now_ms, ttl_entry, ttl_value};
-    use serde_json::json;
+    use super::{Claims, SingleFlight, now_ms, ttl_entry, ttl_value};
+    use serde_json::{Value, json};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     #[test]
@@ -544,7 +545,7 @@ mod tests {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         *n += 1;
-                        Ok::<Value, crate::Error>(json!({"x": *n}))
+                        Ok::<Value, crate::LumiError>(json!({"x": *n}))
                     })
                     .await
                 })
@@ -581,7 +582,7 @@ mod tests {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         *n += 1;
-                        Err::<Value, crate::Error>(crate::Error::Other("fail".into()))
+                        Err::<Value, crate::LumiError>(crate::LumiError::Cache("fail".into()))
                     })
                     .await
                 })
