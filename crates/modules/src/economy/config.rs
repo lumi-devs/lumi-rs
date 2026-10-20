@@ -59,10 +59,28 @@ impl EconomyConfig {
         if let Some(v) = string_value(&values, "bank_name") {
             cfg.bank_name = v;
         }
-        set_i64(&values, "starting_wallet", &mut cfg.starting_wallet, 0, i64::MAX);
-        set_i64(&values, "starting_bank", &mut cfg.starting_bank, 0, i64::MAX);
+        set_i64(
+            &values,
+            "starting_wallet",
+            &mut cfg.starting_wallet,
+            0,
+            i64::MAX,
+        );
+        set_i64(
+            &values,
+            "starting_bank",
+            &mut cfg.starting_bank,
+            0,
+            i64::MAX,
+        );
         set_i64(&values, "max_balance", &mut cfg.max_balance, 1, i64::MAX);
-        set_i64(&values, "payday_amount", &mut cfg.payday_amount, 0, i64::MAX);
+        set_i64(
+            &values,
+            "payday_amount",
+            &mut cfg.payday_amount,
+            0,
+            i64::MAX,
+        );
         set_i64(
             &values,
             "payday_cooldown_seconds",

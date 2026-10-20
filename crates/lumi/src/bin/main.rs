@@ -5,7 +5,11 @@ use anyhow::Result;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "lumi", version, about = "Lumi Discord Bot & Distributed Microservices")]
+#[command(
+    name = "lumi",
+    version,
+    about = "Lumi Discord Bot & Distributed Microservices"
+)]
 struct Cli {
     #[arg(default_value = "all")]
     role: String,
@@ -75,7 +79,7 @@ async fn start_api(cfg: lumi_kernel::Config) -> Result<()> {
 }
 
 async fn start_gateway(cfg: lumi_kernel::Config) -> Result<()> {
-    let shards = cfg.shard_count;
+    let shards = (cfg.shard_range, cfg.shard_count);
     let mut client = lumi::client::build(cfg).await?;
     let shutdown_trigger = client.shard_manager.get_shutdown_trigger();
 
@@ -86,11 +90,31 @@ async fn start_gateway(cfg: lumi_kernel::Config) -> Result<()> {
     });
 
     match shards {
-        Some(total) => {
+        (Some(range), Some(total)) => {
+            // Serenity's range end is INCLUSIVE: start_shard_range(4..7, 10) runs
+            // shards 4 through 7, while start_shards(n) means 0..n-1.
+            tracing::info!(
+                start = range.start,
+                end = range.end,
+                total,
+                "starting shard range"
+            );
+            client
+                .start_shard_range(range.start..range.end, total)
+                .await?;
+        }
+        (None, Some(total)) => {
             tracing::info!(total, "starting forced shard count");
             client.start_shards(total).await?;
         }
-        None => client.start_autosharded().await?,
+        (None, None) => client.start_autosharded().await?,
+        (Some(range), None) => {
+            return Err(anyhow::anyhow!(
+                "SHARD_RANGE {}-{} is set but SHARDS (fleet total) is missing",
+                range.start,
+                range.end
+            ));
+        }
     }
     Ok(())
 }
@@ -141,7 +165,7 @@ async fn start_scheduler(cfg: lumi_kernel::Config) -> Result<()> {
 }
 
 fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
 
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,lumi=debug"));

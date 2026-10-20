@@ -23,7 +23,9 @@ pub fn rank_card(
 
     let mut options = CardOptions::default();
     options.thumbnail_url = avatar_url;
-    options.footer = Some(format!("{current_xp} / {next_level_xp} XP needed for next level"));
+    options.footer = Some(format!(
+        "{current_xp} / {next_level_xp} XP needed for next level"
+    ));
 
     Card::lines(format!("📊 Rank \u{2014} {username}"), lines)
         .kind(CardKind::Purple)

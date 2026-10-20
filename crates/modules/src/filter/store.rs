@@ -89,9 +89,7 @@ impl FilterRules {
         let matcher = self.term_matcher.as_ref()?;
         let normalized = normalize(content);
         let found = matcher.find(normalized.as_str())?;
-        self.term_labels
-            .get(found.pattern().as_usize())
-            .cloned()
+        self.term_labels.get(found.pattern().as_usize()).cloned()
     }
 
     pub(crate) fn from_map(map: &Map<String, Value>) -> Self {
@@ -195,7 +193,11 @@ pub async fn rules_for(db: &DatabaseConnection, guild_id: u64) -> Arc<FilterRule
 
 fn cache() -> &'static MokaCache<String, Arc<FilterRules>> {
     static CACHE: OnceLock<MokaCache<String, Arc<FilterRules>>> = OnceLock::new();
-    CACHE.get_or_init(|| MokaCache::builder().max_capacity(RULES_CACHE_CAPACITY).build())
+    CACHE.get_or_init(|| {
+        MokaCache::builder()
+            .max_capacity(RULES_CACHE_CAPACITY)
+            .build()
+    })
 }
 
 fn map_hash(map: &Map<String, Value>) -> u64 {
@@ -266,10 +268,16 @@ mod tests {
     fn terms_match_case_accents_and_invisible_chars() {
         let rules = FilterRules::from_map(&map(json!({ "terms": ["BadWord", "café", ""] })));
         assert_eq!(rules.terms, vec!["BadWord", "café"]);
-        assert_eq!(rules.term_hit("That is a BADWORD"), Some("BadWord".to_string()));
+        assert_eq!(
+            rules.term_hit("That is a BADWORD"),
+            Some("BadWord".to_string())
+        );
         assert_eq!(rules.term_hit("grab a CAFÉ now"), Some("café".to_string()));
         // zero-width char between letters must not evade the match
-        assert_eq!(rules.term_hit("bad\u{200B}word"), Some("BadWord".to_string()));
+        assert_eq!(
+            rules.term_hit("bad\u{200B}word"),
+            Some("BadWord".to_string())
+        );
         assert_eq!(rules.term_hit("nothing here"), None);
     }
 }

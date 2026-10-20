@@ -53,7 +53,9 @@ fn is_audible(ctx: &serenity::Context, state: &VoiceState) -> bool {
 }
 
 fn start_session(guild_id: u64, user_id: u64) {
-    voice_sessions().entry((guild_id, user_id)).or_insert_with(Instant::now);
+    voice_sessions()
+        .entry((guild_id, user_id))
+        .or_insert_with(Instant::now);
 }
 
 /// Stop a session and bank the whole minutes earned. No-op when not started.

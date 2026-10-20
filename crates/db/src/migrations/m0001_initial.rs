@@ -33,22 +33,62 @@ impl MigrationTrait for Migration {
             .sync(manager.get_connection())
             .await?;
 
-        composite!(manager, "idx_moderation_cases_guild_active", moderation_case::Entity,
-            moderation_case::Column::GuildId, moderation_case::Column::Active);
-        composite!(manager, "idx_moderation_cases_guild_user", moderation_case::Entity,
-            moderation_case::Column::GuildId, moderation_case::Column::UserId);
-        composite!(manager, "idx_moderation_cases_guild_action", moderation_case::Entity,
-            moderation_case::Column::GuildId, moderation_case::Column::Action);
-        composite!(manager, "idx_level_accounts_guild_level", level_account::Entity,
-            level_account::Column::GuildId, level_account::Column::Level);
-        composite!(manager, "idx_level_accounts_guild_xp", level_account::Entity,
-            level_account::Column::GuildId, level_account::Column::Xp);
-        composite!(manager, "idx_economy_transactions_guild_user", economy_transaction::Entity,
-            economy_transaction::Column::GuildId, economy_transaction::Column::UserId);
-        composite!(manager, "idx_economy_transactions_guild_created", economy_transaction::Entity,
-            economy_transaction::Column::GuildId, economy_transaction::Column::CreatedAt);
-        composite!(manager, "idx_afk_entries_guild_since", afk_entry::Entity,
-            afk_entry::Column::GuildId, afk_entry::Column::Since);
+        composite!(
+            manager,
+            "idx_moderation_cases_guild_active",
+            moderation_case::Entity,
+            moderation_case::Column::GuildId,
+            moderation_case::Column::Active
+        );
+        composite!(
+            manager,
+            "idx_moderation_cases_guild_user",
+            moderation_case::Entity,
+            moderation_case::Column::GuildId,
+            moderation_case::Column::UserId
+        );
+        composite!(
+            manager,
+            "idx_moderation_cases_guild_action",
+            moderation_case::Entity,
+            moderation_case::Column::GuildId,
+            moderation_case::Column::Action
+        );
+        composite!(
+            manager,
+            "idx_level_accounts_guild_level",
+            level_account::Entity,
+            level_account::Column::GuildId,
+            level_account::Column::Level
+        );
+        composite!(
+            manager,
+            "idx_level_accounts_guild_xp",
+            level_account::Entity,
+            level_account::Column::GuildId,
+            level_account::Column::Xp
+        );
+        composite!(
+            manager,
+            "idx_economy_transactions_guild_user",
+            economy_transaction::Entity,
+            economy_transaction::Column::GuildId,
+            economy_transaction::Column::UserId
+        );
+        composite!(
+            manager,
+            "idx_economy_transactions_guild_created",
+            economy_transaction::Entity,
+            economy_transaction::Column::GuildId,
+            economy_transaction::Column::CreatedAt
+        );
+        composite!(
+            manager,
+            "idx_afk_entries_guild_since",
+            afk_entry::Entity,
+            afk_entry::Column::GuildId,
+            afk_entry::Column::Since
+        );
         Ok(())
     }
 }

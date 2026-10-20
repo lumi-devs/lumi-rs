@@ -190,7 +190,10 @@ pub(crate) async fn notify(
             lines.push(format!("**Reason:** {reason}"));
         }
         if let Some(duration) = case.and_then(|case| case.duration) {
-            lines.push(format!("**Duration:** {}", super::views::human_seconds(duration)));
+            lines.push(format!(
+                "**Duration:** {}",
+                super::views::human_seconds(duration)
+            ));
         }
         let card = Card::lines(
             format!("{} Moderation Action", action_emoji(&action)),

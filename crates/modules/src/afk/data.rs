@@ -1,6 +1,8 @@
 use chrono::Utc;
 use sea_orm::sea_query::OnConflict;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
+};
 
 use lumi_db::entities::afk_entry;
 use lumi_kernel::Result;

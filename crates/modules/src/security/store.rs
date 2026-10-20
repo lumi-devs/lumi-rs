@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use lumi_db::entities::{enums::CaseAction, moderation_case};
 use lumi_kernel::module_state;
 use lumi_kernel::security::{
-    AntiNukeConfig, AntiNukeResponse, DestructiveActionKind, DEFAULT_WINDOW_SECS,
+    AntiNukeConfig, AntiNukeResponse, DEFAULT_WINDOW_SECS, DestructiveActionKind,
 };
 use lumi_kernel::{Result, Services};
 
@@ -42,8 +42,16 @@ pub async fn anti_nuke_settings(
     let mut limits = HashMap::new();
     let mut responses = HashMap::new();
     for (kind, limit_key, response_key) in [
-        (DestructiveActionKind::Ban, "max_bans", Some("response_bans")),
-        (DestructiveActionKind::Kick, "max_kicks", Some("response_kicks")),
+        (
+            DestructiveActionKind::Ban,
+            "max_bans",
+            Some("response_bans"),
+        ),
+        (
+            DestructiveActionKind::Kick,
+            "max_kicks",
+            Some("response_kicks"),
+        ),
         (
             DestructiveActionKind::ChannelDelete,
             "max_channel_deletes",
@@ -59,7 +67,11 @@ pub async fn anti_nuke_settings(
             "max_webhook_creates",
             Some("response_webhook_creates"),
         ),
-        (DestructiveActionKind::VanityChange, "max_vanity_changes", None),
+        (
+            DestructiveActionKind::VanityChange,
+            "max_vanity_changes",
+            None,
+        ),
         (
             DestructiveActionKind::DangerousPermissionGrant,
             "max_permission_grants",

@@ -252,7 +252,12 @@ pub fn spawn_live_updates(
         while Instant::now() < deadline {
             tokio::time::sleep(LIVE_INTERVAL).await;
             let data = collect(&services, &gateway).await;
-            let card = build_overview_card(&data, user_id, page_of(user_id), crate::interactions::PING_PREFIX);
+            let card = build_overview_card(
+                &data,
+                user_id,
+                page_of(user_id),
+                crate::interactions::PING_PREFIX,
+            );
             let edit = serenity::EditMessage::new()
                 .components(card.components)
                 .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)

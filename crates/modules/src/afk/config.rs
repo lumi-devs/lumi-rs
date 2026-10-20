@@ -2,8 +2,8 @@
 
 use sea_orm::DatabaseConnection;
 
-use lumi_kernel::module_state;
 use lumi_kernel::Result;
+use lumi_kernel::module_state;
 
 use super::constants::DEFAULT_WELCOME_TTL_SECS;
 

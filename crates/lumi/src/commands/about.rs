@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
 use poise::serenity_prelude as serenity;
 use serenity::all::{CreateActionRow, CreateButton};
+use std::collections::BTreeMap;
 
+use crate::ping::collect;
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind, CardOptions};
-use crate::ping::collect;
 
 /// Display detailed information, statistics, and architecture of the Lumi bot.
 #[poise::command(slash_command, prefix_command, aliases("info", "stats", "botinfo"))]
@@ -77,19 +77,25 @@ pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
             codebase.dependencies,
         ),
     ];
-    let row1 = CreateActionRow::Buttons(vec![
-        CreateButton::new_link("https://github.com/lumi-devs/lumi-rs")
-            .label("Source Code"),
-        CreateButton::new_link("https://lumi-devs.github.io/Lumi-docs")
-            .label("Documentation"),
-    ].into());
+    let row1 = CreateActionRow::Buttons(
+        vec![
+            CreateButton::new_link("https://github.com/lumi-devs/lumi-rs").label("Source Code"),
+            CreateButton::new_link("https://lumi-devs.github.io/Lumi-docs").label("Documentation"),
+        ]
+        .into(),
+    );
 
-    let row2 = CreateActionRow::Buttons(vec![
-        CreateButton::new_link("https://lumi-devs.github.io/Lumi-docs/reference/data-and-privacy")
+    let row2 = CreateActionRow::Buttons(
+        vec![
+            CreateButton::new_link(
+                "https://lumi-devs.github.io/Lumi-docs/reference/data-and-privacy",
+            )
             .label("Privacy Policy"),
-        CreateButton::new_link("https://github.com/lumi-devs/Lumi/blob/main/LICENSE")
-            .label("Terms of Service"),
-    ].into());
+            CreateButton::new_link("https://github.com/lumi-devs/Lumi/blob/main/LICENSE")
+                .label("Terms of Service"),
+        ]
+        .into(),
+    );
 
     let mut opts = CardOptions::default();
     opts.hide_title = true;
@@ -98,9 +104,7 @@ pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
     opts.separator_above_action_rows = true;
     opts.action_rows = vec![row1, row2];
 
-    let card = Card::lines("", body)
-        .kind(CardKind::Primary)
-        .options(opts);
+    let card = Card::lines("", body).kind(CardKind::Primary).options(opts);
 
     ctx.send(card.into_reply().reply()).await?;
     Ok(())
@@ -118,7 +122,9 @@ pub async fn help(
     let all_commands = ctx.framework().options().commands.as_slice();
 
     if let Some(query) = command {
-        let found = all_commands.iter().find(|c| c.name.eq_ignore_ascii_case(&query));
+        let found = all_commands
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(&query));
         if let Some(cmd) = found {
             let title = format!("📖 Command: /{}", cmd.name);
             let mut lines = Vec::new();
@@ -158,8 +164,14 @@ pub async fn help(
         for cmd in module.commands() {
             claimed_commands.insert(cmd.name.clone());
             if let Some(matched) = all_commands.iter().find(|c| c.name == cmd.name) {
-                let actual_desc = matched.description.as_deref().unwrap_or("No description provided");
-                categories.entry(cat_header.clone()).or_default().push((&matched.name, actual_desc));
+                let actual_desc = matched
+                    .description
+                    .as_deref()
+                    .unwrap_or("No description provided");
+                categories
+                    .entry(cat_header.clone())
+                    .or_default()
+                    .push((&matched.name, actual_desc));
             }
         }
     }
@@ -168,13 +180,20 @@ pub async fn help(
     let core_header = "✨ __Core System__".to_string();
     for cmd in all_commands {
         if !claimed_commands.contains(&cmd.name) {
-            let desc = cmd.description.as_deref().unwrap_or("No description provided");
-            categories.entry(core_header.clone()).or_default().push((&cmd.name, desc));
+            let desc = cmd
+                .description
+                .as_deref()
+                .unwrap_or("No description provided");
+            categories
+                .entry(core_header.clone())
+                .or_default()
+                .push((&cmd.name, desc));
         }
     }
 
     let mut body = vec![
-        "Lumi interactive command manual. Use `/help <command>` for parameter breakdown:".to_string(),
+        "Lumi interactive command manual. Use `/help <command>` for parameter breakdown:"
+            .to_string(),
     ];
 
     for (cat_name, cmds) in categories {

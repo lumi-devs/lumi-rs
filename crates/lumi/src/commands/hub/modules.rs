@@ -5,17 +5,17 @@ use serenity::all::{
     CreateLabel, CreateModal, CreateModalComponent, InputTextStyle, ModalInteraction,
 };
 
+use lumi_kernel::Services;
 use lumi_kernel::bot::Error;
 use lumi_kernel::module::{ConfigField, ConfigFieldKind};
 use lumi_kernel::module_state::{self, FeatureRow};
-use lumi_kernel::Services;
 use lumi_ui::panels::{
     action_row_of, back_button, channel_select, pagination_row, role_select, role_select_multi,
     setting_row, string_select, user_select,
 };
-use lumi_ui::{cut_text, format_page_footer, Card, CardKind, CardOptions, CardReply};
+use lumi_ui::{Card, CardKind, CardOptions, CardReply, cut_text, format_page_footer};
 
-use super::{cid, tab_row, GuildCtx, HubId, HubOutcome, HubView};
+use super::{GuildCtx, HubId, HubOutcome, HubView, cid, tab_row};
 
 /// Mirrors lumi's `FeaturesPerPage` / `FieldsPerPage`: a V2 container rejects
 /// more than 40 components in total, and every row costs a section plus a button.
@@ -57,9 +57,7 @@ pub async fn list_card(
     }
 
     let mut action_rows: Vec<CreateActionRow<'static>> = Vec::new();
-    if let Some(pagination) =
-        pagination_row(&cid(&["cfg", "list"]), safe_page, total_pages)
-    {
+    if let Some(pagination) = pagination_row(&cid(&["cfg", "list"]), safe_page, total_pages) {
         action_rows.push(pagination);
     }
     action_rows.push(tab_row(HubView::Modules));
@@ -178,7 +176,11 @@ fn status_glyph(field: &ConfigField, value: Option<&Value>) -> &'static str {
 /// One `glyph **Label** = value` line, plus the description when present.
 fn field_lines(field: &ConfigField, value: Option<&Value>) -> String {
     let rendered = module_state::format_field_value(field, value);
-    let line = format!("{} **{}** = {rendered}", status_glyph(field, value), field.label);
+    let line = format!(
+        "{} **{}** = {rendered}",
+        status_glyph(field, value),
+        field.label
+    );
     if field.description.is_empty() {
         line
     } else {
@@ -197,9 +199,11 @@ pub async fn config_card(
     section: usize,
 ) -> Result<CardReply, Error> {
     let Some(module) = services.registry.get(module_name) else {
-        return Ok(
-            Card::error("Unknown Module", format!("No module named `{module_name}`.")).into_reply(),
-        );
+        return Ok(Card::error(
+            "Unknown Module",
+            format!("No module named `{module_name}`."),
+        )
+        .into_reply());
     };
     let meta = module.metadata();
     let schema = module.config_schema();
@@ -213,10 +217,15 @@ pub async fn config_card(
     let multi = total > 1;
 
     let mut body = Vec::new();
-    body.push(format!("**Status:** {}", if enabled { "🟢 `ENABLED`" } else { "🔴 `DISABLED`" }));
-    if multi
-        && let Some(name) = current.and_then(|s| s.name.as_deref())
-    {
+    body.push(format!(
+        "**Status:** {}",
+        if enabled {
+            "🟢 `ENABLED`"
+        } else {
+            "🔴 `DISABLED`"
+        }
+    ));
+    if multi && let Some(name) = current.and_then(|s| s.name.as_deref()) {
         body.push(format!("-# Section **{name}** · {}/{}", safe + 1, total));
     }
 
@@ -272,7 +281,11 @@ pub async fn config_card(
     }
     action_rows.push(action_row_of(vec![
         CreateButton::new(cid(&["cfg", "toggle", module_name]))
-            .label(if enabled { "Disable Module" } else { "Enable Module" })
+            .label(if enabled {
+                "Disable Module"
+            } else {
+                "Enable Module"
+            })
             .emoji(if enabled { '❌' } else { '✅' })
             .style(if enabled {
                 ButtonStyle::Danger
@@ -292,9 +305,7 @@ pub async fn config_card(
             .emoji('⬅')
             .style(ButtonStyle::Secondary),
     ]));
-    if let Some(pagination) =
-        pagination_row(&cid(&["cfg", "page", module_name]), safe, total)
-    {
+    if let Some(pagination) = pagination_row(&cid(&["cfg", "page", module_name]), safe, total) {
         action_rows.push(pagination);
     }
     action_rows.push(tab_row(HubView::Modules));
@@ -332,12 +343,18 @@ async fn field_edit_card(
     section: usize,
 ) -> Result<CardReply, Error> {
     let Some(module) = services.registry.get(module_name) else {
-        return Ok(Card::error("Unknown Module", format!("No module named `{module_name}`.")).into_reply());
+        return Ok(Card::error(
+            "Unknown Module",
+            format!("No module named `{module_name}`."),
+        )
+        .into_reply());
     };
     let meta = module.metadata();
     let schema = module.config_schema();
     let Some(field) = schema.iter().find(|field| field.key == key) else {
-        return Ok(Card::error("Unknown Setting", format!("No setting named `{key}`.")).into_reply());
+        return Ok(
+            Card::error("Unknown Setting", format!("No setting named `{key}`.")).into_reply(),
+        );
     };
     let overrides = module_state::get_config(&services.db, guild.id, module_name).await;
     let value = overrides.get(key);
@@ -373,16 +390,12 @@ async fn field_edit_card(
             cid(&["cfg", "setuser", module_name, key, &section_token]),
             cut_text(&field.label, 100),
         )],
-        _ => vec![action_row_of(vec![CreateButton::new(cid(&[
-            "cfg",
-            "modal",
-            module_name,
-            key,
-            &section_token,
-        ]))
-        .label("Enter value…")
-        .emoji('✏')
-        .style(ButtonStyle::Primary)])],
+        _ => vec![action_row_of(vec![
+            CreateButton::new(cid(&["cfg", "modal", module_name, key, &section_token]))
+                .label("Enter value…")
+                .emoji('✏')
+                .style(ButtonStyle::Primary),
+        ])],
     };
 
     let mut rows = action_rows;
@@ -415,23 +428,22 @@ async fn field_edit_card(
         ..CardOptions::default()
     };
 
-    Ok(Card::lines(
-        format!("⚙️ {} • {}", meta.display_name, field.label),
-        body,
+    Ok(
+        Card::lines(format!("⚙️ {} • {}", meta.display_name, field.label), body)
+            .kind(CardKind::Primary)
+            .options(opts)
+            .into_reply(),
     )
-    .kind(CardKind::Primary)
-    .options(opts)
-    .into_reply())
 }
 
 /// Config change history for a module.
-fn history_card(
-    services: &Services,
-    module_name: &str,
-    section: usize,
-) -> CardReply {
+fn history_card(services: &Services, module_name: &str, section: usize) -> CardReply {
     let Some(module) = services.registry.get(module_name) else {
-        return Card::error("Unknown Module", format!("No module named `{module_name}`.")).into_reply();
+        return Card::error(
+            "Unknown Module",
+            format!("No module named `{module_name}`."),
+        )
+        .into_reply();
     };
     let meta = module.metadata();
     let body = vec![
@@ -463,13 +475,13 @@ fn history_card(
 }
 
 /// Channel and role overrides for a module.
-fn overrides_card(
-    services: &Services,
-    module_name: &str,
-    section: usize,
-) -> CardReply {
+fn overrides_card(services: &Services, module_name: &str, section: usize) -> CardReply {
     let Some(module) = services.registry.get(module_name) else {
-        return Card::error("Unknown Module", format!("No module named `{module_name}`.")).into_reply();
+        return Card::error(
+            "Unknown Module",
+            format!("No module named `{module_name}`."),
+        )
+        .into_reply();
     };
     let meta = module.metadata();
     let body = vec![
@@ -502,7 +514,12 @@ fn overrides_card(
 
 fn field_modal(module_name: &str, field: &ConfigField, section: usize) -> CreateModal<'static> {
     CreateModal::new(
-        cid(&[MODAL_PREFIX, module_name, field.key.as_str(), &section.to_string()]),
+        cid(&[
+            MODAL_PREFIX,
+            module_name,
+            field.key.as_str(),
+            &section.to_string(),
+        ]),
         format!("Set {}", cut_text(&field.label, 45)),
     )
     .components(vec![CreateModalComponent::Label(CreateLabel::input_text(
@@ -650,15 +667,8 @@ pub async fn dispatch(
             let Some(field) = schema.iter().find(|field| field.key == key) else {
                 return Ok(HubOutcome::Done);
             };
-            module_state::set_config_value(
-                &services.db,
-                guild.id,
-                name,
-                key,
-                &choice,
-                &field.kind,
-            )
-            .await?;
+            module_state::set_config_value(&services.db, guild.id, name, key, &choice, &field.kind)
+                .await?;
             Ok(HubOutcome::Update(
                 config_card(services, guild, name, section).await?,
             ))
@@ -671,9 +681,9 @@ pub async fn dispatch(
             let ids = select_ids(data);
             let value = match ids.first() {
                 None => Value::Null,
-                Some(_) if is_role_array(services, name, key) => Value::Array(
-                    ids.iter().map(|id| Value::String(id.clone())).collect(),
-                ),
+                Some(_) if is_role_array(services, name, key) => {
+                    Value::Array(ids.iter().map(|id| Value::String(id.clone())).collect())
+                }
                 Some(first) => Value::String(first.clone()),
             };
             module_state::set_config_field(&services.db, guild.id, name, key, value).await?;
@@ -727,15 +737,12 @@ pub async fn dispatch(
 
 /// Whether the field at `key` is a multi-role array (drives single vs array IDs).
 fn is_role_array(services: &Services, module_name: &str, key: &str) -> bool {
-    services
-        .registry
-        .get(module_name)
-        .is_some_and(|module| {
-            module
-                .config_schema()
-                .iter()
-                .any(|field| field.key == key && matches!(field.kind, ConfigFieldKind::RoleArray))
-        })
+    services.registry.get(module_name).is_some_and(|module| {
+        module
+            .config_schema()
+            .iter()
+            .any(|field| field.key == key && matches!(field.kind, ConfigFieldKind::RoleArray))
+    })
 }
 
 /// Handle a `lumi:cfgmodal:<module>:<key>:<section>` submission.
@@ -766,7 +773,11 @@ pub async fn handle_modal(
         return Ok(HubOutcome::Ephemeral(
             Card::error(
                 "Invalid Value",
-                format!("`{}` could not be parsed as {}.", cut_text(&raw, 120), field.label),
+                format!(
+                    "`{}` could not be parsed as {}.",
+                    cut_text(&raw, 120),
+                    field.label
+                ),
             )
             .into_reply(),
         ));
@@ -793,9 +804,9 @@ fn parse_modal_value(raw: &str, kind: &ConfigFieldKind) -> Option<Value> {
                 .map(|item| Value::String(item.to_string()))
                 .collect(),
         )),
-        ConfigFieldKind::ObjectArray => {
-            serde_json::from_str::<Value>(trimmed).ok().filter(Value::is_array)
-        }
+        ConfigFieldKind::ObjectArray => serde_json::from_str::<Value>(trimmed)
+            .ok()
+            .filter(Value::is_array),
         _ => Some(Value::String(raw.to_string())),
     }
 }

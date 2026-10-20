@@ -17,7 +17,9 @@ use super::{guild_id, send_card};
 pub async fn dm(
     ctx: Context<'_>,
     #[description = "User to message"] user: UserId,
-    #[description = "Message to send"] #[max_length = 2000] message: String,
+    #[description = "Message to send"]
+    #[max_length = 2000]
+    message: String,
 ) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_name = ctx
@@ -66,7 +68,9 @@ pub async fn dm(
 )]
 pub async fn say(
     ctx: Context<'_>,
-    #[description = "Message to send"] #[max_length = 2000] message: String,
+    #[description = "Message to send"]
+    #[max_length = 2000]
+    message: String,
     #[description = "Channel to send in (defaults to this one)"] channel: Option<GenericChannelId>,
 ) -> Result<(), Error> {
     ctx.defer().await?;

@@ -16,6 +16,13 @@ pub enum Role {
     Scheduler,
 }
 
+/// Inclusive shard range this host owns out of the fleet total (`SHARDS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShardRange {
+    pub start: u16,
+    pub end: u16,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -34,6 +41,9 @@ pub struct Config {
     /// Shards this process should run, overriding Discord's recommendation.
     #[serde(default)]
     pub shard_count: Option<u16>,
+    /// Inclusive slice of the fleet this host runs, from `SHARD_RANGE`.
+    #[serde(default)]
+    pub shard_range: Option<ShardRange>,
 }
 
 fn default_redis_url() -> String {
@@ -53,13 +63,17 @@ impl Config {
     pub fn load() -> Result<Self> {
         let token = std::env::var("BOT_TOKEN")
             .or_else(|_| std::env::var("DISCORD_TOKEN"))
-            .map_err(|_| LumiError::Config("BOT_TOKEN or DISCORD_TOKEN must be set in environment / .env".into()))?;
+            .map_err(|_| {
+                LumiError::Config(
+                    "BOT_TOKEN or DISCORD_TOKEN must be set in environment / .env".into(),
+                )
+            })?;
 
         let database_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/lumi".into());
 
-        let redis_url = std::env::var("REDIS_URL")
-            .unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".into());
 
         let rpc_token = std::env::var("RPC_TOKEN").ok();
         let rpc_port = std::env::var("RPC_PORT")
@@ -82,6 +96,11 @@ impl Config {
             Err(_) => None,
         };
 
+        let shard_range = match std::env::var("SHARD_RANGE") {
+            Ok(raw) => Some(parse_shard_range(raw.trim(), shard_count)?),
+            Err(_) => None,
+        };
+
         let mut owner_ids = Vec::new();
         if let Ok(owners) = std::env::var("OWNER")
             .or_else(|_| std::env::var("OWNERS"))
@@ -90,9 +109,9 @@ impl Config {
             for id_str in owners.split(',') {
                 let id_str = id_str.trim();
                 if !id_str.is_empty() {
-                    let id = id_str
-                        .parse::<u64>()
-                        .map_err(|_| LumiError::Config(format!("owner entry '{id_str}' is not a snowflake")))?;
+                    let id = id_str.parse::<u64>().map_err(|_| {
+                        LumiError::Config(format!("owner entry '{id_str}' is not a snowflake"))
+                    })?;
                     if !owner_ids.contains(&id) {
                         owner_ids.push(id);
                     }
@@ -110,6 +129,7 @@ impl Config {
             owner_ids,
             custom_dir,
             shard_count,
+            shard_range,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -128,5 +148,89 @@ impl Config {
     #[must_use]
     pub fn is_owner(&self, user_id: u64) -> bool {
         self.owner_ids.contains(&user_id)
+    }
+}
+
+fn parse_shard_range(raw: &str, shard_count: Option<u16>) -> Result<ShardRange> {
+    let (start, end) = raw.split_once('-').ok_or_else(|| {
+        LumiError::Config(format!("SHARD_RANGE must be 'start-end', got '{raw}'"))
+    })?;
+    let start = start.trim().parse::<u16>().map_err(|_| {
+        LumiError::Config(format!(
+            "SHARD_RANGE start must be a shard index, got '{raw}'"
+        ))
+    })?;
+    let end = end.trim().parse::<u16>().map_err(|_| {
+        LumiError::Config(format!(
+            "SHARD_RANGE end must be a shard index, got '{raw}'"
+        ))
+    })?;
+
+    if start > end {
+        return Err(LumiError::Config(format!(
+            "SHARD_RANGE start {start} must not exceed end {end}"
+        )));
+    }
+    let total = shard_count.ok_or_else(|| {
+        LumiError::Config("SHARD_RANGE requires SHARDS (fleet total) to be set".into())
+    })?;
+    if end >= total {
+        return Err(LumiError::Config(format!(
+            "SHARD_RANGE end {end} must be below the fleet total {total}"
+        )));
+    }
+
+    Ok(ShardRange { start, end })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shard_range_valid() {
+        assert_eq!(
+            parse_shard_range("3-7", Some(8)).ok(),
+            Some(ShardRange { start: 3, end: 7 })
+        );
+        assert_eq!(
+            parse_shard_range(" 3 - 7 ", Some(8)).ok(),
+            Some(ShardRange { start: 3, end: 7 })
+        );
+        assert_eq!(
+            parse_shard_range("0-0", Some(1)).ok(),
+            Some(ShardRange { start: 0, end: 0 })
+        );
+    }
+
+    #[test]
+    fn shard_range_requires_fleet_total() {
+        let error = parse_shard_range("0-3", None).err();
+        assert!(matches!(error, Some(LumiError::Config(_))));
+    }
+
+    #[test]
+    fn shard_range_rejects_reversed_bounds() {
+        let error = parse_shard_range("5-4", Some(8)).err();
+        assert!(matches!(error, Some(LumiError::Config(_))));
+    }
+
+    #[test]
+    fn shard_range_rejects_out_of_bounds_end() {
+        assert!(parse_shard_range("4-8", Some(8)).is_err());
+        assert!(parse_shard_range("0-7", Some(8)).is_ok());
+    }
+
+    #[test]
+    fn shard_range_rejects_malformed_input() {
+        for raw in ["", "5", "a-b", "0-", "-3", "1-2-3", "1.5-2", "-1-2"] {
+            assert!(
+                matches!(
+                    parse_shard_range(raw, Some(8)).err(),
+                    Some(LumiError::Config(_))
+                ),
+                "expected error for '{raw}'"
+            );
+        }
     }
 }

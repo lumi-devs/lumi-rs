@@ -46,9 +46,7 @@ async fn show_case(ctx: Context<'_>, guild_id: u64, number: i32) -> Result<(), E
                 ctx,
                 Card::lines(
                     "🔍 Case Not Found",
-                    vec![format!(
-                        "Case `#{number}` does not exist in this server."
-                    )],
+                    vec![format!("Case `#{number}` does not exist in this server.")],
                 )
                 .kind(CardKind::Error),
             )
@@ -143,8 +141,13 @@ pub async fn cases_view(
         || "📋 Server Moderation Cases".to_string(),
         |user| format!("📋 Cases for <@{}>", user.get()),
     );
-    ctx.send(Card::lines(title, lines).options(options).into_reply().reply())
-        .await?;
+    ctx.send(
+        Card::lines(title, lines)
+            .options(options)
+            .into_reply()
+            .reply(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -159,7 +162,9 @@ async fn update_reason(
             ctx,
             Card::lines(
                 "✅ Reason Updated",
-                vec![format!("Updated reason for Case `#{number}` to: **{reason}**")],
+                vec![format!(
+                    "Updated reason for Case `#{number}` to: **{reason}**"
+                )],
             )
             .kind(CardKind::Success),
         )
@@ -208,7 +213,15 @@ pub async fn cases_delete(
     #[description = "Case number to delete"] number: i32,
 ) -> Result<(), Error> {
     let body = format!("Are you sure you want to permanently delete Case `#{number}`?");
-    if !confirm::confirm(ctx, "moderation", "⚠️ Confirm Case Deletion", &body, "Delete Case").await? {
+    if !confirm::confirm(
+        ctx,
+        "moderation",
+        "⚠️ Confirm Case Deletion",
+        &body,
+        "Delete Case",
+    )
+    .await?
+    {
         return send_card(
             ctx,
             Card::lines(
@@ -314,8 +327,8 @@ pub async fn note(
         .await
     } else {
         let notes = store::list_notes(&ctx.data().db, guild_id, user.get()).await?;
-        ctx.send(notes_list_card(user.get(), &notes).reply()).await?;
+        ctx.send(notes_list_card(user.get(), &notes).reply())
+            .await?;
         Ok(())
     }
 }
-

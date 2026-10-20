@@ -1,6 +1,6 @@
-use serenity::all::{ChannelType, CreateActionRow};
 use lumi_ui::panels::{action_row_of, channel_select_of_types, string_select_options};
 use lumi_ui::{Card, CardKind, CardOptions, CardReply};
+use serenity::all::{ChannelType, CreateActionRow};
 
 /// One configured generator, resolved for display.
 #[derive(Debug, Clone)]
@@ -27,7 +27,9 @@ const MANAGE_OPTIONS: &[(&str, &str, &str)] = &[
     ("Delete Channel", "delete", "\u{1f5d1}\u{fe0f}"),
 ];
 
-pub fn path(channel_id: u64) -> String { channel_id.to_string() }
+pub fn path(channel_id: u64) -> String {
+    channel_id.to_string()
+}
 
 pub fn menu_id(channel_id: u64) -> String {
     format!("{PREFIX}:menu:{}", path(channel_id))
@@ -100,9 +102,7 @@ pub fn panel_card(
         "\u{1f399}\u{fe0f} Voice Channel Control Deck",
         vec![
             format!("**Channel:** <#{channel_id}>"),
-            format!(
-                "**Owner:** <@{owner_id}> \u{b7} **Limit:** {limit}"
-            ),
+            format!("**Owner:** <@{owner_id}> \u{b7} **Limit:** {limit}"),
             format!("**Status:** {} **{}**", status.0, status.1),
         ],
     )
@@ -162,7 +162,11 @@ pub fn picker_card(action: &str, channel_id: u64) -> CardReply {
         "transfer" => "Select the new owner\u{2026}",
         _ => "Select member(s)\u{2026}",
     };
-    rows.push(user_select_multi(pick_id(action, channel_id), member_placeholder, action != "transfer"));
+    rows.push(user_select_multi(
+        pick_id(action, channel_id),
+        member_placeholder,
+        action != "transfer",
+    ));
     if matches!(action, "trust" | "untrust" | "block" | "unblock") {
         rows.push(role_select_multi(
             pick_role_id(action, channel_id),
@@ -197,7 +201,10 @@ fn user_select_multi(
     CreateActionRow::SelectMenu(menu)
 }
 
-fn role_select_multi(custom_id: String, placeholder: impl Into<String>) -> CreateActionRow<'static> {
+fn role_select_multi(
+    custom_id: String,
+    placeholder: impl Into<String>,
+) -> CreateActionRow<'static> {
     CreateActionRow::SelectMenu(
         serenity::all::CreateSelectMenu::new(
             custom_id,
@@ -248,7 +255,10 @@ pub fn admin_card(generators: &[GeneratorView]) -> CardReply {
                 } else {
                     "no limit".to_string()
                 };
-                format!("**{}** \u{b7} `{}` \u{b7} {limit}", g.channel_name, g.template)
+                format!(
+                    "**{}** \u{b7} `{}` \u{b7} {limit}",
+                    g.channel_name, g.template
+                )
             })
             .collect::<Vec<_>>()
             .join("\n")

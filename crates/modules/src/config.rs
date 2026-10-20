@@ -88,12 +88,7 @@ pub fn string_field(
 }
 
 #[must_use]
-pub fn string_array_field(
-    key: &str,
-    label: &str,
-    description: &str,
-    group: &str,
-) -> ConfigField {
+pub fn string_array_field(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
     field(
         key,
         label,
@@ -105,12 +100,7 @@ pub fn string_array_field(
 }
 
 #[must_use]
-pub fn channel_field(
-    key: &str,
-    label: &str,
-    description: &str,
-    group: &str,
-) -> ConfigField {
+pub fn channel_field(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
     field(
         key,
         label,
@@ -134,12 +124,7 @@ pub fn role_field(key: &str, label: &str, description: &str, group: &str) -> Con
 }
 
 #[must_use]
-pub fn role_array_field(
-    key: &str,
-    label: &str,
-    description: &str,
-    group: &str,
-) -> ConfigField {
+pub fn role_array_field(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
     field(
         key,
         label,
@@ -208,9 +193,7 @@ pub fn string_list(map: &Map<String, Value>, key: &str) -> Vec<String> {
 /// Boolean value, falling back when unset or of another type.
 #[must_use]
 pub fn boolean(map: &Map<String, Value>, key: &str, fallback: bool) -> bool {
-    value(map, key)
-        .and_then(Value::as_bool)
-        .unwrap_or(fallback)
+    value(map, key).and_then(Value::as_bool).unwrap_or(fallback)
 }
 
 /// Signed integer, accepting a JSON number or a numeric string.
