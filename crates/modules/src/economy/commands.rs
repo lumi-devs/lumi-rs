@@ -541,8 +541,14 @@ pub async fn handle_component(
         .map_or_else(|| "this server".to_string(), |g| g.name.to_string());
     let caller_id = interaction.user.id.get();
 
-    let reply =
-        leaderboard_reply(services.reader(), guild_id.get(), &guild_name, page, caller_id).await?;
+    let reply = leaderboard_reply(
+        services.reader(),
+        guild_id.get(),
+        &guild_name,
+        page,
+        caller_id,
+    )
+    .await?;
     interaction
         .create_response(
             &ctx.http,

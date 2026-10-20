@@ -127,7 +127,8 @@ pub async fn on_message_update(
         return Ok(());
     }
     let guild = guild_id.get();
-    if store::is_ignored_channel(&services.cache, &services.db, guild, new.channel_id.get()).await? {
+    if store::is_ignored_channel(&services.cache, &services.db, guild, new.channel_id.get()).await?
+    {
         return Ok(());
     }
     let before = old

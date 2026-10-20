@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
-use lumi_kernel::{module_state, Cache};
+use lumi_kernel::{Cache, module_state};
 
 use crate::config;
 

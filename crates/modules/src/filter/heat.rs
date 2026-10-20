@@ -82,7 +82,12 @@ pub async fn add_heat(
     points: f64,
     decay_per_minute: f64,
 ) -> Result<f64, redis::RedisError> {
-    Ok(super::state::add_heat(guild_id, user_id, points, decay_per_minute))
+    Ok(super::state::add_heat(
+        guild_id,
+        user_id,
+        points,
+        decay_per_minute,
+    ))
 }
 
 pub async fn clear_heat(_services: &Services, guild_id: u64, user_id: u64) {
@@ -96,7 +101,9 @@ pub async fn claim_escalation(
     action: &'static str,
 ) -> bool {
     let key = format!("filter:escalation:{guild_id}:{user_id}:{action}");
-    services.cache.claim_local(&key, std::time::Duration::from_secs(30))
+    services
+        .cache
+        .claim_local(&key, std::time::Duration::from_secs(30))
 }
 
 pub async fn record_mentions(
@@ -105,7 +112,11 @@ pub async fn record_mentions(
     count: u64,
     window_seconds: u64,
 ) -> Result<u64, redis::RedisError> {
-    Ok(super::state::record_mentions(guild_id, count, window_seconds))
+    Ok(super::state::record_mentions(
+        guild_id,
+        count,
+        window_seconds,
+    ))
 }
 
 pub async fn activate_auto_lockdown(
@@ -359,8 +370,12 @@ pub async fn check_heat(
                 "Heat escalation: exceeded {} heat ({heat:.1})",
                 rules.heat_quarantine
             );
-            if let Ok(Some(quarantine_role)) =
-                crate::moderation::store::quarantine_role(&services.cache, &services.db, guild_id.get()).await
+            if let Ok(Some(quarantine_role)) = crate::moderation::store::quarantine_role(
+                &services.cache,
+                &services.db,
+                guild_id.get(),
+            )
+            .await
             {
                 let _ = guild_id
                     .edit_member(

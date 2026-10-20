@@ -189,7 +189,13 @@ pub async fn config_cached(
         }
     }
     let config = get_config(db, guild_id, module).await;
-    let _ = cache.set_json_ttl(&key, &Value::Object(config.clone()), Duration::from_secs(60)).await;
+    let _ = cache
+        .set_json_ttl(
+            &key,
+            &Value::Object(config.clone()),
+            Duration::from_secs(60),
+        )
+        .await;
     config
 }
 

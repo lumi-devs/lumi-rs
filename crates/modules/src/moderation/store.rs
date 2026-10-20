@@ -192,8 +192,14 @@ pub async fn list_notes(
 }
 
 /// The configured quarantine role id, or `None` when quarantine is unconfigured.
-pub async fn quarantine_role(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> Result<Option<u64>> {
-    Ok(module_state::config_cached_value(cache, db, guild_id, CONFIG_MODULE, "quarantine_role_id")
-        .await
-        .and_then(|v| module_state::parse_id(&v)))
+pub async fn quarantine_role(
+    cache: &Cache,
+    db: &DatabaseConnection,
+    guild_id: u64,
+) -> Result<Option<u64>> {
+    Ok(
+        module_state::config_cached_value(cache, db, guild_id, CONFIG_MODULE, "quarantine_role_id")
+            .await
+            .and_then(|v| module_state::parse_id(&v)),
+    )
 }

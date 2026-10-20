@@ -6,8 +6,17 @@ use lumi_kernel::{Cache, Result, module_state};
 
 const MODULE: &str = "logging";
 
-async fn read_channel(cache: &Cache, db: &DatabaseConnection, guild_id: u64, key: &str) -> Result<Option<u64>> {
-    Ok(module_state::config_cached_value(cache, db, guild_id, MODULE, key).await.and_then(|v| module_state::parse_id(&v)))
+async fn read_channel(
+    cache: &Cache,
+    db: &DatabaseConnection,
+    guild_id: u64,
+    key: &str,
+) -> Result<Option<u64>> {
+    Ok(
+        module_state::config_cached_value(cache, db, guild_id, MODULE, key)
+            .await
+            .and_then(|v| module_state::parse_id(&v)),
+    )
 }
 
 /// Whether `channel_id` is in the guild's ignored-channel list.
@@ -17,10 +26,11 @@ pub async fn is_ignored_channel(
     guild_id: u64,
     channel_id: u64,
 ) -> Result<bool> {
-    let ignored = module_state::config_cached_value(cache, db, guild_id, MODULE, "ignored_channels")
-        .await
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
+    let ignored =
+        module_state::config_cached_value(cache, db, guild_id, MODULE, "ignored_channels")
+            .await
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default();
     Ok(ignored.iter().any(|v| v.as_u64() == Some(channel_id)))
 }
 

@@ -130,7 +130,8 @@ pub async fn on_member_update(
     }
     let guild_id = new.guild_id;
     let Some(role) =
-        crate::moderation::store::quarantine_role(&services.cache, &services.db, guild_id.get()).await?
+        crate::moderation::store::quarantine_role(&services.cache, &services.db, guild_id.get())
+            .await?
     else {
         return Ok(());
     };
@@ -263,8 +264,12 @@ async fn respond(
     match violation.response {
         AntiNukeResponse::Log => {}
         AntiNukeResponse::Quarantine => {
-            if let Some(role) =
-                crate::moderation::store::quarantine_role(&services.cache, &services.db, guild_id.get()).await?
+            if let Some(role) = crate::moderation::store::quarantine_role(
+                &services.cache,
+                &services.db,
+                guild_id.get(),
+            )
+            .await?
             {
                 if let Err(error) = guild_id
                     .add_member_role(&ctx.http, executor, RoleId::new(role), Some(&reason))
