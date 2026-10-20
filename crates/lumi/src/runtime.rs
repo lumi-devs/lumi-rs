@@ -33,6 +33,10 @@ pub fn registry() -> ModuleRegistry {
 pub async fn services(cfg: Config) -> Result<Data> {
     let db = lumi_db::connect(&cfg.database_url).await?;
     lumi_db::migrate(&db).await?;
+    let db_read = match std::env::var("DATABASE_READ_URL") {
+        Ok(url) if !url.trim().is_empty() => lumi_db::connect_read(&url).await?,
+        _ => db.clone(),
+    };
 
     let cache = Arc::new(lumi_kernel::Cache::connect(&cfg.redis_url).await?);
     let permits = Arc::new(lumi_kernel::PermitResolver::load(&db).await?);
@@ -45,6 +49,7 @@ pub async fn services(cfg: Config) -> Result<Data> {
     let services: Data = Arc::new(Services {
         cfg,
         db,
+        db_read,
         cache: Arc::clone(&cache),
         permits,
         registry: registry(),

@@ -3,17 +3,17 @@ pub mod ids;
 pub mod migrations;
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use sea_orm::entity::prelude::{ChronoUtc, DateTimeWithTimeZone};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseBackend as DbBackend,
-    DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QueryResult,
-    QuerySelect, Set, Statement, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
+    DatabaseBackend as DbBackend, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QueryResult, Set, Statement, TransactionTrait,
 };
 use sea_orm_migration::MigratorTrait;
 
-use crate::entities::counter;
 use crate::entities::enums::{PermitKind, PermitTargetType};
 use crate::entities::{permit, permit_assignment};
 use crate::ids::{GuildId, SnowflakeId};
@@ -21,8 +21,52 @@ use crate::migrations::Migrator;
 
 pub type Result<T> = std::result::Result<T, sea_orm::DbErr>;
 
+/// Read a numeric env var, warning and falling back to `default` when it does
+/// not parse.
+fn env_number<T: std::str::FromStr>(name: &str, default: T) -> T {
+    match std::env::var(name) {
+        Ok(raw) => raw.trim().parse().unwrap_or_else(|_| {
+            eprintln!("warning: invalid {name}={raw:?}; using the default");
+            default
+        }),
+        Err(_) => default,
+    }
+}
+
+/// Read a textual env var, falling back to `default`.
+fn env_text(name: &str, default: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| default.to_owned())
+}
+
+fn options(url: &str) -> ConnectOptions {
+    let mut options = ConnectOptions::new(url.to_owned());
+    options
+        .max_connections(env_number("DATABASE_MAX_CONNECTIONS", 12))
+        .min_connections(env_number("DATABASE_MIN_CONNECTIONS", 2))
+        .acquire_timeout(Duration::from_millis(env_number(
+            "DATABASE_ACQUIRE_TIMEOUT_MS",
+            3_000,
+        )))
+        .idle_timeout(Duration::from_secs(env_number(
+            "DATABASE_IDLE_TIMEOUT_SECS",
+            300,
+        )))
+        .max_lifetime(Duration::from_secs(env_number(
+            "DATABASE_MAX_LIFETIME_SECS",
+            1_800,
+        )))
+        .sqlx_logging(false)
+        .set_application_name(env_text("DATABASE_APP_NAME", "lumi"));
+    options
+}
+
 pub async fn connect(url: &str) -> Result<DatabaseConnection> {
-    Database::connect(url).await
+    Database::connect(options(url)).await
+}
+
+/// Connect a read replica with the same pool options as [`connect`].
+pub async fn connect_read(url: &str) -> Result<DatabaseConnection> {
+    Database::connect(options(url)).await
 }
 
 pub async fn migrate(db: &DatabaseConnection) -> Result<()> {
@@ -37,40 +81,25 @@ pub fn now() -> DateTimeWithTimeZone {
 
 /// Atomically increments and returns the next value of a named per-guild counter.
 ///
-/// Implemented with the ORM inside a `FOR UPDATE` transaction — modules never write
-/// SQL themselves.
+/// A single upsert replaces the old `FOR UPDATE` transaction: Postgres either
+/// updates and returns the row, or returns nothing when the value would leave
+/// the `i64` range.
 pub async fn next_counter(db: &DatabaseConnection, guild_id: u64, name: &str) -> Result<i64> {
     let guild_id = GuildId::from(guild_id);
-    let txn = db.begin().await?;
-    let existing = counter::Entity::find()
-        .filter(counter::Column::GuildId.eq(guild_id))
-        .filter(counter::Column::Name.eq(name))
-        .lock_exclusive()
-        .one(&txn)
-        .await?;
-
-    let value = if let Some(model) = existing {
-        let next = model.value.checked_add(1).ok_or_else(|| {
-            sea_orm::DbErr::Custom(format!(
-                "counter `{name}` for guild {guild_id} overflowed i64"
-            ))
-        })?;
-        let mut active: counter::ActiveModel = model.into();
-        active.value = Set(next);
-        active.update(&txn).await?;
-        next
-    } else {
-        let active = counter::ActiveModel {
-            guild_id: Set(guild_id),
-            name: Set(name.to_owned()),
-            value: Set(1),
-        };
-        active.insert(&txn).await?;
-        1
+    let statement = Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        "INSERT INTO counters (guild_id, name, value) VALUES ($1, $2, 1) \
+         ON CONFLICT (guild_id, name) DO UPDATE SET value = counters.value + 1 \
+         WHERE counters.value < $3 \
+         RETURNING value",
+        [guild_id.into(), name.into(), i64::MAX.into()],
+    );
+    let Some(row) = db.query_one_raw(statement).await? else {
+        return Err(sea_orm::DbErr::Custom(format!(
+            "counter `{name}` for guild {guild_id} overflowed i64"
+        )));
     };
-
-    txn.commit().await?;
-    Ok(value)
+    row.try_get::<i64>("", "value")
 }
 
 /// Look up the prefix for a guild, falling back to `global_config.default_prefix`, then ",".

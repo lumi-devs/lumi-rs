@@ -514,7 +514,7 @@ pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
         .map_or_else(|| "this server".to_string(), |g| g.name.to_string());
     let caller_id = ctx.author().id.get();
 
-    let reply = leaderboard_reply(&ctx.data().db, guild_id, &guild_name, 0, caller_id).await?;
+    let reply = leaderboard_reply(ctx.data().reader(), guild_id, &guild_name, 0, caller_id).await?;
     ctx.send(reply.reply()).await?;
     Ok(())
 }
@@ -542,7 +542,7 @@ pub async fn handle_component(
     let caller_id = interaction.user.id.get();
 
     let reply =
-        leaderboard_reply(&services.db, guild_id.get(), &guild_name, page, caller_id).await?;
+        leaderboard_reply(services.reader(), guild_id.get(), &guild_name, page, caller_id).await?;
     interaction
         .create_response(
             &ctx.http,
