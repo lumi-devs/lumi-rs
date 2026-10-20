@@ -72,9 +72,9 @@ async fn main() -> Result<()> {
 async fn start_api(cfg: lumi_kernel::Config) -> Result<()> {
     let addr = format!("0.0.0.0:{}", cfg.rpc_port).parse()?;
     let token = cfg.rpc_token.clone();
-    let services = lumi::runtime::services(cfg).await?;
+    let services = lumi::runtime::services(cfg.clone()).await?;
     tracing::info!(addr = %addr, "starting HTTP/RPC API server");
-    lumi_api::serve(addr, token, services).await?;
+    lumi_api::serve(addr, token, &cfg, services).await?;
     Ok(())
 }
 
