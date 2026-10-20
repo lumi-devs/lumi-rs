@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use tokio::sync::broadcast;
+
 use futures::StreamExt;
 use moka::future::Cache as MokaCache;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
@@ -46,6 +48,86 @@ fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis() as i64)
+}
+
+/// Request coalescer to prevent cache stampedes (Thundering Herd).
+/// When multiple tasks request the same missing key, only the first
+/// executes the fetcher; others wait on the broadcast channel.
+#[derive(Default)]
+pub struct SingleFlight {
+    in_flight: Mutex<HashMap<String, broadcast::Sender<std::result::Result<Value, String>>>>,
+}
+
+impl SingleFlight {
+    /// Execute `fetcher` exactly once for `key`, sharing the result
+    /// with all concurrent callers.
+    pub async fn get_or_fetch<F, Fut>(&self, key: &str, fetcher: F) -> Result<Value>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Value>>,
+    {
+        let (rx, is_leader) = {
+            let mut map = self
+                .in_flight
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(tx) = map.get(key) {
+                (tx.subscribe(), false)
+            } else {
+                let (tx, rx) = broadcast::channel(1);
+                map.insert(key.to_string(), tx);
+                (rx, true)
+            }
+        };
+
+        if is_leader {
+            struct Guard<'a> {
+                key: &'a str,
+                sf: &'a SingleFlight,
+                active: bool,
+            }
+            impl<'a> Drop for Guard<'a> {
+                fn drop(&mut self) {
+                    if self.active {
+                        let mut map = self
+                            .sf
+                            .in_flight
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        map.remove(self.key);
+                    }
+                }
+            }
+            let mut guard = Guard {
+                key,
+                sf: self,
+                active: true,
+            };
+
+            let res = fetcher().await;
+
+            guard.active = false;
+            let mut map = self
+                .in_flight
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(tx) = map.remove(key) {
+                let to_send = match &res {
+                    Ok(v) => Ok(v.clone()),
+                    Err(e) => Err(e.to_string()),
+                };
+                let _ = tx.send(to_send);
+            }
+            res
+        } else {
+            let mut rx = rx;
+            match rx.recv().await {
+                Ok(Ok(val)) => Ok(val),
+                Ok(Err(err)) => Err(crate::Error::Other(err)),
+                Err(_) => Err(crate::Error::Other("singleflight sender dropped".into())),
+            }
+        }
+    }
 }
 
 /// Wrap `value` with an absolute expiry timestamp.
@@ -100,6 +182,7 @@ pub struct Cache {
     claims: Claims,
     client: redis::Client,
     redis: ConnectionManager,
+    singleflight: SingleFlight,
 }
 
 impl std::fmt::Debug for Cache {
@@ -128,6 +211,7 @@ impl Cache {
             claims: Claims::default(),
             client,
             redis,
+            singleflight: SingleFlight::default(),
         })
     }
 
@@ -242,6 +326,48 @@ impl Cache {
         let opts = SetOptions::default().with_expiration(SetExpiry::PX(ttl_ms));
         let _: Option<String> = conn.set_options(key, raw, opts).await?;
         Ok(())
+    }
+
+    /// Get a cached value or fetch it exactly once, sharing the result with
+    /// concurrent callers to prevent cache stampedes (Thundering Herd).
+    /// Checks local cache first, then Redis, then runs `fetcher` if missing.
+    pub async fn get_or_fetch_json<F, Fut>(
+        &self,
+        key: &str,
+        ttl: Duration,
+        fetcher: F,
+    ) -> Result<Value>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Value>>,
+    {
+        // Try local cache first
+        if let Some(v) = self.get_json_ttl(key).await? {
+            return Ok(v);
+        }
+
+        // Use singleflight to coalesce concurrent fetches
+        self.singleflight
+            .get_or_fetch(key, || async {
+                let val = fetcher().await?;
+                self.set_json_ttl(key, &val, ttl).await?;
+                Ok(val)
+            })
+            .await
+    }
+
+    /// Alias for [`Cache::get_or_fetch_json`].
+    pub async fn get_or_fetch<F, Fut>(
+        &self,
+        key: &str,
+        ttl: Duration,
+        fetcher: F,
+    ) -> Result<Value>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Value>>,
+    {
+        self.get_or_fetch_json(key, ttl, fetcher).await
     }
 
     /// Claim a short in-process cooldown slot. No Redis round trip; the slot is
@@ -397,5 +523,79 @@ mod tests {
         assert!(claims.claim("k", Duration::ZERO));
         assert!(claims.claim("k", Duration::from_secs(1)));
         assert!(!claims.claim("k", Duration::from_secs(1)));
+    }
+
+    #[tokio::test]
+    async fn singleflight_coalesces_concurrent_fetches() {
+        let sf = Arc::new(SingleFlight::default());
+        let call_count = Arc::new(Mutex::new(0));
+        let barrier = Arc::new(tokio::sync::Barrier::new(10));
+
+        let handles: Vec<_> = (0..10)
+            .map(|_| {
+                let sf = sf.clone();
+                let call_count = call_count.clone();
+                let barrier = barrier.clone();
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    sf.get_or_fetch("key", || async {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        let mut n = call_count
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        *n += 1;
+                        Ok::<Value, crate::Error>(json!({"x": *n}))
+                    })
+                    .await
+                })
+            })
+            .collect();
+
+        for h in handles {
+            let res = h.await;
+            assert!(matches!(res, Ok(Ok(_))));
+        }
+
+        let final_count = *call_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(final_count, 1, "fetcher should run exactly once");
+    }
+
+    #[tokio::test]
+    async fn singleflight_returns_error_to_all_waiters() {
+        let sf = Arc::new(SingleFlight::default());
+        let attempt = Arc::new(Mutex::new(0));
+        let barrier = Arc::new(tokio::sync::Barrier::new(5));
+
+        let handles: Vec<_> = (0..5)
+            .map(|_| {
+                let sf = sf.clone();
+                let attempt = attempt.clone();
+                let barrier = barrier.clone();
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    sf.get_or_fetch("key", || async {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        let mut n = attempt
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        *n += 1;
+                        Err::<Value, crate::Error>(crate::Error::Other("fail".into()))
+                    })
+                    .await
+                })
+            })
+            .collect();
+
+        for h in handles {
+            let res = h.await;
+            assert!(matches!(res, Ok(Err(_))));
+        }
+
+        let final_attempts = *attempt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(final_attempts, 1, "fetcher should run exactly once even on error");
     }
 }
