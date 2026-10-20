@@ -263,6 +263,7 @@ async fn dispatch_ext(
             Some("set") => Ok(HubOutcome::Modal(settings::prefix_modal())),
             Some("reset") => {
                 lumi_db::reset_prefix(&services.db, guild.id).await?;
+                lumi_kernel::prefix::invalidate(&services.cache, guild.id).await?;
                 Ok(HubOutcome::Update(
                     settings::card(services, guild, user_id).await?,
                 ))
@@ -590,11 +591,9 @@ mod tests {
             lumi_cmd.default_member_permissions.is_empty(),
             "default_member_permissions must be empty so Discord shows /lumi panel to all users including bot owners"
         );
-        let panel_sub = lumi_cmd
-            .subcommands
-            .iter()
-            .find(|s| s.name == "panel")
-            .expect("panel subcommand under lumi");
+        let Some(panel_sub) = lumi_cmd.subcommands.iter().find(|s| s.name == "panel") else {
+            panic!("panel subcommand under lumi");
+        };
         assert_eq!(panel_sub.name, "panel");
     }
 }

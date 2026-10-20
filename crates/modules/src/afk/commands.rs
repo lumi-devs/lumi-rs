@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use chrono::Utc;
 use poise::serenity_prelude as serenity;
 use serenity::all::EditMember;
@@ -9,10 +11,7 @@ use crate::shared::format_seconds;
 
 use super::cards;
 use super::config;
-use super::constants::{
-    MAX_NICKNAME, NICK_COOLDOWN_MS, NICK_PREFIX, REMOVAL_COOLDOWN_MS, nick_cooldown_key,
-    removal_cooldown_key,
-};
+use super::constants::{MAX_NICKNAME, NICK_COOLDOWN_MS, NICK_PREFIX};
 use super::data;
 
 #[poise::command(slash_command, prefix_command)]
@@ -29,15 +28,14 @@ pub async fn afk(
 
     let reason = data::sanitize_reason(reason.as_deref().unwrap_or("AFK"));
     let existing = data::get(&ctx.data().db, gid, user_id.get()).await?;
-    data::set(&ctx.data().db, gid, user_id.get(), &reason).await?;
-
-    ctx.data()
-        .cache
-        .claim_cooldown(
-            &removal_cooldown_key(gid, user_id.get()),
-            REMOVAL_COOLDOWN_MS,
-        )
-        .await?;
+    data::set(
+        &ctx.data().cache,
+        &ctx.data().db,
+        gid,
+        user_id.get(),
+        &reason,
+    )
+    .await?;
 
     if existing.is_none() {
         apply_nick_prefix(ctx, guild_id, user_id).await?;
@@ -67,7 +65,7 @@ async fn apply_nick_prefix(
     guild_id: serenity::GuildId,
     user_id: serenity::UserId,
 ) -> Result<(), Error> {
-    if !config::nick_prefix_enabled(&ctx.data().db, guild_id.get()).await? {
+    if !config::nick_prefix_enabled(&ctx.data().cache, &ctx.data().db, guild_id.get()).await? {
         return Ok(());
     }
     let Some(member) = ctx.author_member().await else {
@@ -77,12 +75,12 @@ async fn apply_nick_prefix(
     if name.starts_with(NICK_PREFIX) {
         return Ok(());
     }
-    let claimed = ctx
+    let key = format!("afk:nick:{}", user_id.get());
+    if !ctx
         .data()
         .cache
-        .claim_cooldown(&nick_cooldown_key(user_id.get()), NICK_COOLDOWN_MS)
-        .await?;
-    if !claimed {
+        .claim_local(&key, Duration::from_millis(NICK_COOLDOWN_MS))
+    {
         return Ok(());
     }
     let nick = crate::shared::truncate_chars(&format!("{NICK_PREFIX}{name}"), MAX_NICKNAME);

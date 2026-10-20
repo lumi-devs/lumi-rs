@@ -6,7 +6,7 @@ use super::{GuildCtx, HubView, tab_row};
 
 /// The hub landing card.
 pub async fn card(services: &Services, guild: &GuildCtx) -> Result<CardReply, Error> {
-    let prefix = lumi_db::get_prefix(&services.db, Some(guild.id))
+    let prefix = lumi_kernel::prefix::get(&services.cache, &services.db, guild.id)
         .await
         .unwrap_or_else(|_| ",".to_string());
     let rows =

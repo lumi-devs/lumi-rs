@@ -6,6 +6,7 @@ pub mod error;
 pub mod module;
 pub mod module_state;
 pub mod permits;
+pub mod prefix;
 pub mod scheduler;
 pub mod security;
 pub mod services;

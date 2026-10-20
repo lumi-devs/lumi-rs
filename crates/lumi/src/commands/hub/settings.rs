@@ -17,7 +17,7 @@ pub async fn card(
     guild: &GuildCtx,
     _user_id: u64,
 ) -> Result<CardReply, Error> {
-    let prefix = lumi_db::get_prefix(&services.db, Some(guild.id))
+    let prefix = lumi_kernel::prefix::get(&services.cache, &services.db, guild.id)
         .await
         .unwrap_or_else(|_| ",".to_string());
     let is_default = prefix == ",";
@@ -88,6 +88,7 @@ pub async fn handle_prefix_modal(
         ));
     }
     lumi_db::set_prefix(&services.db, guild.id, prefix).await?;
+    lumi_kernel::prefix::invalidate(&services.cache, guild.id).await?;
     let card = card(services, guild, modal.user.id.get()).await?;
     Ok(HubOutcome::Update(card))
 }
