@@ -44,6 +44,9 @@ pub struct Config {
     /// Inclusive slice of the fleet this host runs, from `SHARD_RANGE`.
     #[serde(default)]
     pub shard_range: Option<ShardRange>,
+    /// Whether to request privileged `GUILD_MEMBERS` gateway intent. Defaults to false.
+    #[serde(default)]
+    pub intents_guild_members: bool,
 }
 
 fn default_redis_url() -> String {
@@ -119,6 +122,10 @@ impl Config {
             }
         }
 
+        let intents_guild_members = std::env::var("INTENTS_GUILD_MEMBERS")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+
         let cfg = Self {
             role: Role::All,
             token,
@@ -130,6 +137,7 @@ impl Config {
             custom_dir,
             shard_count,
             shard_range,
+            intents_guild_members,
         };
         cfg.validate()?;
         Ok(cfg)

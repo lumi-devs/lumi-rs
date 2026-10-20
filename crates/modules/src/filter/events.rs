@@ -81,6 +81,24 @@ fn is_exempt(ctx: &serenity::Context, message: &Message, rules: &FilterRules) ->
         return false;
     };
     ctx.cache.guild(guild_id).is_some_and(|guild| {
+        if guild.owner_id == message.author.id {
+            return true;
+        }
+        if let Some(member) = message.member.as_deref() {
+            if let Some(perms) = member.permissions {
+                return perms.contains(Permissions::MANAGE_MESSAGES) || perms.administrator();
+            }
+            let mut perms = guild
+                .roles
+                .get(&guild_id.everyone_role())
+                .map_or(Permissions::empty(), |r| r.permissions);
+            for role_id in &member.roles {
+                if let Some(role) = guild.roles.get(role_id) {
+                    perms |= role.permissions;
+                }
+            }
+            return perms.contains(Permissions::MANAGE_MESSAGES) || perms.administrator();
+        }
         guild.members.get(&message.author.id).is_some_and(|member| {
             guild
                 .member_permissions(member)

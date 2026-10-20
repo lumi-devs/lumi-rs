@@ -28,9 +28,13 @@ fn command_check(ctx: Context<'_>) -> poise::BoxFuture<'_, Result<bool, Error>> 
             return Ok(true);
         };
 
+        let author_member = ctx.author_member().await;
         let (is_guild_owner, is_manager, role_ids) = if let Some(guild) = ctx.guild() {
             let is_guild_owner = guild.owner_id == author_id;
-            let (is_manager, role_ids) = if let Some(member) = guild.members.get(&author_id) {
+            let member_ref = author_member
+                .as_deref()
+                .or_else(|| guild.members.get(&author_id));
+            let (is_manager, role_ids) = if let Some(member) = member_ref {
                 let perms = guild.member_permissions(member);
                 let is_manager = perms.contains(serenity::all::Permissions::ADMINISTRATOR)
                     || perms.contains(serenity::all::Permissions::MANAGE_GUILD);
@@ -178,13 +182,20 @@ pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
         ..Default::default()
     });
 
-    let intents = serenity::GatewayIntents::non_privileged()
-        | serenity::GatewayIntents::MESSAGE_CONTENT
-        | serenity::GatewayIntents::GUILD_MEMBERS;
+    let mut intents = serenity::GatewayIntents::non_privileged()
+        | serenity::GatewayIntents::MESSAGE_CONTENT;
+    if services.cfg.intents_guild_members {
+        intents |= serenity::GatewayIntents::GUILD_MEMBERS;
+    }
+
+    let mut cache_settings = serenity::cache::Settings::default();
+    cache_settings.max_messages = 0;
+    cache_settings.cache_users = false;
 
     let token: serenity::Token = services.cfg.token.parse()?;
 
     let client = serenity::ClientBuilder::new(token, intents)
+        .cache_settings(cache_settings)
         .data(crate::runtime::client_data(services))
         .framework(Box::new(framework))
         .event_handler(Arc::new(crate::events::Events))
