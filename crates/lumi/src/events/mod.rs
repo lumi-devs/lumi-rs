@@ -1,9 +1,26 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use poise::serenity_prelude as serenity;
+
+pub mod dispatcher;
+pub use dispatcher::{DispatchedEvent, EventDispatcher};
+
+static DISPATCHER: OnceLock<EventDispatcher> = OnceLock::new();
+
+fn get_or_init_dispatcher(
+    ctx: &serenity::Context,
+    services: &lumi_kernel::bot::Data,
+) -> &'static EventDispatcher {
+    DISPATCHER.get_or_init(|| {
+        EventDispatcher::new(
+            ctx.clone(),
+            Arc::clone(services),
+        )
+    })
+}
 
 /// Global commands were stale once we moved to guild-only sync; clearing them
 /// costs a REST call, so do it at most once per process boot, from one shard.
@@ -121,23 +138,8 @@ impl serenity::EventHandler for Events {
             }
             serenity::FullEvent::Message { new_message, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
-                if lumi_modules::filter::events::on_message(ctx, services.as_ref(), new_message)
-                    .await
-                {
-                    return;
-                }
-
-                if let Err(error) =
-                    lumi_modules::afk::on_message(ctx, services.as_ref(), new_message).await
-                {
-                    tracing::warn!(%error, "afk message handler failed");
-                }
-
-                if let Err(error) =
-                    lumi_modules::leveling::on_message(ctx, services.as_ref(), new_message).await
-                {
-                    tracing::warn!(%error, "leveling message handler failed");
-                }
+                let dispatcher = get_or_init_dispatcher(ctx, services.as_ref());
+                dispatcher.dispatch(DispatchedEvent::Message(Box::new(new_message.clone())));
             }
             serenity::FullEvent::MessageDelete {
                 channel_id,
@@ -146,62 +148,45 @@ impl serenity::EventHandler for Events {
                 ..
             } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
-                if let Err(error) = lumi_modules::logging::events::on_message_delete(
-                    ctx,
-                    services.as_ref(),
-                    *channel_id,
-                    *deleted_message_id,
-                    *guild_id,
-                )
-                .await
-                {
-                    tracing::warn!(%error, "logging message delete failed");
-                }
+                let dispatcher = get_or_init_dispatcher(ctx, services.as_ref());
+                dispatcher.dispatch(DispatchedEvent::MessageDelete {
+                    channel_id: *channel_id,
+                    message_id: *deleted_message_id,
+                    guild_id: *guild_id,
+                });
             }
             serenity::FullEvent::MessageUpdate {
-                old_if_available,
                 event,
                 ..
             } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
-                if lumi_modules::filter::events::on_message_update(ctx, services.as_ref(), event)
-                    .await
-                {
-                    return;
-                }
-
-                if let Err(error) = lumi_modules::logging::events::on_message_update(
-                    ctx,
-                    services.as_ref(),
-                    old_if_available.clone(),
-                    event.clone(),
-                )
-                .await
-                {
-                    tracing::warn!(%error, "logging message update failed");
-                }
+                let dispatcher = get_or_init_dispatcher(ctx, services.as_ref());
+                dispatcher.dispatch(DispatchedEvent::MessageUpdate {
+                    event: Box::new(event.clone()),
+                });
             }
             serenity::FullEvent::GuildMemberAddition { new_member, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
-                if let Err(error) =
-                    lumi_modules::logging::events::on_member_add(ctx, services.as_ref(), new_member)
-                        .await
-                {
-                    tracing::warn!(%error, "logging member add failed");
-                }
+                let dispatcher = get_or_init_dispatcher(ctx, services.as_ref());
+                dispatcher.dispatch(DispatchedEvent::MemberAddition {
+                    member: Box::new(new_member.clone()),
+                });
             }
-            serenity::FullEvent::GuildMemberRemoval { guild_id, user, .. } => {
+            serenity::FullEvent::GuildMemberRemoval {
+                guild_id,
+                user,
+                member_data_if_available,
+                ..
+            } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
-                if let Err(error) = lumi_modules::logging::events::on_member_remove(
-                    ctx,
-                    services.as_ref(),
-                    *guild_id,
-                    user,
-                )
-                .await
-                {
-                    tracing::warn!(%error, "logging member remove failed");
-                }
+                let dispatcher = get_or_init_dispatcher(ctx, services.as_ref());
+                dispatcher.dispatch(DispatchedEvent::MemberRemoval {
+                    guild_id: *guild_id,
+                    user: user.clone(),
+                    member_data_if_available: member_data_if_available
+                        .as_ref()
+                        .map(|m| Box::new(m.clone())),
+                });
             }
             serenity::FullEvent::GuildMemberUpdate {
                 old_if_available,
@@ -303,16 +288,11 @@ impl serenity::EventHandler for Events {
                 entry, guild_id, ..
             } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
-                if let Err(error) = lumi_modules::security::events::on_audit_log_entry(
-                    ctx,
-                    services.as_ref(),
-                    entry,
-                    *guild_id,
-                )
-                .await
-                {
-                    tracing::warn!(%error, "security audit log handler failed");
-                }
+                let dispatcher = get_or_init_dispatcher(ctx, services.as_ref());
+                dispatcher.dispatch(DispatchedEvent::AuditLogEntry {
+                    entry: Box::new(entry.clone()),
+                    guild_id: *guild_id,
+                });
             }
             serenity::FullEvent::VoiceStateUpdate { old, new, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
