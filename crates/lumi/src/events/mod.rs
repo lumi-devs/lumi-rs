@@ -1,6 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use poise::serenity_prelude as serenity;
@@ -12,12 +12,12 @@ static DISPATCHER: OnceLock<EventDispatcher> = OnceLock::new();
 
 fn get_or_init_dispatcher(
     ctx: &serenity::Context,
-    _services: &lumi_kernel::Services,
+    services: &lumi_kernel::bot::Data,
 ) -> &'static EventDispatcher {
     DISPATCHER.get_or_init(|| {
         EventDispatcher::new(
             ctx.clone(),
-            ctx.data::<lumi_kernel::bot::Data>(),
+            Arc::clone(services),
         )
     })
 }

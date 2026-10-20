@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 pub enum DispatchedEvent {
     Message(Box<serenity::Message>),
     MessageDelete {
-        channel_id: serenity::ChannelId,
+        channel_id: serenity::GenericChannelId,
         message_id: serenity::MessageId,
         guild_id: Option<serenity::GuildId>,
     },
@@ -105,7 +105,7 @@ async fn process_event(
             if let Err(error) = lumi_modules::logging::events::on_message_delete(
                 ctx,
                 services,
-                serenity::GenericChannelId::new(channel_id.get()),
+                channel_id,
                 message_id,
                 guild_id,
             )
