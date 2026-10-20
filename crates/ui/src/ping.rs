@@ -85,6 +85,8 @@ pub struct PingData {
     pub channels: u64,
     pub os_uptime_secs: u64,
     pub avatar_url: String,
+    /// Unix seconds when this snapshot was collected.
+    pub collected_at: u64,
 }
 
 fn fmt_ms(ms: Option<f64>) -> String {
@@ -188,13 +190,14 @@ fn shard_pager(
     page: usize,
     total_pages: usize,
 ) -> CreateActionRow<'static> {
-    let mut previous = CreateButton::new(format!("{prefix}:p_-1:{user_id}"))
-        .style(ButtonStyle::Secondary)
-        .disabled(page == 0);
+    let mut previous =
+        CreateButton::new(format!("{prefix}:p:{}:{user_id}", page.saturating_sub(1)))
+            .style(ButtonStyle::Secondary)
+            .disabled(page == 0);
     if let Some(emoji) = component_emoji("\u{25c0}\u{fe0f}") {
         previous = previous.emoji(emoji);
     }
-    let mut next = CreateButton::new(format!("{prefix}:p_1:{user_id}"))
+    let mut next = CreateButton::new(format!("{prefix}:n:{}:{user_id}", page.saturating_add(1)))
         .style(ButtonStyle::Secondary)
         .disabled(page + 1 >= total_pages);
     if let Some(emoji) = component_emoji("\u{25b6}\u{fe0f}") {
@@ -213,9 +216,12 @@ pub fn build_overview_card(data: &PingData, user_id: u64, page: usize, prefix: &
     let shards = effective_shards(data);
     let total_pages = shard_page_count(data);
     let page = page.min(total_pages - 1);
-
+    let updated = data.collected_at;
     let mut container = Container::new()
-        .text(format!("__## {} Status:__", data.bot_name))
+        .text(format!(
+            "__## {} Status:__\n-# Updated <t:{updated}:R>",
+            data.bot_name
+        ))
         .separator(true, SeparatorSpacingSize::Small);
 
     for shard in shards
@@ -318,7 +324,8 @@ mod tests {
         let card = build_overview_card(&two_shards(), 7, 0, "ping");
         assert!(card.ephemeral);
         let texts = texts(&card);
-        assert_eq!(texts[0], "__## Lumi Status:__");
+        assert!(texts[0].starts_with("__## Lumi Status:__\n-# Updated <t:"));
+        assert!(texts[0].ends_with(":R>"));
         assert_eq!(
             texts[1],
             "__🟢 **Shard [0]:** __\n\
@@ -367,10 +374,27 @@ mod tests {
             .iter()
             .filter_map(|button| button["custom_id"].as_str())
             .collect();
-        assert_eq!(ids, ["ping:p_-1:7", "ping:close:7", "ping:p_1:7"]);
+        assert_eq!(ids, ["ping:p:0:7", "ping:close:7", "ping:n:1:7"]);
         assert_eq!(buttons[0]["disabled"], true);
-        assert_eq!(buttons[2]["disabled"], false);
         assert_eq!(buttons[1]["style"], 4);
+        assert_eq!(buttons[2]["disabled"], false);
+    }
+
+    #[test]
+    fn custom_ids_fit_discords_limit() {
+        let card = build_overview_card(&two_shards(), u64::MAX, 99, "ping");
+        let Ok(json) = serde_json::to_value(&card.components[0]) else {
+            panic!("card serializes");
+        };
+        let ids = json["components"]
+            .as_array()
+            .and_then(|children| children.iter().find(|child| child["type"] == 1))
+            .and_then(|row| row["components"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        for id in ids.iter().filter_map(|button| button["custom_id"].as_str()) {
+            assert!(id.len() <= 100, "{id} is too long");
+        }
     }
 
     #[test]
