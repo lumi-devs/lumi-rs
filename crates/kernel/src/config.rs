@@ -47,6 +47,8 @@ pub struct Config {
     /// Whether to request privileged `GUILD_MEMBERS` gateway intent. Defaults to false.
     #[serde(default)]
     pub intents_guild_members: bool,
+    /// Discord application public key (Ed25519) for verifying HTTP interactions.
+    pub discord_public_key: Option<String>,
 }
 
 fn default_redis_url() -> String {
@@ -126,6 +128,8 @@ impl Config {
             .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
             .unwrap_or(false);
 
+        let discord_public_key = std::env::var("DISCORD_PUBLIC_KEY").ok();
+
         let cfg = Self {
             role: Role::All,
             token,
@@ -138,6 +142,7 @@ impl Config {
             shard_count,
             shard_range,
             intents_guild_members,
+            discord_public_key,
         };
         cfg.validate()?;
         Ok(cfg)

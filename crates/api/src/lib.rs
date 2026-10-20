@@ -15,8 +15,10 @@ use serde_json::{Value, json};
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 
-use lumi_kernel::Result;
+use lumi_kernel::{Config, Result};
 use lumi_kernel::services::Services;
+
+mod interactions;
 
 static PROMETHEUS: LazyLock<Option<PrometheusHandle>> =
     LazyLock::new(|| match PrometheusBuilder::new().install_recorder() {
@@ -59,7 +61,7 @@ pub struct ActionResponse {
 
 /// Serve the RPC surface on `addr`. `token` is the expected bearer token;
 /// `None` leaves `/action` unauthenticated (loopback/dev only).
-pub async fn serve(addr: SocketAddr, token: Option<String>, services: Arc<Services>) -> Result<()> {
+pub async fn serve(addr: SocketAddr, token: Option<String>, config: &Config, services: Arc<Services>) -> Result<()> {
     let state = RpcState { token, services };
 
     let governor_conf = GovernorConfigBuilder::default()
@@ -68,13 +70,18 @@ pub async fn serve(addr: SocketAddr, token: Option<String>, services: Arc<Servic
         .finish()
         .unwrap_or_default();
 
-    let app = Router::new()
+    let interactions_router = interactions::router(config);
+
+    let api_routes = Router::new()
         .route("/action", post(action))
         .route_layer(GovernorLayer::new(governor_conf))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics))
-        .with_state(state)
+        .with_state(state);
+
+    let app = api_routes
+        .merge(interactions_router)
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
