@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
-use lumi_kernel::module_state;
+use lumi_kernel::{module_state, Cache};
 
 use crate::config;
 
@@ -180,17 +180,21 @@ fn is_invisible(ch: char) -> bool {
 
 /// Load the guild's filter rules, reading config once per call and reusing the
 /// compiled set while the stored config is unchanged (hash-keyed).
-pub async fn rules_for(db: &DatabaseConnection, guild_id: u64) -> Arc<FilterRules> {
-    let map = module_state::get_config(db, guild_id, MODULE).await;
+pub async fn rules_for(
+    kernel_cache: &Cache,
+    db: &DatabaseConnection,
+    guild_id: u64,
+) -> Arc<FilterRules> {
+    let map = module_state::config_cached(kernel_cache, db, guild_id, MODULE).await;
     let key = format!("{guild_id}:{:x}", map_hash(&map));
     if let Some(rules) = cache().get(&key).await {
         return rules;
     }
+
     let rules = Arc::new(FilterRules::from_map(&map));
     cache().insert(key, Arc::clone(&rules)).await;
     rules
 }
-
 fn cache() -> &'static MokaCache<String, Arc<FilterRules>> {
     static CACHE: OnceLock<MokaCache<String, Arc<FilterRules>>> = OnceLock::new();
     CACHE.get_or_init(|| {

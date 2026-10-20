@@ -4,11 +4,10 @@ use sea_orm::DatabaseConnection;
 use serde_json::{Map, Value};
 
 use lumi_db::entities::{enums::CaseAction, moderation_case};
-use lumi_kernel::module_state;
+use lumi_kernel::{Cache, Result, Services, module_state};
 use lumi_kernel::security::{
     AntiNukeConfig, AntiNukeResponse, DEFAULT_WINDOW_SECS, DestructiveActionKind,
 };
-use lumi_kernel::{Result, Services};
 
 use crate::config;
 
@@ -34,10 +33,11 @@ fn response(map: &Map<String, Value>, key: &str) -> AntiNukeResponse {
 /// Build the anti-nuke config from guild config. `enabled` defaults to `false`
 /// so an unconfigured guild is never enforced with empty settings.
 pub async fn anti_nuke_settings(
+    cache: &Cache,
     db: &DatabaseConnection,
     guild_id: u64,
 ) -> Result<AntiNukeSettings> {
-    let map = module_state::get_config(db, guild_id, MODULE).await;
+    let map = module_state::config_cached(cache, db, guild_id, MODULE).await;
 
     let mut limits = HashMap::new();
     let mut responses = HashMap::new();
@@ -116,7 +116,7 @@ pub async fn panic_locks_commands(services: &Services, guild_id: u64) -> bool {
     {
         return false;
     }
-    let map = module_state::get_config(&services.db, guild_id, MODULE).await;
+    let map = module_state::config_cached(&services.cache, &services.db, guild_id, MODULE).await;
     config::boolean(&map, "panic_lock_mod_commands", true)
 }
 

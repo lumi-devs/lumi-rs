@@ -14,9 +14,11 @@ use sea_orm::entity::prelude::ChronoUtc;
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde_json::{Map, Value};
+use std::time::Duration;
 
 use lumi_db::entities::{global_module_state, guild_module_config, guild_module_state};
 
+use crate::cache::Cache;
 use crate::module::{ConfigField, ConfigFieldKind, ModuleRegistry};
 use crate::{LumiError, Result};
 
@@ -173,6 +175,43 @@ pub async fn get_config(
     }
 }
 
+/// Fetch per-guild module config from cache (TTL 60s) with fallback to DB.
+pub async fn config_cached(
+    cache: &Cache,
+    db: &DatabaseConnection,
+    guild_id: u64,
+    module: &str,
+) -> Map<String, Value> {
+    let key = format!("lumi:cfg:{module}:{guild_id}");
+    if let Ok(Some(value)) = cache.get_json_ttl(&key).await {
+        if let Value::Object(map) = value {
+            return map;
+        }
+    }
+    let config = get_config(db, guild_id, module).await;
+    let _ = cache.set_json_ttl(&key, &Value::Object(config.clone()), Duration::from_secs(60)).await;
+    config
+}
+
+/// Invalidate guild config entry in cache.
+pub async fn invalidate_config(cache: &Cache, guild_id: u64, module: &str) -> Result<()> {
+    let key = format!("lumi:cfg:{module}:{guild_id}");
+    cache.invalidate(&key).await?;
+    Ok(())
+}
+
+/// Fetch single config value with caching.
+pub async fn config_cached_value(
+    cache: &Cache,
+    db: &DatabaseConnection,
+    guild_id: u64,
+    module: &str,
+    key: &str,
+) -> Option<Value> {
+    let config = config_cached(cache, db, guild_id, module).await;
+    config.get(key).cloned()
+}
+
 /// A single stored config value for a guild + module, or `None` if unset.
 /// Use this for one-off reads; [`get_config`] loads every key at once.
 pub async fn config_value(
@@ -280,6 +319,46 @@ pub async fn clear_config(db: &DatabaseConnection, guild_id: u64, module: &str) 
         .exec(db)
         .await?;
     Ok(result.rows_affected)
+}
+
+/// Cached version of `set_config_field` that also invalidates the cache.
+pub async fn set_config_field_cached(
+    cache: &Cache,
+    db: &DatabaseConnection,
+    guild_id: u64,
+    module: &str,
+    key: &str,
+    value: Value,
+) -> Result<()> {
+    set_config_field(db, guild_id, module, key, value).await?;
+    invalidate_config(cache, guild_id, module).await?;
+    Ok(())
+}
+
+/// Cached version of `set_config_value` that also invalidates the cache.
+pub async fn set_config_value_cached(
+    cache: &Cache,
+    db: &DatabaseConnection,
+    guild_id: u64,
+    module: &str,
+    key: &str,
+    raw: &str,
+    kind: &ConfigFieldKind,
+) -> Result<()> {
+    let value = coerce_value(raw, kind)?;
+    set_config_field_cached(cache, db, guild_id, module, key, value).await
+}
+
+/// Cached version of `clear_config` that also invalidates the cache.
+pub async fn clear_config_cached(
+    cache: &Cache,
+    db: &DatabaseConnection,
+    guild_id: u64,
+    module: &str,
+) -> Result<u64> {
+    let result = clear_config(db, guild_id, module).await?;
+    invalidate_config(cache, guild_id, module).await?;
+    Ok(result)
 }
 
 /// Render a config value the way the dashboard does (mentions, glyphs, codes).

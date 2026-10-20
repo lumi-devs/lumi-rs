@@ -423,7 +423,7 @@ pub async fn check_heat(
                 rules.heat_quarantine
             );
             if let Ok(Some(quarantine_role)) =
-                crate::moderation::store::quarantine_role(&services.db, guild_id.get()).await
+                crate::moderation::store::quarantine_role(&services.cache, &services.db, guild_id.get()).await
             {
                 let _ = guild_id
                     .edit_member(

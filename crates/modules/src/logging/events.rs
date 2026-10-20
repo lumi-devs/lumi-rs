@@ -37,6 +37,7 @@ async fn emit(
     entry: Entry<'_>,
 ) -> Result<()> {
     if let Some(channel) = store::target(
+        &services.cache,
         &services.db,
         guild_id,
         entry.toggle,
@@ -90,7 +91,7 @@ pub async fn on_message_delete(
         return Ok(());
     };
     let guild = guild_id.get();
-    if store::is_ignored_channel(&services.db, guild, channel_id.get()).await? {
+    if store::is_ignored_channel(&services.cache, &services.db, guild, channel_id.get()).await? {
         return Ok(());
     }
     emit(
@@ -126,7 +127,7 @@ pub async fn on_message_update(
         return Ok(());
     }
     let guild = guild_id.get();
-    if store::is_ignored_channel(&services.db, guild, new.channel_id.get()).await? {
+    if store::is_ignored_channel(&services.cache, &services.db, guild, new.channel_id.get()).await? {
         return Ok(());
     }
     let before = old

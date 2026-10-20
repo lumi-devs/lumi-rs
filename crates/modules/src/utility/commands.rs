@@ -118,8 +118,9 @@ async fn media_request(
     let guild_id = require_guild(ctx)?.get();
 
     let cooldown_seconds =
-        module_state::config_u64(&ctx.data().db, guild_id, "utility", "cooldown_seconds")
-            .await?
+        module_state::config_cached_value(&ctx.data().cache, &ctx.data().db, guild_id, "utility", "cooldown_seconds")
+            .await
+            .and_then(|v| module_state::parse_id(&v))
             .unwrap_or(10);
     let key = cooldown_key("media", guild_id, ctx.author().id.get());
     if let Some(remaining) = claim_cooldown(
