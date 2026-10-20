@@ -22,11 +22,7 @@ impl MigrationTrait for Migration {
                     JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE c.relname = 'level_accounts' AND n.nspname = 'public' AND c.relkind = 'p'
                 ) THEN
-                    RAISE NOTICE 'level_accounts is not partitioned. To partition:';
-                    RAISE NOTICE '  1. CREATE TABLE level_accounts_part (LIKE level_accounts INCLUDING ALL) PARTITION BY HASH (guild_id);';
-                    RAISE NOTICE '  2. CREATE 32 partitions: FOR i IN 0..31 LOOP EXECUTE format(''CREATE TABLE level_accounts_p%s PARTITION OF level_accounts_part FOR VALUES WITH (MODULUS 32, REMAINDER %s)'', i, i); END LOOP;';
-                    RAISE NOTICE '  3. INSERT INTO level_accounts_part SELECT * FROM level_accounts;';
-                    RAISE NOTICE '  4. DROP TABLE level_accounts; ALTER TABLE level_accounts_part RENAME TO level_accounts;';
+                    RAISE NOTICE 'level_accounts is unpartitioned. Ready for maintenance-window hash partition.';
                 ELSE
                     RAISE NOTICE 'level_accounts is already partitioned.';
                 END IF;
@@ -41,11 +37,7 @@ impl MigrationTrait for Migration {
                     JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE c.relname = 'economy_accounts' AND n.nspname = 'public' AND c.relkind = 'p'
                 ) THEN
-                    RAISE NOTICE 'economy_accounts is not partitioned. To partition:';
-                    RAISE NOTICE '  1. CREATE TABLE economy_accounts_part (LIKE economy_accounts INCLUDING ALL) PARTITION BY HASH (guild_id);';
-                    RAISE NOTICE '  2. CREATE 32 partitions: FOR i IN 0..31 LOOP EXECUTE format(''CREATE TABLE economy_accounts_p%s PARTITION OF economy_accounts_part FOR VALUES WITH (MODULUS 32, REMAINDER %s)'', i, i); END LOOP;';
-                    RAISE NOTICE '  3. INSERT INTO economy_accounts_part SELECT * FROM economy_accounts;';
-                    RAISE NOTICE '  4. DROP TABLE economy_accounts; ALTER TABLE economy_accounts_part RENAME TO economy_accounts;';
+                    RAISE NOTICE 'economy_accounts is unpartitioned. Ready for maintenance-window hash partition.';
                 ELSE
                     RAISE NOTICE 'economy_accounts is already partitioned.';
                 END IF;
@@ -54,7 +46,7 @@ impl MigrationTrait for Migration {
 
         conn.execute_unprepared(
             "CREATE INDEX IF NOT EXISTS idx_level_accounts_part_guild_xp
-             ON level_accounts (guild_id, xp DESC) WHERE level_accounts IS NOT NULL;",
+             ON level_accounts (guild_id, xp DESC);",
         )
         .await?;
 
