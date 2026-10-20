@@ -4,6 +4,7 @@
 pub mod enforce;
 pub mod events;
 pub mod heat;
+pub mod state;
 pub mod store;
 
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};

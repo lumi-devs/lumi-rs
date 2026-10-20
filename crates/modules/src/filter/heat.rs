@@ -76,53 +76,17 @@ fn now_millis() -> u64 {
 }
 
 pub async fn add_heat(
-    services: &Services,
+    _services: &Services,
     guild_id: u64,
     user_id: u64,
     points: f64,
     decay_per_minute: f64,
 ) -> Result<f64, redis::RedisError> {
-    let mut conn = services.cache.redis();
-    let key = format!("lumi:filter:{guild_id}:heat:{user_id}");
-    let now = now_millis();
-
-    let (stored_h, stored_t): (Option<f64>, Option<u64>) = redis::pipe()
-        .hget(&key, "h")
-        .hget(&key, "t")
-        .query_async(&mut conn)
-        .await?;
-
-    let h = stored_h.unwrap_or(0.0);
-    let t = stored_t.unwrap_or(now);
-
-    let decayed = if decay_per_minute > 0.0 {
-        let minutes = (now.saturating_sub(t) as f64) / 60_000.0;
-        (h - minutes * decay_per_minute).max(0.0)
-    } else {
-        h.max(0.0)
-    };
-
-    let nxt = decayed + points;
-    let ttl_secs = if decay_per_minute > 0.0 {
-        ((nxt / decay_per_minute) * 60.0).ceil() as u64 + 60
-    } else {
-        3600
-    };
-
-    let _: () = redis::pipe()
-        .hset(&key, "h", nxt)
-        .hset(&key, "t", now)
-        .expire(&key, ttl_secs.max(60) as i64)
-        .query_async(&mut conn)
-        .await?;
-
-    Ok(nxt)
+    Ok(super::state::add_heat(guild_id, user_id, points, decay_per_minute))
 }
 
-pub async fn clear_heat(services: &Services, guild_id: u64, user_id: u64) {
-    let mut conn = services.cache.redis();
-    let key = format!("lumi:filter:{guild_id}:heat:{user_id}");
-    let _: Result<(), _> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
+pub async fn clear_heat(_services: &Services, guild_id: u64, user_id: u64) {
+    super::state::reset_heat(guild_id, user_id);
 }
 
 pub async fn claim_escalation(
@@ -131,44 +95,17 @@ pub async fn claim_escalation(
     user_id: u64,
     action: &'static str,
 ) -> bool {
-    let mut conn = services.cache.redis();
-    let key = format!("lumi:filter:{guild_id}:heatacted:{user_id}:{action}");
-    let res: Option<String> = redis::cmd("SET")
-        .arg(&key)
-        .arg("1")
-        .arg("EX")
-        .arg(30)
-        .arg("NX")
-        .query_async(&mut conn)
-        .await
-        .ok();
-    res.as_deref() == Some("OK")
+    let key = format!("filter:escalation:{guild_id}:{user_id}:{action}");
+    services.cache.claim_local(&key, std::time::Duration::from_secs(30))
 }
 
 pub async fn record_mentions(
-    services: &Services,
+    _services: &Services,
     guild_id: u64,
     count: u64,
     window_seconds: u64,
 ) -> Result<u64, redis::RedisError> {
-    let mut conn = services.cache.redis();
-    let key = format!("lumi:filter:{guild_id}:mentions");
-    let total: u64 = redis::cmd("INCRBY")
-        .arg(&key)
-        .arg(count)
-        .query_async(&mut conn)
-        .await?;
-    let _: Result<(), _> = redis::cmd("EXPIRE")
-        .arg(&key)
-        .arg(if window_seconds > 0 {
-            window_seconds
-        } else {
-            10
-        })
-        .arg("NX")
-        .query_async(&mut conn)
-        .await;
-    Ok(total)
+    Ok(super::state::record_mentions(guild_id, count, window_seconds))
 }
 
 pub async fn activate_auto_lockdown(
