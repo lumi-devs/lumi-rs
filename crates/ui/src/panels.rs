@@ -2,8 +2,8 @@
 //! Ported from lumi's `src/lib/ui/Panels.ts`.
 
 use serenity::all::{
-    ButtonStyle, ChannelType, CreateActionRow, CreateButton, CreateSelectMenu, CreateSelectMenuKind,
-    CreateSelectMenuOption, CreateSection, CreateSectionAccessory, CreateSectionComponent,
+    ButtonStyle, ChannelType, CreateActionRow, CreateButton, CreateSection, CreateSectionAccessory,
+    CreateSectionComponent, CreateSelectMenu, CreateSelectMenuKind, CreateSelectMenuOption,
     CreateTextDisplay, ReactionType,
 };
 
@@ -224,11 +224,10 @@ pub fn pagination_row(
     if let Some(emoji) = component_emoji("\u{2b05}\u{fe0f}") {
         prev = prev.emoji(emoji);
     }
-    let mut next =
-        CreateButton::new(format!("{custom_id_prefix}:{}", page.saturating_add(1)))
-            .label("Next")
-            .style(ButtonStyle::Secondary)
-            .disabled(page.saturating_add(1) >= total_pages);
+    let mut next = CreateButton::new(format!("{custom_id_prefix}:{}", page.saturating_add(1)))
+        .label("Next")
+        .style(ButtonStyle::Secondary)
+        .disabled(page.saturating_add(1) >= total_pages);
     if let Some(emoji) = component_emoji("\u{27a1}\u{fe0f}") {
         next = next.emoji(emoji);
     }

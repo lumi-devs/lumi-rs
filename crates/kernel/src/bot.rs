@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use crate::Services;
+use std::sync::Arc;
 
 /// Client data: shared services, reachable from any command via `ctx.data()`.
 pub type Data = Arc<Services>;

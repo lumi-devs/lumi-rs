@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use sea_orm::sea_query::OnConflict;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
+};
 use serde::{Deserialize, Serialize};
 
 use lumi_db::entities::afk_entry;

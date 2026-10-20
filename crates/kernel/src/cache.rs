@@ -51,8 +51,11 @@ fn now_ms() -> i64 {
 /// Wrap `value` with an absolute expiry timestamp.
 fn ttl_entry(value: &Value, ttl: Duration, now: i64) -> Value {
     let exp = now.saturating_add(ttl.as_millis() as i64);
-    serde_json::to_value(TtlEntry { exp, v: value.clone() })
-        .unwrap_or_else(|_| serde_json::json!({ "exp": exp, "v": value }))
+    serde_json::to_value(TtlEntry {
+        exp,
+        v: value.clone(),
+    })
+    .unwrap_or_else(|_| serde_json::json!({ "exp": exp, "v": value }))
 }
 
 /// Unwrap a stored entry, returning `None` once it has expired.
@@ -103,7 +106,10 @@ impl std::fmt::Debug for Cache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Cache")
             .field("local", &self.local.entry_count())
-            .field("claims", &self.claims.until.lock().map_or(0, |map| map.len()))
+            .field(
+                "claims",
+                &self.claims.until.lock().map_or(0, |map| map.len()),
+            )
             .field("client", &self.client)
             .field("redis", &"ConnectionManager")
             .finish()
@@ -172,7 +178,10 @@ impl Cache {
     /// Version reported by the connected Redis, e.g. `8.10.2`.
     pub async fn server_version(&self) -> Result<String> {
         let mut conn = self.redis.clone();
-        let info: String = redis::cmd("INFO").arg("server").query_async(&mut conn).await?;
+        let info: String = redis::cmd("INFO")
+            .arg("server")
+            .query_async(&mut conn)
+            .await?;
         Ok(info_field::<String>(&info, "redis_version").unwrap_or_else(|| "unknown".to_string()))
     }
 
@@ -260,7 +269,8 @@ impl Cache {
         self.local.invalidate(key).await;
         let mut conn = self.redis.clone();
         let _: i64 = conn.del(key).await?;
-        self.publish(&Invalidation::Keys(vec![key.to_string()])).await
+        self.publish(&Invalidation::Keys(vec![key.to_string()]))
+            .await
     }
 
     pub async fn invalidate_prefix(&self, prefix: &str) -> Result<()> {
@@ -293,7 +303,8 @@ impl Cache {
                 break;
             }
         }
-        self.publish(&Invalidation::Prefix(prefix.to_string())).await
+        self.publish(&Invalidation::Prefix(prefix.to_string()))
+            .await
     }
 
     async fn publish(&self, msg: &Invalidation) -> Result<()> {

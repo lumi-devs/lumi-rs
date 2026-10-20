@@ -4,12 +4,12 @@ use serenity::all::{
     ModalInteraction,
 };
 
-use lumi_kernel::bot::Error;
 use lumi_kernel::Services;
+use lumi_kernel::bot::Error;
 use lumi_ui::panels::{action_row_of, setting_row};
 use lumi_ui::{Card, CardKind, CardOptions, CardReply};
 
-use super::{cid, tab_row, GuildCtx, HubOutcome, HubView};
+use super::{GuildCtx, HubOutcome, HubView, cid, tab_row};
 
 /// The server settings card.
 pub async fn card(
@@ -27,7 +27,8 @@ pub async fn card(
         .emoji('✏')
         .style(serenity::ButtonStyle::Primary);
     let prefix_line = format!("💻 **Prefix** - `{prefix}`");
-    let prefix_hint = "-# Prefix commands work for a curated set of moderation and utility commands.";
+    let prefix_hint =
+        "-# Prefix commands work for a curated set of moderation and utility commands.";
     let prefix_section = setting_row(format!("{prefix_line}\n{prefix_hint}"), edit);
 
     let reset = CreateButton::new(cid(&["prefix", "reset"]))
@@ -79,7 +80,11 @@ pub async fn handle_prefix_modal(
     let prefix = raw.trim();
     if prefix.is_empty() || prefix.chars().count() > 5 {
         return Ok(HubOutcome::Ephemeral(
-            Card::error("Invalid Prefix", "A prefix must be between 1 and 5 characters.").into_reply(),
+            Card::error(
+                "Invalid Prefix",
+                "A prefix must be between 1 and 5 characters.",
+            )
+            .into_reply(),
         ));
     }
     lumi_db::set_prefix(&services.db, guild.id, prefix).await?;

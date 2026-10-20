@@ -71,7 +71,10 @@ pub struct AutoUpdateConfig {
 /// Reject names that could escape the addons directory when joined as a path.
 fn safe_component(name: &str) -> Result<&str> {
     let trimmed = name.trim();
-    if trimmed.is_empty() || trimmed == "." || trimmed == ".." || trimmed.contains(['/', '\\', '\0'])
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.contains(['/', '\\', '\0'])
     {
         return Err(LumiError::Invalid(format!("'{name}' is not a valid name")));
     }
@@ -314,7 +317,8 @@ impl Downloader {
         })
         .await??;
 
-        let version = read_manifest_version(&repo_dir.join(module_name).join("manifest.json")).await;
+        let version =
+            read_manifest_version(&repo_dir.join(module_name).join("manifest.json")).await;
 
         let existing = downloader_module::Entity::find()
             .filter(downloader_module::Column::RepoId.eq(repo.id))
@@ -354,7 +358,9 @@ impl Downloader {
     }
 
     pub async fn get_repo_by_id(&self, id: i32) -> Result<Option<downloader_repo::Model>> {
-        Ok(downloader_repo::Entity::find_by_id(id).one(&self.db).await?)
+        Ok(downloader_repo::Entity::find_by_id(id)
+            .one(&self.db)
+            .await?)
     }
 
     pub async fn get_repo_by_name(&self, name: &str) -> Result<Option<downloader_repo::Model>> {
@@ -436,7 +442,9 @@ impl Downloader {
         let diff_stat = match (changed, old_sha.clone()) {
             (true, Some(old)) => {
                 let range = format!("{old}..{new_sha}");
-                git(&self.repo_dir(name)?, &["diff", "--stat", &range]).await.ok()
+                git(&self.repo_dir(name)?, &["diff", "--stat", &range])
+                    .await
+                    .ok()
             }
             _ => None,
         };
@@ -554,7 +562,8 @@ impl Downloader {
             if dir_name.starts_with('.') || dir_name.starts_with('_') {
                 continue;
             }
-            let Ok(raw) = tokio::fs::read_to_string(entry.path().join("manifest.json")).await else {
+            let Ok(raw) = tokio::fs::read_to_string(entry.path().join("manifest.json")).await
+            else {
                 continue;
             };
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
@@ -615,7 +624,8 @@ impl Downloader {
         };
         let mut active: global::ActiveModel = existing.into();
         active.auto_update_enabled = Set(cfg.enabled);
-        active.auto_update_interval_minutes = Set(i32::try_from(cfg.interval_minutes).unwrap_or(i32::MAX));
+        active.auto_update_interval_minutes =
+            Set(i32::try_from(cfg.interval_minutes).unwrap_or(i32::MAX));
         active.updated_at = Set(Utc::now().fixed_offset());
         active.update(&self.db).await?;
         Ok(())
@@ -623,7 +633,10 @@ impl Downloader {
 }
 
 fn text_field(value: &serde_json::Value, key: &str) -> Option<String> {
-    value.get(key).and_then(|x| x.as_str()).map(ToString::to_string)
+    value
+        .get(key)
+        .and_then(|x| x.as_str())
+        .map(ToString::to_string)
 }
 
 async fn read_manifest_version(path: &Path) -> Option<String> {

@@ -28,7 +28,14 @@ pub async fn afk(
 
     let reason = data::sanitize_reason(reason.as_deref().unwrap_or("AFK"));
     let existing = data::get(&ctx.data().db, gid, user_id.get()).await?;
-    data::set(&ctx.data().cache, &ctx.data().db, gid, user_id.get(), &reason).await?;
+    data::set(
+        &ctx.data().cache,
+        &ctx.data().db,
+        gid,
+        user_id.get(),
+        &reason,
+    )
+    .await?;
 
     if existing.is_none() {
         apply_nick_prefix(ctx, guild_id, user_id).await?;
@@ -76,10 +83,7 @@ async fn apply_nick_prefix(
     {
         return Ok(());
     }
-    let nick = crate::shared::truncate_chars(
-        &format!("{NICK_PREFIX}{name}"),
-        MAX_NICKNAME,
-    );
+    let nick = crate::shared::truncate_chars(&format!("{NICK_PREFIX}{name}"), MAX_NICKNAME);
     if let Err(error) = guild_id
         .edit_member(ctx.http(), user_id, EditMember::new().nickname(nick))
         .await

@@ -15,7 +15,7 @@ use super::cards::{mention_card, welcome_back_card};
 use super::config;
 use super::constants::{
     MENTION_COOLDOWN_MS, NICK_COOLDOWN_MS, NICK_PREFIX, NOTICE_TTL, REMOVAL_COOLDOWN_MS,
-    WELCOME_COOLDOWN_MS,
+    WELCOME_COOLDOWN_MS, nick_claim_key, notice_claim_key, welcome_claim_key,
 };
 use super::data::{self, CachedAfk};
 use super::mentions::{self, Mention};
@@ -37,8 +37,8 @@ pub async fn on_message(
 
     let map = data::guild_map(&services.cache, &services.db, gid).await?;
     if let Some(entry) = map.get(&author) {
-        let on_grace =
-            (Utc::now().fixed_offset() - entry.since).num_milliseconds() < REMOVAL_COOLDOWN_MS as i64;
+        let on_grace = (Utc::now().fixed_offset() - entry.since).num_milliseconds()
+            < REMOVAL_COOLDOWN_MS as i64;
         if !on_grace && !is_command_message(ctx, services, message).await {
             clear_afk(ctx, services, message, entry.since).await?;
         }
@@ -90,7 +90,7 @@ async fn clear_afk(
         return Ok(());
     }
 
-    let welcome_key = format!("afk:welcome:{}:{author}", channel_id.get());
+    let welcome_key = welcome_claim_key(channel_id.get(), author);
     if !services
         .cache
         .claim_local(&welcome_key, Duration::from_millis(WELCOME_COOLDOWN_MS))
@@ -116,10 +116,7 @@ async fn clear_afk(
             let cache = Arc::clone(&services.cache);
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(ttl)).await;
-                if let Err(error) = sent
-                    .delete(&http, Some("AFK welcome back expired"))
-                    .await
-                {
+                if let Err(error) = sent.delete(&http, Some("AFK welcome back expired")).await {
                     tracing::debug!(%error, "afk welcome delete failed");
                 }
                 if let Err(error) = mentions::clear(&cache, gid, author).await {
@@ -155,7 +152,7 @@ async fn strip_nick_prefix(
         return;
     };
     let rest = rest.trim();
-    let key = format!("afk:nick:{user_id}");
+    let key = nick_claim_key(user_id);
     if !services
         .cache
         .claim_local(&key, Duration::from_millis(NICK_COOLDOWN_MS))
@@ -221,7 +218,7 @@ async fn notify_mentioned(
         .collect();
     mentions::add_batch(&services.cache, gid, &batch).await?;
 
-    let notice_key = format!("afk:notice:{}", message.channel_id.get());
+    let notice_key = notice_claim_key(message.channel_id.get());
     if !services
         .cache
         .claim_local(&notice_key, Duration::from_millis(MENTION_COOLDOWN_MS))
@@ -269,4 +266,3 @@ fn display_name(ctx: &serenity::Context, guild_id: u64, user_id: u64) -> Option<
     let name = member.display_name();
     Some(name.strip_prefix(NICK_PREFIX).unwrap_or(name).to_string())
 }
-

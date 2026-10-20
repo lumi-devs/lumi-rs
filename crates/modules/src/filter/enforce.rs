@@ -222,7 +222,11 @@ mod tests {
 
     #[test]
     fn term_match_is_case_insensitive() {
-        let verdict = evaluate(&rules(json!({ "terms": ["badword"] })), "This has BadWord", 0);
+        let verdict = evaluate(
+            &rules(json!({ "terms": ["badword"] })),
+            "This has BadWord",
+            0,
+        );
         assert!(verdict.delete);
         assert_eq!(verdict.reasons, vec![Reason::Term("badword".to_string())]);
     }
@@ -268,7 +272,10 @@ mod tests {
             "invite_timeout_minutes": 20
         }));
         assert_eq!(evaluate(&overrides, "hi", 5).timeout_minutes, Some(2));
-        assert_eq!(evaluate(&overrides, "discord.gg/x", 0).timeout_minutes, Some(20));
+        assert_eq!(
+            evaluate(&overrides, "discord.gg/x", 0).timeout_minutes,
+            Some(20)
+        );
 
         let base = rules(json!({ "terms": ["badword"], "timeout_minutes": 5 }));
         assert_eq!(evaluate(&base, "badword", 0).timeout_minutes, Some(5));

@@ -1,7 +1,7 @@
 //! Small operational helpers for the workspace. Kept out of the bot binary so
 //! CI and container entrypoints can migrate a database without a Discord token.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing::info;
 
 fn main() -> Result<()> {

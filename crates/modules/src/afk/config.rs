@@ -10,16 +10,14 @@ use super::constants::{CONFIG_CACHE_TTL, DEFAULT_WELCOME_TTL_SECS, config_key};
 
 const MODULE: &str = "afk";
 
-async fn load(
-    cache: &Cache,
-    db: &DatabaseConnection,
-    guild_id: u64,
-) -> Map<String, Value> {
+async fn load(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> Map<String, Value> {
     let key = config_key(guild_id);
     match cache.get_json_ttl(&key).await {
         Ok(Some(value)) => match serde_json::from_value::<Map<String, Value>>(value) {
             Ok(config) => return config,
-            Err(err) => tracing::warn!(error = %err, guild_id, "afk config cache held invalid JSON"),
+            Err(err) => {
+                tracing::warn!(error = %err, guild_id, "afk config cache held invalid JSON")
+            }
         },
         Ok(None) => {}
         Err(err) => {

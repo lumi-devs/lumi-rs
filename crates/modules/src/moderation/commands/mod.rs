@@ -105,7 +105,9 @@ pub(super) fn parse_duration(input: &str) -> Option<Duration> {
 
 pub use cases::{case, cases, cases_delete, cases_modify, cases_view, note, reason};
 pub use channels::{lock, lock_disable, lock_enable, lockdown, lockdown_disable, lockdown_enable};
-pub use punish::{ban, kick, mute, quarantine, quarantine_add, quarantine_remove, softban, unban, unmute, warn};
+pub use punish::{
+    ban, kick, mute, quarantine, quarantine_add, quarantine_remove, softban, unban, unmute, warn,
+};
 pub use utility::{dm, sanitize, say};
 
 #[cfg(test)]
@@ -127,7 +129,14 @@ mod tests {
     #[test]
     fn target_list_deduplicates_and_caps() {
         let first = UserId::new(123_456_789_012_345_678);
-        let list = parse_target_list(Some(first), Some(&format!("<@{}> {}", first.get(), 987_654_321_098_765_432_u64)));
+        let list = parse_target_list(
+            Some(first),
+            Some(&format!(
+                "<@{}> {}",
+                first.get(),
+                987_654_321_098_765_432_u64
+            )),
+        );
         assert_eq!(list.len(), 2);
         assert_eq!(list[0], first);
     }

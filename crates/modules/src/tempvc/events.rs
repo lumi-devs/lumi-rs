@@ -17,10 +17,18 @@ fn channel_is_empty(ctx: &serenity::Context, guild_id: GuildId, channel_id: Chan
     ctx.cache
         .guild(guild_id)
         .and_then(|guild| guild.channels.get(&channel_id).cloned())
-        .is_none_or(|channel| channel.members(&ctx.cache).is_ok_and(|members| members.is_empty()))
+        .is_none_or(|channel| {
+            channel
+                .members(&ctx.cache)
+                .is_ok_and(|members| members.is_empty())
+        })
 }
 
-fn parent_of(ctx: &serenity::Context, guild_id: GuildId, channel_id: ChannelId) -> Option<ChannelId> {
+fn parent_of(
+    ctx: &serenity::Context,
+    guild_id: GuildId,
+    channel_id: ChannelId,
+) -> Option<ChannelId> {
     ctx.cache
         .guild(guild_id)
         .and_then(|guild| guild.channels.get(&channel_id).and_then(|c| c.parent_id))
@@ -35,7 +43,10 @@ pub async fn on_voice_state_update(
     old: &Option<VoiceState>,
     new: &VoiceState,
 ) -> Result<()> {
-    let Some(guild_id) = new.guild_id.or_else(|| old.as_ref().and_then(|o| o.guild_id)) else {
+    let Some(guild_id) = new
+        .guild_id
+        .or_else(|| old.as_ref().and_then(|o| o.guild_id))
+    else {
         return Ok(());
     };
     let gid = guild_id.get();
@@ -48,7 +59,11 @@ pub async fn on_voice_state_update(
                     .is_some()
                 && channel_is_empty(ctx, guild_id, old_ch_id)
             {
-                info!(guild_id = gid, channel_id = old_ch_id.get(), "cleaning up empty tempvc");
+                info!(
+                    guild_id = gid,
+                    channel_id = old_ch_id.get(),
+                    "cleaning up empty tempvc"
+                );
                 if let Err(error) = ctx
                     .http
                     .delete_channel(old_ch_id.into(), Some("TempVC channel empty cleanup"))
@@ -75,14 +90,21 @@ pub async fn on_voice_state_update(
     };
 
     let cooldown_key = format!("lumi:tempvc:cd:create:{gid}:{}", user_id.get());
-    if !services.cache.claim_cooldown(&cooldown_key, CREATE_COOLDOWN_MS).await? {
+    if !services
+        .cache
+        .claim_cooldown(&cooldown_key, CREATE_COOLDOWN_MS)
+        .await?
+    {
         if let Err(error) = guild_id.disconnect_member(&ctx.http, user_id).await {
             warn!(%error, user_id = user_id.get(), "tempvc cooldown disconnect failed");
         }
         if let Ok(dm) = user_id.create_dm_channel(&ctx.http).await {
             let card = Card::warning(
                 "\u{23f3} Slow Down",
-                format!("Wait {} seconds before creating another channel.", CREATE_COOLDOWN_MS / 1000),
+                format!(
+                    "Wait {} seconds before creating another channel.",
+                    CREATE_COOLDOWN_MS / 1000
+                ),
             );
             if let Err(error) = GenericChannelId::new(dm.id.get())
                 .send_message(&ctx.http, card.into_reply().message())
@@ -112,12 +134,14 @@ pub async fn on_voice_state_update(
     }
 
     let created = guild_id.create_channel(&ctx.http, builder).await?;
-    info!(guild_id = gid, channel_id = created.id.get(), owner = user_id.get(), "created tempvc");
+    info!(
+        guild_id = gid,
+        channel_id = created.id.get(),
+        owner = user_id.get(),
+        "created tempvc"
+    );
 
-    if let Err(error) = guild_id
-        .move_member(&ctx.http, user_id, created.id)
-        .await
-    {
+    if let Err(error) = guild_id.move_member(&ctx.http, user_id, created.id).await {
         error!(%error, "failed to move member into newly created tempvc");
     }
 
@@ -141,7 +165,13 @@ pub async fn on_voice_state_update(
         return Ok(());
     }
 
-    let card = views::panel_card(created.id.get(), user_id.get(), false, false, generator.limit);
+    let card = views::panel_card(
+        created.id.get(),
+        user_id.get(),
+        false,
+        false,
+        generator.limit,
+    );
     if let Err(error) = GenericChannelId::new(created.id.get())
         .send_message(&ctx.http, card.message())
         .await

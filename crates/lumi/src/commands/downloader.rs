@@ -1,7 +1,7 @@
-use std::net::IpAddr;
-use poise::serenity_prelude as serenity;
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind};
+use poise::serenity_prelude as serenity;
+use std::net::IpAddr;
 
 /// Check whether an IP address belongs to loopback, private, link-local,
 /// unspecified, or documentation blocks (IPv4 and IPv6).
@@ -76,7 +76,9 @@ async fn validate_clone_url(raw: &str) -> Result<(), &'static str> {
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
         if is_forbidden_ip(ip) {
-            return Err("Private, loopback, or internal IP addresses are forbidden (SSRF protection)");
+            return Err(
+                "Private, loopback, or internal IP addresses are forbidden (SSRF protection)",
+            );
         }
         return Ok(());
     }
@@ -87,7 +89,9 @@ async fn validate_clone_url(raw: &str) -> Result<(), &'static str> {
             for addr in addrs {
                 resolved_any = true;
                 if is_forbidden_ip(addr.ip()) {
-                    return Err("Target hostname resolves to a forbidden private/internal IP address");
+                    return Err(
+                        "Target hostname resolves to a forbidden private/internal IP address",
+                    );
                 }
             }
             if !resolved_any {
@@ -137,7 +141,13 @@ pub async fn repo(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command, prefix_command, rename = "add", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(
+    slash_command,
+    prefix_command,
+    rename = "add",
+    guild_only,
+    default_member_permissions = "ADMINISTRATOR"
+)]
 pub async fn repo_add(
     ctx: Context<'_>,
     #[description = "Git clone URL"] url: String,
@@ -151,13 +161,19 @@ pub async fn repo_add(
         return Ok(());
     }
     let downloader = &ctx.data().downloader;
-    match downloader.add_repo(&url, name.as_deref(), branch.as_deref()).await {
+    match downloader
+        .add_repo(&url, name.as_deref(), branch.as_deref())
+        .await
+    {
         Ok(repo) => {
             let lines = vec![
                 format!("**Name**: `{}`", repo.name),
                 format!("**URL**: `{}`", repo.url),
                 format!("**Branch**: `{}`", repo.branch),
-                format!("**Commit**: `{}`", repo.commit.as_deref().unwrap_or("unknown")),
+                format!(
+                    "**Commit**: `{}`",
+                    repo.commit.as_deref().unwrap_or("unknown")
+                ),
             ];
             let card = Card::lines("📦 Repository Added", lines).kind(CardKind::Success);
             ctx.send(card.into_reply().reply()).await?;
@@ -170,23 +186,36 @@ pub async fn repo_add(
     Ok(())
 }
 
-#[poise::command(slash_command, prefix_command, rename = "list", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(
+    slash_command,
+    prefix_command,
+    rename = "list",
+    guild_only,
+    default_member_permissions = "ADMINISTRATOR"
+)]
 pub async fn repo_list(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let downloader = &ctx.data().downloader;
     match downloader.list_repos().await {
         Ok(repos) => {
             if repos.is_empty() {
-                let card = Card::info("Repositories", "No repositories added yet. Use `/repo add <url>`.");
+                let card = Card::info(
+                    "Repositories",
+                    "No repositories added yet. Use `/repo add <url>`.",
+                );
                 ctx.send(card.into_reply().reply()).await?;
             } else {
                 let lines: Vec<String> = repos
                     .iter()
                     .map(|r| {
-                        let commit_str = r.commit.as_ref().map_or("none", |c| {
-                            c.get(..7).unwrap_or(c.as_str())
-                        });
-                        format!("• **{}** (`{}`) — branch `{}` (`{}`)", r.name, r.url, r.branch, commit_str)
+                        let commit_str = r
+                            .commit
+                            .as_ref()
+                            .map_or("none", |c| c.get(..7).unwrap_or(c.as_str()));
+                        format!(
+                            "• **{}** (`{}`) — branch `{}` (`{}`)",
+                            r.name, r.url, r.branch, commit_str
+                        )
                     })
                     .collect();
                 let card = Card::lines("📦 Added Repositories", lines).kind(CardKind::Info);
@@ -201,7 +230,13 @@ pub async fn repo_list(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command, prefix_command, rename = "remove", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(
+    slash_command,
+    prefix_command,
+    rename = "remove",
+    guild_only,
+    default_member_permissions = "ADMINISTRATOR"
+)]
 pub async fn repo_remove(
     ctx: Context<'_>,
     #[description = "Repository name to remove"]
@@ -212,11 +247,17 @@ pub async fn repo_remove(
     let downloader = &ctx.data().downloader;
     match downloader.remove_repo(&name).await {
         Ok(true) => {
-            let card = Card::success("Repository Removed", format!("Removed repository **{name}**."));
+            let card = Card::success(
+                "Repository Removed",
+                format!("Removed repository **{name}**."),
+            );
             ctx.send(card.into_reply().reply()).await?;
         }
         Ok(false) => {
-            let card = Card::warning("Repository Not Found", format!("Repository **{name}** was not found."));
+            let card = Card::warning(
+                "Repository Not Found",
+                format!("Repository **{name}** was not found."),
+            );
             ctx.send(card.into_reply().reply()).await?;
         }
         Err(err) => {
@@ -244,7 +285,13 @@ pub async fn download(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(slash_command, prefix_command, rename = "install", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(
+    slash_command,
+    prefix_command,
+    rename = "install",
+    guild_only,
+    default_member_permissions = "ADMINISTRATOR"
+)]
 pub async fn download_install(
     ctx: Context<'_>,
     #[description = "Repository name containing the addon"]
@@ -259,8 +306,14 @@ pub async fn download_install(
             let lines = vec![
                 format!("**Addon**: `{}`", module.module_name),
                 format!("**Repository**: `{repo}`"),
-                format!("**Version**: `{}`", module.version.as_deref().unwrap_or("unknown")),
-                format!("**Commit**: `{}`", module.commit.as_deref().unwrap_or("unknown")),
+                format!(
+                    "**Version**: `{}`",
+                    module.version.as_deref().unwrap_or("unknown")
+                ),
+                format!(
+                    "**Commit**: `{}`",
+                    module.commit.as_deref().unwrap_or("unknown")
+                ),
             ];
             let card = Card::lines("📥 Addon Installed", lines).kind(CardKind::Success);
             ctx.send(card.into_reply().reply()).await?;
@@ -273,14 +326,23 @@ pub async fn download_install(
     Ok(())
 }
 
-#[poise::command(slash_command, prefix_command, rename = "list", guild_only, default_member_permissions = "ADMINISTRATOR")]
+#[poise::command(
+    slash_command,
+    prefix_command,
+    rename = "list",
+    guild_only,
+    default_member_permissions = "ADMINISTRATOR"
+)]
 pub async fn download_list(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let downloader = &ctx.data().downloader;
     match downloader.list_installed_modules().await {
         Ok(modules) => {
             if modules.is_empty() {
-                let card = Card::info("Installed Addons", "No addons installed yet. Use `/download install <repo> <addon>`.");
+                let card = Card::info(
+                    "Installed Addons",
+                    "No addons installed yet. Use `/download install <repo> <addon>`.",
+                );
                 ctx.send(card.into_reply().reply()).await?;
             } else {
                 let mut lines = Vec::new();
@@ -288,7 +350,10 @@ pub async fn download_list(ctx: Context<'_>) -> Result<(), Error> {
                     let repo_label = match downloader.get_repo_by_id(m.repo_id).await {
                         Ok(Some(r)) => r.name,
                         Ok(None) => {
-                            tracing::warn!(repo_id = m.repo_id, "installed addon references a missing repository");
+                            tracing::warn!(
+                                repo_id = m.repo_id,
+                                "installed addon references a missing repository"
+                            );
                             format!("repo #{}", m.repo_id)
                         }
                         Err(err) => {
@@ -297,7 +362,10 @@ pub async fn download_list(ctx: Context<'_>) -> Result<(), Error> {
                         }
                     };
                     let ver = m.version.as_deref().unwrap_or("unversioned");
-                    lines.push(format!("• **{}** (v{ver}) from `{repo_label}`", m.module_name));
+                    lines.push(format!(
+                        "• **{}** (v{ver}) from `{repo_label}`",
+                        m.module_name
+                    ));
                 }
                 let card = Card::lines("📥 Installed Addons", lines).kind(CardKind::Info);
                 ctx.send(card.into_reply().reply()).await?;
@@ -349,27 +417,53 @@ mod tests {
         assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
         assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
         assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
-        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(
+            169, 254, 169, 254
+        ))));
         assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0))));
 
         assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
         assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
-        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1))));
-        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 1))));
-        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(0xfd12, 0x3456, 0x789a, 0, 0, 0, 0, 1))));
-        assert!(is_forbidden_ip(IpAddr::V6(Ipv4Addr::new(127, 0, 0, 1).to_ipv6_mapped())));
-        assert!(is_forbidden_ip(IpAddr::V6(Ipv4Addr::new(192, 168, 1, 1).to_ipv6_mapped())));
+        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(
+            0xfe80, 0, 0, 0, 0, 0, 0, 1
+        ))));
+        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(
+            0xfc00, 0, 0, 0, 0, 0, 0, 1
+        ))));
+        assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(
+            0xfd12, 0x3456, 0x789a, 0, 0, 0, 0, 1
+        ))));
+        assert!(is_forbidden_ip(IpAddr::V6(
+            Ipv4Addr::new(127, 0, 0, 1).to_ipv6_mapped()
+        )));
+        assert!(is_forbidden_ip(IpAddr::V6(
+            Ipv4Addr::new(192, 168, 1, 1).to_ipv6_mapped()
+        )));
 
         assert!(!is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
         assert!(!is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
-        assert!(!is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111))));
+        assert!(!is_forbidden_ip(IpAddr::V6(Ipv6Addr::new(
+            0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111
+        ))));
     }
 
     #[tokio::test]
     async fn validates_clone_urls_against_ssrf() {
-        assert!(validate_clone_url("https://127.0.0.1/test.git").await.is_err());
-        assert!(validate_clone_url("http://localhost/test.git").await.is_err());
-        assert!(validate_clone_url("http://internal.service.local/test.git").await.is_err());
+        assert!(
+            validate_clone_url("https://127.0.0.1/test.git")
+                .await
+                .is_err()
+        );
+        assert!(
+            validate_clone_url("http://localhost/test.git")
+                .await
+                .is_err()
+        );
+        assert!(
+            validate_clone_url("http://internal.service.local/test.git")
+                .await
+                .is_err()
+        );
         assert!(validate_clone_url("http://[::1]/test.git").await.is_err());
         assert!(validate_clone_url("file:///etc/passwd").await.is_err());
     }

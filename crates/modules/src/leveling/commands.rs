@@ -11,9 +11,12 @@ use super::{images, views};
 
 /// Prefer the cached guild display name; never blocks on a REST round-trip.
 fn cached_name(ctx: Context<'_>, guild_id: GuildId, user_id: UserId) -> Option<String> {
-    ctx.cache()
-        .guild(guild_id)
-        .and_then(|guild| guild.members.get(&user_id).map(|m| m.display_name().to_string()))
+    ctx.cache().guild(guild_id).and_then(|guild| {
+        guild
+            .members
+            .get(&user_id)
+            .map(|m| m.display_name().to_string())
+    })
 }
 
 async fn display_name(ctx: Context<'_>, guild_id: GuildId, user: UserId) -> String {
@@ -23,10 +26,10 @@ async fn display_name(ctx: Context<'_>, guild_id: GuildId, user: UserId) -> Stri
     if let Ok(member) = guild_id.member(ctx.http(), user).await {
         return member.display_name().to_string();
     }
-    user.to_user(ctx.http())
-        .await
-        .ok()
-        .map_or_else(|| format!("<@{}>", user.get()), |u| u.display_name().to_string())
+    user.to_user(ctx.http()).await.ok().map_or_else(
+        || format!("<@{}>", user.get()),
+        |u| u.display_name().to_string(),
+    )
 }
 
 /// Guild display name plus avatar, preferring the cache, then one REST lookup.
@@ -36,16 +39,10 @@ async fn identity(ctx: Context<'_>, guild_id: GuildId, user: UserId) -> (String,
         .guild(guild_id)
         .and_then(|guild| guild.members.get(&user).cloned())
     {
-        return (
-            member.display_name().to_string(),
-            Some(member.user.face()),
-        );
+        return (member.display_name().to_string(), Some(member.user.face()));
     }
     if let Ok(member) = guild_id.member(ctx.http(), user).await {
-        return (
-            member.display_name().to_string(),
-            Some(member.user.face()),
-        );
+        return (member.display_name().to_string(), Some(member.user.face()));
     }
     match user.to_user(ctx.http()).await {
         Ok(user) => (user.display_name().to_string(), Some(user.face())),
@@ -118,7 +115,13 @@ pub async fn rank(
 }
 
 /// View the top 10 server members on the XP leaderboard.
-#[poise::command(slash_command, prefix_command, guild_only, rename = "levelboard", aliases("xplb", "xpboard"))]
+#[poise::command(
+    slash_command,
+    prefix_command,
+    guild_only,
+    rename = "levelboard",
+    aliases("xplb", "xpboard")
+)]
 pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     let guild_id = require_guild(ctx)?;
@@ -167,7 +170,11 @@ pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 fn invalid_kind_card() -> lumi_ui::CardReply {
-    Card::error("Level Update Failed", "Kind must be `\"xp\"` or `\"level\"`.").into_reply()
+    Card::error(
+        "Level Update Failed",
+        "Kind must be `\"xp\"` or `\"level\"`.",
+    )
+    .into_reply()
 }
 
 /// Adjust member XP and levels (staff only).

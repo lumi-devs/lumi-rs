@@ -110,7 +110,10 @@ pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
                         if member.membership_state == serenity::MembershipState::Accepted {
                             let id = member.user.id.get();
                             if !cfg.owner_ids.contains(&id) {
-                                tracing::info!(member_id = id, "resolved team member owner from Discord");
+                                tracing::info!(
+                                    member_id = id,
+                                    "resolved team member owner from Discord"
+                                );
                                 cfg.owner_ids.push(id);
                             }
                         }

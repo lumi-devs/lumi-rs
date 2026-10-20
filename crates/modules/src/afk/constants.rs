@@ -46,3 +46,15 @@ pub fn config_key(guild_id: u64) -> String {
 pub fn mentions_key(guild_id: u64, user_id: u64) -> String {
     format!("lumi:afk:mentions:{guild_id}:{user_id}")
 }
+
+pub fn welcome_claim_key(channel_id: u64, user_id: u64) -> String {
+    format!("afk:welcome:{channel_id}:{user_id}")
+}
+
+pub fn nick_claim_key(user_id: u64) -> String {
+    format!("afk:nick:{user_id}")
+}
+
+pub fn notice_claim_key(channel_id: u64) -> String {
+    format!("afk:notice:{channel_id}")
+}

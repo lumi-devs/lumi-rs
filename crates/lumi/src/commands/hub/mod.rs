@@ -2,14 +2,13 @@
 
 use poise::serenity_prelude as serenity;
 use serenity::all::{
-    ComponentInteraction, CreateAllowedMentions,
-    CreateInteractionResponse, CreateInteractionResponseMessage, CreateModal, GuildId, ModalInteraction,
-    MessageFlags,
+    ComponentInteraction, CreateAllowedMentions, CreateInteractionResponse,
+    CreateInteractionResponseMessage, CreateModal, GuildId, MessageFlags, ModalInteraction,
 };
 
+use lumi_kernel::Services;
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_kernel::permits::CheckContext;
-use lumi_kernel::Services;
 use lumi_ui::{Card, CardReply};
 
 pub mod addons;
@@ -92,12 +91,7 @@ pub enum HubOutcome {
 }
 
 /// Root `/lumi` and `/lumi panel` entry point.
-#[poise::command(
-    slash_command,
-    prefix_command,
-    guild_only,
-    subcommands("panel")
-)]
+#[poise::command(slash_command, prefix_command, guild_only, subcommands("panel"))]
 pub async fn lumi(ctx: Context<'_>) -> Result<(), Error> {
     open(ctx).await
 }
@@ -171,8 +165,14 @@ pub async fn handle_component(
         return deny(ctx, component).await;
     }
 
-    let outcome =
-        dispatch(services, &guild, &parsed, &component.data, component.user.id.get()).await?;
+    let outcome = dispatch(
+        services,
+        &guild,
+        &parsed,
+        &component.data,
+        component.user.id.get(),
+    )
+    .await?;
     respond_outcome(ctx, component, outcome).await
 }
 
@@ -187,7 +187,11 @@ pub async fn handle_modal(
             return deny_modal(ctx, modal).await;
         }
         let guild = modal.guild_id.map_or_else(
-            || GuildCtx { id: 0, name: "this server".to_string(), icon: None },
+            || GuildCtx {
+                id: 0,
+                name: "this server".to_string(),
+                icon: None,
+            },
             |id| guild_ctx(ctx, id),
         );
         let outcome = settings::handle_prefix_modal(services, &guild, modal).await?;
@@ -195,7 +199,8 @@ pub async fn handle_modal(
     }
     if let Some(parsed) = HubId::parse(&modal.data.custom_id, PREFIX) {
         if parsed.head() == Some("cfgmodal") {
-            let outcome = modules::handle_modal(services, &guild_ctx_from_modal(ctx, modal), modal).await?;
+            let outcome =
+                modules::handle_modal(services, &guild_ctx_from_modal(ctx, modal), modal).await?;
             return respond_modal(ctx, modal, outcome).await;
         }
         if parsed.head() == Some("addonmodal") {
@@ -203,11 +208,16 @@ pub async fn handle_modal(
                 return deny_modal(ctx, modal).await;
             }
             let guild = modal.guild_id.map_or_else(
-                || GuildCtx { id: 0, name: "this server".to_string(), icon: None },
+                || GuildCtx {
+                    id: 0,
+                    name: "this server".to_string(),
+                    icon: None,
+                },
                 |id| guild_ctx(ctx, id),
             );
             let outcome =
-                addons::handle_modal(services, &guild, modal, parsed.get(1).unwrap_or_default()).await?;
+                addons::handle_modal(services, &guild, modal, parsed.get(1).unwrap_or_default())
+                    .await?;
             return respond_modal(ctx, modal, outcome).await;
         }
     }
@@ -222,11 +232,21 @@ async fn dispatch(
     user_id: u64,
 ) -> Result<HubOutcome, Error> {
     match (id.head().unwrap_or_default(), id.get(1)) {
-        ("home", _) | ("tab", Some("home")) => Ok(HubOutcome::Update(home::card(services, guild).await?)),
-        ("tab", Some("modules")) => Ok(HubOutcome::Update(modules::list_card(services, guild, 0, user_id).await?)),
-        ("tab", Some("permissions")) => Ok(HubOutcome::Update(permissions::list_card(services, guild, 0, user_id).await?)),
-        ("tab", Some("settings")) => Ok(HubOutcome::Update(settings::card(services, guild, user_id).await?)),
-        ("tab", Some("addons")) => Ok(HubOutcome::Update(addons::dashboard_card(services, guild, user_id).await?)),
+        ("home", _) | ("tab", Some("home")) => {
+            Ok(HubOutcome::Update(home::card(services, guild).await?))
+        }
+        ("tab", Some("modules")) => Ok(HubOutcome::Update(
+            modules::list_card(services, guild, 0, user_id).await?,
+        )),
+        ("tab", Some("permissions")) => Ok(HubOutcome::Update(
+            permissions::list_card(services, guild, 0, user_id).await?,
+        )),
+        ("tab", Some("settings")) => Ok(HubOutcome::Update(
+            settings::card(services, guild, user_id).await?,
+        )),
+        ("tab", Some("addons")) => Ok(HubOutcome::Update(
+            addons::dashboard_card(services, guild, user_id).await?,
+        )),
         _ => dispatch_ext(services, guild, id, data, user_id).await,
     }
 }
@@ -244,7 +264,9 @@ async fn dispatch_ext(
             Some("reset") => {
                 lumi_db::reset_prefix(&services.db, guild.id).await?;
                 lumi_kernel::prefix::invalidate(&services.cache, guild.id).await?;
-                Ok(HubOutcome::Update(settings::card(services, guild, user_id).await?))
+                Ok(HubOutcome::Update(
+                    settings::card(services, guild, user_id).await?,
+                ))
             }
             _ => Ok(HubOutcome::Done),
         },
@@ -569,11 +591,9 @@ mod tests {
             lumi_cmd.default_member_permissions.is_empty(),
             "default_member_permissions must be empty so Discord shows /lumi panel to all users including bot owners"
         );
-        let panel_sub = lumi_cmd
-            .subcommands
-            .iter()
-            .find(|s| s.name == "panel")
-            .expect("panel subcommand under lumi");
+        let Some(panel_sub) = lumi_cmd.subcommands.iter().find(|s| s.name == "panel") else {
+            panic!("panel subcommand under lumi");
+        };
         assert_eq!(panel_sub.name, "panel");
     }
 }
