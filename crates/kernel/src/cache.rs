@@ -1,8 +1,9 @@
 //! Two-tier cache: an in-process moka cache in front of Redis, with pub/sub
 //! invalidation so every process drops matching local entries.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use moka::future::Cache as MokaCache;
@@ -34,6 +35,56 @@ fn info_field<T: std::str::FromStr>(info: &str, name: &str) -> Option<T> {
         .and_then(|value| value.parse().ok())
 }
 
+/// Payload stored for keys written through [`Cache::set_json_ttl`].
+#[derive(Serialize, Deserialize)]
+struct TtlEntry {
+    exp: i64,
+    v: Value,
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as i64)
+}
+
+/// Wrap `value` with an absolute expiry timestamp.
+fn ttl_entry(value: &Value, ttl: Duration, now: i64) -> Value {
+    let exp = now.saturating_add(ttl.as_millis() as i64);
+    serde_json::to_value(TtlEntry { exp, v: value.clone() })
+        .unwrap_or_else(|_| serde_json::json!({ "exp": exp, "v": value }))
+}
+
+/// Unwrap a stored entry, returning `None` once it has expired.
+fn ttl_value(stored: &Value, now: i64) -> Option<Value> {
+    let entry: TtlEntry = serde_json::from_value(stored.clone()).ok()?;
+    (entry.exp > now).then_some(entry.v)
+}
+
+/// In-process cooldown claims, independent of Redis.
+#[derive(Default)]
+struct Claims {
+    until: Mutex<HashMap<String, Instant>>,
+}
+
+impl Claims {
+    fn claim(&self, key: &str, ttl: Duration) -> bool {
+        let now = Instant::now();
+        let mut until = self
+            .until
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if until.get(key).is_some_and(|deadline| *deadline > now) {
+            return false;
+        }
+        if until.len() >= LOCAL_CAPACITY as usize {
+            until.retain(|_, deadline| *deadline > now);
+        }
+        until.insert(key.to_string(), now + ttl);
+        true
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 enum Invalidation {
     Keys(Vec<String>),
@@ -43,6 +94,7 @@ enum Invalidation {
 /// Local moka cache backed by a shared Redis connection.
 pub struct Cache {
     local: MokaCache<String, Value>,
+    claims: Claims,
     client: redis::Client,
     redis: ConnectionManager,
 }
@@ -51,6 +103,7 @@ impl std::fmt::Debug for Cache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Cache")
             .field("local", &self.local.entry_count())
+            .field("claims", &self.claims.until.lock().map_or(0, |map| map.len()))
             .field("client", &self.client)
             .field("redis", &"ConnectionManager")
             .finish()
@@ -66,6 +119,7 @@ impl Cache {
         let redis = client.get_connection_manager_with_config(config).await?;
         Ok(Self {
             local: MokaCache::builder().max_capacity(LOCAL_CAPACITY).build(),
+            claims: Claims::default(),
             client,
             redis,
         })
@@ -142,6 +196,49 @@ impl Cache {
         let mut conn = self.redis.clone();
         let _: () = conn.set(key, raw).await?;
         Ok(())
+    }
+
+    /// Read a key whose payload carries its own absolute expiry. A local entry
+    /// past its deadline is dropped and reported as a miss.
+    pub async fn get_json_ttl(&self, key: &str) -> Result<Option<Value>> {
+        let now = now_ms();
+        if let Some(stored) = self.local.get(key).await {
+            let value = ttl_value(&stored, now);
+            if value.is_none() {
+                self.local.invalidate(key).await;
+            }
+            return Ok(value);
+        }
+        let mut conn = self.redis.clone();
+        let raw: Option<String> = conn.get(key).await?;
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+        let stored: Value = serde_json::from_str(&raw)?;
+        let Some(value) = ttl_value(&stored, now) else {
+            return Ok(None);
+        };
+        self.local.insert(key.to_string(), stored).await;
+        Ok(Some(value))
+    }
+
+    /// Write a key with a Redis expiry plus an in-payload deadline, so a local
+    /// hit never outlives the Redis entry.
+    pub async fn set_json_ttl(&self, key: &str, value: &Value, ttl: Duration) -> Result<()> {
+        let stored = ttl_entry(value, ttl, now_ms());
+        self.local.insert(key.to_string(), stored.clone()).await;
+        let raw = serde_json::to_string(&stored)?;
+        let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
+        let mut conn = self.redis.clone();
+        let opts = SetOptions::default().with_expiration(SetExpiry::PX(ttl_ms));
+        let _: Option<String> = conn.set_options(key, raw, opts).await?;
+        Ok(())
+    }
+
+    /// Claim a short in-process cooldown slot. No Redis round trip; the slot is
+    /// only shared inside this process.
+    pub fn claim_local(&self, key: &str, ttl: Duration) -> bool {
+        self.claims.claim(key, ttl)
     }
 
     /// Typed read: deserialize the cached JSON into `T` instead of handing
@@ -251,5 +348,43 @@ impl Cache {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Claims, now_ms, ttl_entry, ttl_value};
+    use serde_json::json;
+    use std::time::Duration;
+
+    #[test]
+    fn ttl_entry_expires() {
+        let now = now_ms();
+        let stored = ttl_entry(&json!("value"), Duration::from_secs(60), now);
+        assert_eq!(ttl_value(&stored, now), Some(json!("value")));
+        assert_eq!(ttl_value(&stored, now + 60_000), None);
+        assert_eq!(ttl_value(&stored, now + 60_001), None);
+    }
+
+    #[test]
+    fn malformed_entry_is_a_miss() {
+        assert_eq!(ttl_value(&json!({ "v": 1 }), now_ms()), None);
+    }
+
+    #[test]
+    fn claim_is_held_until_expiry() {
+        let claims = Claims::default();
+        assert!(claims.claim("k", Duration::from_millis(50)));
+        assert!(!claims.claim("k", Duration::from_millis(50)));
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(claims.claim("k", Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn expired_claim_is_replaceable() {
+        let claims = Claims::default();
+        assert!(claims.claim("k", Duration::ZERO));
+        assert!(claims.claim("k", Duration::from_secs(1)));
+        assert!(!claims.claim("k", Duration::from_secs(1)));
     }
 }

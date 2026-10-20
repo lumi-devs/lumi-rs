@@ -6,7 +6,9 @@ use super::{tab_row, GuildCtx, HubView};
 
 /// The hub landing card.
 pub async fn card(services: &Services, guild: &GuildCtx) -> Result<CardReply, Error> {
-    let prefix = lumi_db::get_prefix(&services.db, Some(guild.id)).await.unwrap_or_else(|_| ",".to_string());
+    let prefix = lumi_kernel::prefix::get(&services.cache, &services.db, guild.id)
+        .await
+        .unwrap_or_else(|_| ",".to_string());
     let rows = lumi_kernel::module_state::list_feature_rows(&services.registry, &services.db, guild.id).await;
     let total = rows.len();
     let enabled = rows.iter().filter(|r| r.enabled).count();

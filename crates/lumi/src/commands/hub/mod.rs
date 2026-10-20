@@ -243,6 +243,7 @@ async fn dispatch_ext(
             Some("set") => Ok(HubOutcome::Modal(settings::prefix_modal())),
             Some("reset") => {
                 lumi_db::reset_prefix(&services.db, guild.id).await?;
+                lumi_kernel::prefix::invalidate(&services.cache, guild.id).await?;
                 Ok(HubOutcome::Update(settings::card(services, guild, user_id).await?))
             }
             _ => Ok(HubOutcome::Done),
