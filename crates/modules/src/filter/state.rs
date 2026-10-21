@@ -40,13 +40,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn idle(entry: &HeatEntry, now: Instant, decay_per_minute: f64) -> bool {
-    let age = now.saturating_duration_since(entry.updated).as_secs_f64();
-    if decay_per_minute > 0.0 {
-        age >= entry.heat / decay_per_minute * 60.0 + 60.0
-    } else {
-        age >= IDLE_SECS
-    }
+/// Heat with no updates for an hour is stale regardless of the guild's decay
+/// setting; pruning must not depend on whichever guild triggered it.
+fn idle(entry: &HeatEntry, now: Instant) -> bool {
+    now.saturating_duration_since(entry.updated).as_secs_f64() >= IDLE_SECS
 }
 
 /// Add heat for a member, applying the lazy decay since the last update.
@@ -54,7 +51,7 @@ pub fn add_heat(guild_id: u64, user_id: u64, points: f64, decay_per_minute: f64)
     let now = Instant::now();
     let mut heat = lock(&state().heat);
     if heat.len() > PRUNE_AT {
-        heat.retain(|_, entry| !idle(entry, now, decay_per_minute));
+        heat.retain(|_, entry| !idle(entry, now));
     }
     let entry = heat.entry((guild_id, user_id)).or_insert(HeatEntry {
         heat: 0.0,
@@ -114,5 +111,20 @@ mod tests {
     fn mentions_accumulate_in_window() {
         assert_eq!(record_mentions(99, 2, 60), 2);
         assert_eq!(record_mentions(99, 3, 60), 5);
+    }
+
+    #[test]
+    fn idle_heat_expires_after_the_cap() {
+        let now = Instant::now();
+        let fresh = HeatEntry {
+            heat: 100.0,
+            updated: now,
+        };
+        let stale = HeatEntry {
+            heat: 1.0,
+            updated: now - Duration::from_secs_f64(IDLE_SECS + 1.0),
+        };
+        assert!(!idle(&fresh, now));
+        assert!(idle(&stale, now));
     }
 }

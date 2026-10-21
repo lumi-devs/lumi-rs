@@ -39,40 +39,43 @@ async fn load_map(db: &DatabaseConnection, guild_id: u64) -> Result<HashMap<u64,
 }
 
 /// Every AFK member in a guild, cached so the message path needs no query.
-/// An empty map is the negative cache: nobody is AFK.
+/// An empty map is the negative cache: nobody is AFK, and it expires sooner.
+///
+/// Concurrent misses share one database read.
 pub async fn guild_map(
     cache: &Cache,
     db: &DatabaseConnection,
     guild_id: u64,
 ) -> Result<Arc<HashMap<u64, CachedAfk>>> {
     let key = guild_map_key(guild_id);
-    match cache.get_json_ttl(&key).await {
-        Ok(Some(value)) => match serde_json::from_value::<HashMap<u64, CachedAfk>>(value) {
+    let fetched = cache
+        .get_or_fetch_json_with_ttl(&key, || async {
+            let map = load_map(db, guild_id).await?;
+            let ttl = guild_map_ttl(&map);
+            Ok((serde_json::to_value(&map)?, ttl))
+        })
+        .await;
+
+    match fetched {
+        Ok(value) => match serde_json::from_value::<HashMap<u64, CachedAfk>>(value) {
             Ok(map) => Ok(Arc::new(map)),
             Err(err) => {
                 tracing::warn!(error = %err, guild_id, "afk map cache held invalid JSON; reading the database");
                 Ok(Arc::new(load_map(db, guild_id).await?))
             }
         },
-        Ok(None) => {
-            let map = load_map(db, guild_id).await?;
-            let ttl = if map.is_empty() {
-                GUILD_MAP_EMPTY_TTL
-            } else {
-                GUILD_MAP_TTL
-            };
-            if let Err(err) = cache
-                .set_json_ttl(&key, &serde_json::to_value(&map)?, ttl)
-                .await
-            {
-                tracing::warn!(error = %err, guild_id, "afk map cache write failed");
-            }
-            Ok(Arc::new(map))
-        }
         Err(err) => {
-            tracing::warn!(error = %err, guild_id, "afk map cache read failed; reading the database");
+            tracing::warn!(error = %err, guild_id, "afk map cache failed; reading the database");
             Ok(Arc::new(load_map(db, guild_id).await?))
         }
+    }
+}
+
+fn guild_map_ttl(map: &HashMap<u64, CachedAfk>) -> std::time::Duration {
+    if map.is_empty() {
+        GUILD_MAP_EMPTY_TTL
+    } else {
+        GUILD_MAP_TTL
     }
 }
 
@@ -169,12 +172,29 @@ pub fn sanitize_reason(reason: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_reason;
+    use super::{CachedAfk, GUILD_MAP_EMPTY_TTL, GUILD_MAP_TTL, guild_map_ttl, sanitize_reason};
+    use std::collections::HashMap;
 
     #[test]
     fn sanitize_reason_collapses_and_defaults() {
         assert_eq!(sanitize_reason("  out\n\n to   lunch "), "out to lunch");
         assert_eq!(sanitize_reason("\n  \n"), "AFK");
         assert_eq!(sanitize_reason(&"x".repeat(200)).len(), 100);
+    }
+
+    #[test]
+    fn empty_map_is_negative_cached_for_the_short_ttl() {
+        let empty = HashMap::new();
+        assert_eq!(guild_map_ttl(&empty), GUILD_MAP_EMPTY_TTL);
+
+        let mut map = HashMap::new();
+        map.insert(
+            1,
+            CachedAfk {
+                reason: "lunch".into(),
+                since: chrono::Utc::now().fixed_offset(),
+            },
+        );
+        assert_eq!(guild_map_ttl(&map), GUILD_MAP_TTL);
     }
 }

@@ -156,16 +156,8 @@ pub async fn get_config(
     guild_id: u64,
     module: &str,
 ) -> Map<String, Value> {
-    match guild_module_config::Entity::find()
-        .filter(guild_module_config::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
-        .filter(guild_module_config::Column::ModuleName.eq(module))
-        .all(db)
-        .await
-    {
-        Ok(rows) => rows
-            .into_iter()
-            .map(|row| (row.config_key, row.value))
-            .collect(),
+    match load_config(db, guild_id, module).await {
+        Ok(config) => config,
         Err(err) => {
             tracing::warn!(error = %err, module, "failed to load module config; treating as unset");
             Map::new()
@@ -173,32 +165,59 @@ pub async fn get_config(
     }
 }
 
+async fn load_config(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    module: &str,
+) -> Result<Map<String, Value>> {
+    Ok(guild_module_config::Entity::find()
+        .filter(guild_module_config::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(guild_module_config::Column::ModuleName.eq(module))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|row| (row.config_key, row.value))
+        .collect())
+}
+
+/// Cache key shared by reads and invalidation.
+fn config_cache_key(guild_id: u64, module: &str) -> String {
+    format!("lumi:cfg:{module}:{guild_id}")
+}
+
 /// Fetch per-guild module config from cache (TTL 60s) with fallback to DB.
+///
+/// Concurrent misses for the same guild share one database read, and a database
+/// error is never cached — otherwise an outage would be pinned as "empty
+/// config" for a minute.
 pub async fn config_cached(
     cache: &Cache,
     db: &DatabaseConnection,
     guild_id: u64,
     module: &str,
 ) -> Map<String, Value> {
-    let key = format!("lumi:cfg:{module}:{guild_id}");
-    if let Ok(Some(value)) = cache.get_json_ttl(&key).await {
-        if let Value::Object(map) = value {
-            return map;
+    const TTL: Duration = Duration::from_secs(60);
+    let key = config_cache_key(guild_id, module);
+    match cache
+        .get_or_fetch_json(&key, TTL, || async {
+            Ok(Value::Object(load_config(db, guild_id, module).await?))
+        })
+        .await
+    {
+        Ok(Value::Object(map)) => map,
+        Ok(other) => {
+            tracing::warn!(module, guild_id, value = %other, "module config cache held a non-object; reading the database");
+            get_config(db, guild_id, module).await
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, module, guild_id, "module config cache failed; reading the database");
+            get_config(db, guild_id, module).await
         }
     }
-    let config = get_config(db, guild_id, module).await;
-    let _ = cache
-        .set_json_ttl(
-            &key,
-            &Value::Object(config.clone()),
-            Duration::from_secs(60),
-        )
-        .await;
-    config
 }
 
 pub async fn invalidate_config(cache: &Cache, guild_id: u64, module: &str) -> Result<()> {
-    let key = format!("lumi:cfg:{module}:{guild_id}");
+    let key = config_cache_key(guild_id, module);
     cache.invalidate(&key).await?;
     Ok(())
 }
@@ -449,6 +468,13 @@ fn cut(text: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn config_cache_key_is_scoped_per_guild_and_module() {
+        assert_eq!(config_cache_key(1, "afk"), "lumi:cfg:afk:1");
+        assert_ne!(config_cache_key(1, "afk"), config_cache_key(2, "afk"));
+        assert_ne!(config_cache_key(1, "afk"), config_cache_key(1, "filter"));
+    }
 
     #[test]
     fn resolve_enabled_precedence() {

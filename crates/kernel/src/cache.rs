@@ -11,7 +11,6 @@ use futures::StreamExt;
 use moka::future::Cache as MokaCache;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{AsyncCommands, ExistenceCheck, SetExpiry, SetOptions};
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -38,6 +37,12 @@ fn info_field<T: std::str::FromStr>(info: &str, name: &str) -> Option<T> {
 struct TtlEntry {
     exp: i64,
     v: Value,
+}
+
+impl TtlEntry {
+    fn live(&self, now: i64) -> bool {
+        self.exp > now
+    }
 }
 
 fn now_ms() -> i64 {
@@ -124,18 +129,11 @@ impl SingleFlight {
     }
 }
 
-fn ttl_entry(value: &Value, ttl: Duration, now: i64) -> Value {
-    let exp = now.saturating_add(ttl.as_millis() as i64);
-    serde_json::to_value(TtlEntry {
-        exp,
+fn ttl_entry(value: &Value, ttl: Duration, now: i64) -> TtlEntry {
+    TtlEntry {
+        exp: now.saturating_add(ttl.as_millis() as i64),
         v: value.clone(),
-    })
-    .unwrap_or_else(|_| serde_json::json!({ "exp": exp, "v": value }))
-}
-
-fn ttl_value(stored: &Value, now: i64) -> Option<Value> {
-    let entry: TtlEntry = serde_json::from_value(stored.clone()).ok()?;
-    (entry.exp > now).then_some(entry.v)
+    }
 }
 
 /// In-process cooldown claims, independent of Redis.
@@ -156,9 +154,25 @@ impl Claims {
         }
         if until.len() >= LOCAL_CAPACITY as usize {
             until.retain(|_, deadline| *deadline > now);
+            // Cooldowns are best-effort: dropping a live slot only costs an
+            // extra database check, so this map never grows past its bound.
+            while until.len() >= LOCAL_CAPACITY as usize {
+                let Some(expired_key) = until.keys().next().cloned() else {
+                    break;
+                };
+                until.remove(&expired_key);
+            }
         }
         until.insert(key.to_string(), now + ttl);
         true
+    }
+
+    fn release(&self, key: &str) {
+        let mut until = self
+            .until
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        until.remove(key);
     }
 }
 
@@ -169,7 +183,7 @@ enum Invalidation {
 }
 
 pub struct Cache {
-    local: MokaCache<String, Value>,
+    local: MokaCache<String, Arc<TtlEntry>>,
     claims: Claims,
     client: redis::Client,
     redis: ConnectionManager,
@@ -259,62 +273,44 @@ impl Cache {
         Ok(info_field::<String>(&info, "redis_version").unwrap_or_else(|| "unknown".to_string()))
     }
 
-    pub async fn get_json(&self, key: &str) -> Result<Option<Value>> {
-        if let Some(value) = self.local.get(key).await {
-            return Ok(Some(value));
-        }
-        let mut conn = self.redis.clone();
-        let raw: Option<String> = conn.get(key).await?;
-        let Some(raw) = raw else {
-            return Ok(None);
-        };
-        let value: Value = serde_json::from_str(&raw)?;
-        self.local.insert(key.to_string(), value.clone()).await;
-        Ok(Some(value))
-    }
-
-    pub async fn set_json(&self, key: &str, value: &Value) -> Result<()> {
-        self.local.insert(key.to_string(), value.clone()).await;
-        let raw = serde_json::to_string(value)?;
-        let mut conn = self.redis.clone();
-        let _: () = conn.set(key, raw).await?;
-        Ok(())
-    }
-
     /// Read a key whose payload carries its own absolute expiry. A local entry
     /// past its deadline is dropped and reported as a miss.
     pub async fn get_json_ttl(&self, key: &str) -> Result<Option<Value>> {
         let now = now_ms();
-        if let Some(stored) = self.local.get(key).await {
-            let value = ttl_value(&stored, now);
-            if value.is_none() {
-                self.local.invalidate(key).await;
+        if let Some(entry) = self.local.get(key).await {
+            if entry.live(now) {
+                return Ok(Some(entry.v.clone()));
             }
-            return Ok(value);
+            self.local.invalidate(key).await;
+            return Ok(None);
         }
         let mut conn = self.redis.clone();
         let raw: Option<String> = conn.get(key).await?;
         let Some(raw) = raw else {
             return Ok(None);
         };
-        let stored: Value = serde_json::from_str(&raw)?;
-        let Some(value) = ttl_value(&stored, now) else {
+        let entry: TtlEntry = serde_json::from_str(&raw)?;
+        if !entry.live(now) {
             return Ok(None);
-        };
-        self.local.insert(key.to_string(), stored).await;
+        }
+        // Stored as a struct: a local hit skips parsing the payload again.
+        let value = entry.v.clone();
+        self.local.insert(key.to_string(), Arc::new(entry)).await;
         Ok(Some(value))
     }
 
     /// Write a key with a Redis expiry plus an in-payload deadline, so a local
     /// hit never outlives the Redis entry.
     pub async fn set_json_ttl(&self, key: &str, value: &Value, ttl: Duration) -> Result<()> {
-        let stored = ttl_entry(value, ttl, now_ms());
-        self.local.insert(key.to_string(), stored.clone()).await;
-        let raw = serde_json::to_string(&stored)?;
+        let entry = ttl_entry(value, ttl, now_ms());
+        let raw = serde_json::to_string(&entry)?;
         let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
         let mut conn = self.redis.clone();
         let opts = SetOptions::default().with_expiration(SetExpiry::PX(ttl_ms));
         let _: Option<String> = conn.set_options(key, raw, opts).await?;
+        // Persist first: a failed Redis write must not leave this process
+        // serving a value no other process can see.
+        self.local.insert(key.to_string(), Arc::new(entry)).await;
         Ok(())
     }
 
@@ -329,25 +325,31 @@ impl Cache {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<Value>>,
     {
+        self.get_or_fetch_json_with_ttl(key, || async move {
+            let value = fetcher().await?;
+            Ok((value, ttl))
+        })
+        .await
+    }
+
+    /// Like [`Cache::get_or_fetch_json`], but the fetcher picks the TTL so a
+    /// negative result can expire sooner than a positive one.
+    pub async fn get_or_fetch_json_with_ttl<F, Fut>(&self, key: &str, fetcher: F) -> Result<Value>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<(Value, Duration)>>,
+    {
         if let Some(v) = self.get_json_ttl(key).await? {
             return Ok(v);
         }
 
         self.singleflight
             .get_or_fetch(key, || async {
-                let val = fetcher().await?;
-                self.set_json_ttl(key, &val, ttl).await?;
-                Ok(val)
+                let (value, ttl) = fetcher().await?;
+                self.set_json_ttl(key, &value, ttl).await?;
+                Ok(value)
             })
             .await
-    }
-
-    pub async fn get_or_fetch<F, Fut>(&self, key: &str, ttl: Duration, fetcher: F) -> Result<Value>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<Value>>,
-    {
-        self.get_or_fetch_json(key, ttl, fetcher).await
     }
 
     /// Claim a short in-process cooldown slot. No Redis round trip; the slot is
@@ -356,16 +358,10 @@ impl Cache {
         self.claims.claim(key, ttl)
     }
 
-    pub async fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
-        Ok(self
-            .get_json(key)
-            .await?
-            .map(serde_json::from_value)
-            .transpose()?)
-    }
-
-    pub async fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
-        self.set_json(key, &serde_json::to_value(value)?).await
+    /// Drop an in-process cooldown claim whose guarded work did not happen, so
+    /// the next call can retry instead of waiting out the TTL.
+    pub fn release_local(&self, key: &str) {
+        self.claims.release(key);
     }
 
     pub async fn invalidate(&self, key: &str) -> Result<()> {
@@ -467,7 +463,7 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::{Claims, SingleFlight, now_ms, ttl_entry, ttl_value};
+    use super::{Claims, LOCAL_CAPACITY, SingleFlight, TtlEntry, now_ms, ttl_entry};
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -476,14 +472,30 @@ mod tests {
     fn ttl_entry_expires() {
         let now = now_ms();
         let stored = ttl_entry(&json!("value"), Duration::from_secs(60), now);
-        assert_eq!(ttl_value(&stored, now), Some(json!("value")));
-        assert_eq!(ttl_value(&stored, now + 60_000), None);
-        assert_eq!(ttl_value(&stored, now + 60_001), None);
+        assert!(stored.live(now));
+        assert_eq!(stored.v, json!("value"));
+        assert!(!stored.live(now + 60_000));
+        assert!(!stored.live(now + 60_001));
     }
 
     #[test]
     fn malformed_entry_is_a_miss() {
-        assert_eq!(ttl_value(&json!({ "v": 1 }), now_ms()), None);
+        assert!(serde_json::from_str::<TtlEntry>(r#"{"exp": 1}"#).is_err());
+    }
+
+    #[test]
+    fn claims_map_stays_bounded_when_every_slot_is_live() {
+        let claims = Claims::default();
+        for index in 0..LOCAL_CAPACITY {
+            assert!(claims.claim(&format!("k{index}"), Duration::from_secs(60)));
+        }
+        assert!(claims.claim("one-more", Duration::from_secs(60)));
+        let len = claims
+            .until
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        assert_eq!(len, LOCAL_CAPACITY as usize);
     }
 
     #[test]
@@ -493,6 +505,14 @@ mod tests {
         assert!(!claims.claim("k", Duration::from_millis(50)));
         std::thread::sleep(Duration::from_millis(60));
         assert!(claims.claim("k", Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn released_claim_can_be_reclaimed() {
+        let claims = Claims::default();
+        assert!(claims.claim("k", Duration::from_secs(60)));
+        claims.release("k");
+        assert!(claims.claim("k", Duration::from_secs(60)));
     }
 
     #[test]

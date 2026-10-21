@@ -7,8 +7,10 @@
 //! with no matching node passes to the next.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use sea_orm::{DatabaseConnection, EntityTrait};
+use dashmap::DashMap;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 pub use lumi_db::entities::enums::{PermitKind, PermitPolarity, PermitTargetType};
 use lumi_db::entities::{permit, permit_assignment};
@@ -152,12 +154,96 @@ pub fn command_node(command: &crate::bot::Command) -> Option<&'static str> {
         .or_else(|| required_node(&command.name))
 }
 
-#[derive(Debug)]
-pub struct PermitResolver {
+/// One guild's permits and target index. Kept per guild so a permit edit only
+/// reloads that guild instead of every permit in the fleet.
+#[derive(Debug, Default)]
+struct PermitIndex {
     permits: HashMap<i32, PermitRow>,
     by_user: HashMap<(String, i64), Vec<i32>>,
     by_channel: HashMap<(String, i64), Vec<i32>>,
     by_role: HashMap<(String, i64), Vec<i32>>,
+}
+
+#[derive(Debug)]
+pub struct PermitResolver {
+    guilds: DashMap<String, Arc<PermitIndex>>,
+}
+
+fn build_index(permits: Vec<PermitRow>, assignments: Vec<PermitAssignment>) -> PermitIndex {
+    let permit_map = permits.into_iter().map(|p| (p.id, p)).collect();
+
+    let mut by_user: HashMap<(String, i64), Vec<i32>> = HashMap::new();
+    let mut by_channel: HashMap<(String, i64), Vec<i32>> = HashMap::new();
+    let mut by_role: HashMap<(String, i64), Vec<i32>> = HashMap::new();
+
+    for a in assignments {
+        let key = (a.guild_id, a.target_id);
+        match a.target_type {
+            PermitTargetType::User => by_user.entry(key).or_default().push(a.permit_id),
+            PermitTargetType::Channel => by_channel.entry(key).or_default().push(a.permit_id),
+            PermitTargetType::Role => by_role.entry(key).or_default().push(a.permit_id),
+        }
+    }
+
+    PermitIndex {
+        permits: permit_map,
+        by_user,
+        by_channel,
+        by_role,
+    }
+}
+
+/// Load every permit and assignment once at startup.
+///
+/// Reloads after a mutation use [`load_guild_parts`] instead: reading the whole
+/// table per dashboard toggle would grow with the number of customised guilds.
+async fn load_parts(db: &DatabaseConnection) -> Result<(Vec<PermitRow>, Vec<PermitAssignment>)> {
+    let permits = permit::Entity::find()
+        .all(db)
+        .await?
+        .into_iter()
+        .map(PermitRow::from_model)
+        .collect();
+    let assignments = permit_assignment::Entity::find()
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|a| PermitAssignment {
+            permit_id: a.permit_id,
+            guild_id: a.guild_id.to_string(),
+            target_type: a.target_type,
+            target_id: a.target_id.as_i64(),
+        })
+        .collect();
+    Ok((permits, assignments))
+}
+
+/// Load one guild's permits and assignments.
+async fn load_guild_parts(
+    db: &DatabaseConnection,
+    guild_id: u64,
+) -> Result<(Vec<PermitRow>, Vec<PermitAssignment>)> {
+    let guild = lumi_db::ids::GuildId::from(guild_id);
+    let permits = permit::Entity::find()
+        .filter(permit::Column::GuildId.eq(guild))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(PermitRow::from_model)
+        .collect();
+    let assignments = permit_assignment::Entity::find()
+        .filter(permit_assignment::Column::GuildId.eq(guild))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|a| PermitAssignment {
+            permit_id: a.permit_id,
+            guild_id: a.guild_id.to_string(),
+            target_type: a.target_type,
+            target_id: a.target_id.as_i64(),
+        })
+        .collect();
+    Ok((permits, assignments))
 }
 
 fn tier_row(tier: &str, verdict: Verdict, detail: Option<String>) -> TierExplanation {
@@ -175,50 +261,42 @@ fn slot(guild_id: &str, id: u64) -> (String, i64) {
 
 impl PermitResolver {
     pub async fn load(db: &DatabaseConnection) -> Result<Self> {
-        let permits = permit::Entity::find()
-            .all(db)
-            .await?
-            .into_iter()
-            .map(PermitRow::from_model)
-            .collect();
-
-        let assignments = permit_assignment::Entity::find()
-            .all(db)
-            .await?
-            .into_iter()
-            .map(|a| PermitAssignment {
-                permit_id: a.permit_id,
-                guild_id: a.guild_id.to_string(),
-                target_type: a.target_type,
-                target_id: a.target_id.as_i64(),
-            })
-            .collect();
-
+        let (permits, assignments) = load_parts(db).await?;
         Ok(Self::new(permits, assignments))
     }
 
+    /// Replace one guild's index after a permit/assignment write.
+    pub async fn reload_guild(&self, db: &DatabaseConnection, guild_id: u64) -> Result<()> {
+        let (permits, assignments) = load_guild_parts(db, guild_id).await?;
+        self.guilds.insert(
+            guild_id.to_string(),
+            Arc::new(build_index(permits, assignments)),
+        );
+        Ok(())
+    }
+
     pub fn new(permits: Vec<PermitRow>, assignments: Vec<PermitAssignment>) -> Self {
-        let permit_map = permits.into_iter().map(|p| (p.id, p)).collect();
-
-        let mut by_user: HashMap<(String, i64), Vec<i32>> = HashMap::new();
-        let mut by_channel: HashMap<(String, i64), Vec<i32>> = HashMap::new();
-        let mut by_role: HashMap<(String, i64), Vec<i32>> = HashMap::new();
-
-        for a in assignments {
-            let key = (a.guild_id, a.target_id);
-            match a.target_type {
-                PermitTargetType::User => by_user.entry(key).or_default().push(a.permit_id),
-                PermitTargetType::Channel => by_channel.entry(key).or_default().push(a.permit_id),
-                PermitTargetType::Role => by_role.entry(key).or_default().push(a.permit_id),
-            }
+        let mut by_guild: HashMap<String, (Vec<PermitRow>, Vec<PermitAssignment>)> = HashMap::new();
+        for permit in permits {
+            by_guild
+                .entry(permit.guild_id.clone())
+                .or_default()
+                .0
+                .push(permit);
+        }
+        for assignment in assignments {
+            by_guild
+                .entry(assignment.guild_id.clone())
+                .or_default()
+                .1
+                .push(assignment);
         }
 
-        Self {
-            permits: permit_map,
-            by_user,
-            by_channel,
-            by_role,
+        let guilds = DashMap::new();
+        for (guild_id, (permits, assignments)) in by_guild {
+            guilds.insert(guild_id, Arc::new(build_index(permits, assignments)));
         }
+        Self { guilds }
     }
 
     /// Decide access for one node; the returned rows stop at the deciding tier.
@@ -235,6 +313,17 @@ impl PermitResolver {
     /// Every tier evaluated for one node, in resolution order, including
     /// passing tiers. Stops at the first deciding tier.
     pub fn explain(&self, ctx: &CheckContext<'_>) -> Vec<TierExplanation> {
+        match self.guilds.get(&ctx.guild_id) {
+            Some(index) => index.explain(ctx),
+            None => PermitIndex::default().explain(ctx),
+        }
+    }
+}
+
+impl PermitIndex {
+    /// Every tier evaluated for one node, in resolution order, including
+    /// passing tiers. Stops at the first deciding tier.
+    fn explain(&self, ctx: &CheckContext<'_>) -> Vec<TierExplanation> {
         let mut rows = Vec::new();
 
         if ctx.is_owner {
@@ -402,23 +491,7 @@ pub async fn explain_permit(
     node: &str,
     subject: &ExplainSubject,
 ) -> Result<Vec<TierExplanation>> {
-    let permits = lumi_db::list_permits(db, guild_id)
-        .await?
-        .into_iter()
-        .map(PermitRow::from_model)
-        .collect();
-
-    let assignments = lumi_db::list_assignments(db, guild_id)
-        .await?
-        .into_iter()
-        .map(|row| PermitAssignment {
-            permit_id: row.permit_id,
-            guild_id: guild_id.to_string(),
-            target_type: row.target_type,
-            target_id: row.target_id.as_i64(),
-        })
-        .collect();
-
+    let (permits, assignments) = load_guild_parts(db, guild_id).await?;
     let resolver = PermitResolver::new(permits, assignments);
     let ctx = CheckContext {
         guild_id: guild_id.to_string(),
@@ -550,6 +623,25 @@ mod tests {
         let decision = resolver.resolve(&ctx(&[], "mod.ban"));
         assert!(decision.allowed);
         assert!(decision.rows.iter().any(|r| r.tier == "custom:user"));
+    }
+
+    #[test]
+    fn guild_indexes_are_isolated() {
+        let permits = vec![permit(
+            1,
+            PermitKind::Custom,
+            PermitPolarity::Grant,
+            &["mod.ban"],
+        )];
+        let resolver = PermitResolver::new(
+            permits,
+            vec![assignment(1, PermitTargetType::User, 7)],
+        );
+        assert!(resolver.resolve(&ctx(&[], "mod.ban")).allowed);
+
+        let mut other_guild = ctx(&[], "mod.ban");
+        other_guild.guild_id = "2".into();
+        assert!(!resolver.resolve(&other_guild).allowed);
     }
 
     #[test]

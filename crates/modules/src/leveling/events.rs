@@ -1,5 +1,5 @@
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use poise::serenity_prelude as serenity;
 use serenity::all::{ChannelId, GuildId, UserId, VoiceState};
@@ -11,11 +11,27 @@ use super::store;
 
 const DEFAULT_MESSAGE_XP: i64 = 15;
 const VOICE_XP_PER_MINUTE: i64 = 5;
+/// A lost voice event can leave a session behind; prune old ones once the map
+/// grows past this size rather than on every update.
+const SESSION_PRUNE_AT: usize = 50_000;
+/// No real voice session earns for longer than this; older entries are stale.
+const SESSION_MAX_AGE: Duration = Duration::from_secs(6 * 60 * 60);
 
 static VOICE_SESSIONS: OnceLock<DashMap<(u64, u64), Instant>> = OnceLock::new();
 
 fn voice_sessions() -> &'static DashMap<(u64, u64), Instant> {
     VOICE_SESSIONS.get_or_init(DashMap::new)
+}
+
+fn stale_session(started: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(started) > SESSION_MAX_AGE
+}
+
+fn prune_sessions(sessions: &DashMap<(u64, u64), Instant>, now: Instant) {
+    if sessions.len() < SESSION_PRUNE_AT {
+        return;
+    }
+    sessions.retain(|_, started| !stale_session(*started, now));
 }
 
 fn is_bot(state: &VoiceState) -> bool {
@@ -53,7 +69,9 @@ fn is_audible(ctx: &serenity::Context, state: &VoiceState) -> bool {
 }
 
 fn start_session(guild_id: u64, user_id: u64) {
-    voice_sessions()
+    let sessions = voice_sessions();
+    prune_sessions(sessions, Instant::now());
+    sessions
         .entry((guild_id, user_id))
         .or_insert_with(Instant::now);
 }
@@ -124,14 +142,30 @@ pub async fn on_message(
     let Some(guild_id) = message.guild_id else {
         return Ok(());
     };
-    store::award_xp(
+    // The database cooldown is authoritative, but checking it needs a query on
+    // every message. A guild lives on one shard, so a process-local claim can
+    // absorb the repeat traffic between awards.
+    let key = format!("level:xp:{}:{}", guild_id.get(), message.author.id.get());
+    let cooldown = Duration::from_secs(store::DEFAULT_MESSAGE_COOLDOWN_SECS.unsigned_abs());
+    if !services.cache.claim_local(&key, cooldown) {
+        return Ok(());
+    }
+    match store::award_xp(
         &services.db,
         guild_id.get(),
         message.author.id.get(),
         DEFAULT_MESSAGE_XP,
         store::DEFAULT_MESSAGE_COOLDOWN_SECS,
     )
-    .await?;
+    .await
+    {
+        Ok(Some(_)) => {}
+        Ok(None) => services.cache.release_local(&key),
+        Err(err) => {
+            services.cache.release_local(&key);
+            return Err(err);
+        }
+    }
     Ok(())
 }
 
@@ -171,4 +205,22 @@ pub async fn on_voice_state_update(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SESSION_MAX_AGE, stale_session};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn only_sessions_older_than_the_cap_are_stale() {
+        let now = Instant::now();
+        assert!(!stale_session(now, now));
+        assert!(!stale_session(now - Duration::from_secs(60), now));
+        assert!(!stale_session(now - SESSION_MAX_AGE, now));
+        assert!(stale_session(
+            now - SESSION_MAX_AGE - Duration::from_secs(1),
+            now
+        ));
+    }
 }

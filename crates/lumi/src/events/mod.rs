@@ -2,11 +2,16 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use poise::serenity_prelude as serenity;
 
 pub mod dispatcher;
 pub use dispatcher::{DispatchedEvent, EventDispatcher};
+
+/// Guild command hashes are a sync shortcut, not durable state; expire them so
+/// Redis does not accumulate one permanent key per guild.
+const COMMAND_HASH_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 static DISPATCHER: OnceLock<EventDispatcher> = OnceLock::new();
 
@@ -81,8 +86,8 @@ impl serenity::EventHandler for Events {
 
                 // Skip the PUT when the command set is unchanged; guild registration is rate-limited.
                 if let Some(hash) = hash {
-                    match services.cache.get::<u64>(&key).await {
-                        Ok(Some(cached)) if cached == hash => return,
+                    match services.cache.get_json_ttl(&key).await {
+                        Ok(Some(value)) if value.as_u64() == Some(hash) => return,
                         Ok(_) => {}
                         Err(error) => {
                             tracing::warn!(
@@ -102,7 +107,12 @@ impl serenity::EventHandler for Events {
                 }
 
                 if let Some(hash) = hash {
-                    if let Err(error) = services.cache.set(&key, &hash).await {
+                    let value = serde_json::Value::from(hash);
+                    if let Err(error) = services
+                        .cache
+                        .set_json_ttl(&key, &value, COMMAND_HASH_TTL)
+                        .await
+                    {
                         tracing::warn!(
                             %error,
                             guild_id = %guild.id,

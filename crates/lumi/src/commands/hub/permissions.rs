@@ -423,6 +423,7 @@ pub async fn dispatch(
                         target_snowflake,
                     )
                     .await?;
+                    services.permits.reload_guild(&services.db, guild.id).await?;
                 }
             }
             Ok(HubOutcome::Update(
@@ -442,6 +443,7 @@ pub async fn dispatch(
             });
             let page = if let Some((permit_id, direction)) = moved {
                 lumi_db::move_permit(&services.db, guild.id, permit_id, &direction).await?;
+                services.permits.reload_guild(&services.db, guild.id).await?;
                 let permits = lumi_db::list_permits(&services.db, guild.id).await?;
                 permits
                     .iter()
@@ -527,6 +529,7 @@ pub async fn dispatch(
                             target_snowflake,
                         )
                         .await?;
+                        services.permits.reload_guild(&services.db, guild.id).await?;
                     }
                 }
                 Ok(HubOutcome::Update(

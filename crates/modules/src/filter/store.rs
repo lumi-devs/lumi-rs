@@ -187,13 +187,10 @@ pub async fn rules_for(
 ) -> Arc<FilterRules> {
     let map = module_state::config_cached(kernel_cache, db, guild_id, MODULE).await;
     let key = format!("{guild_id}:{:x}", map_hash(&map));
-    if let Some(rules) = cache().get(&key).await {
-        return rules;
-    }
-
-    let rules = Arc::new(FilterRules::from_map(&map));
-    cache().insert(key, Arc::clone(&rules)).await;
-    rules
+    // `get_with` coalesces concurrent compilations of the same rule set.
+    cache()
+        .get_with(key, async { Arc::new(FilterRules::from_map(&map)) })
+        .await
 }
 fn cache() -> &'static MokaCache<String, Arc<FilterRules>> {
     static CACHE: OnceLock<MokaCache<String, Arc<FilterRules>>> = OnceLock::new();
@@ -204,17 +201,61 @@ fn cache() -> &'static MokaCache<String, Arc<FilterRules>> {
     })
 }
 
+/// Hash a config map without serialising every value to a string: the filter
+/// reads it on every message.
 fn map_hash(map: &Map<String, Value>) -> u64 {
-    let mut keys: Vec<&String> = map.keys().collect();
-    keys.sort();
-    let mut hasher = DefaultHasher::new();
-    for key in keys {
+    let mut acc = 0_u64;
+    for (key, value) in map {
+        let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
-        if let Some(value) = map.get(key) {
-            value.to_string().hash(&mut hasher);
+        hash_value(value, &mut hasher);
+        acc = acc.wrapping_add(hasher.finish());
+    }
+    let mut hasher = DefaultHasher::new();
+    acc.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
+    match value {
+        Value::Null => 0_u8.hash(state),
+        Value::Bool(flag) => {
+            1_u8.hash(state);
+            flag.hash(state);
+        }
+        Value::Number(number) => {
+            2_u8.hash(state);
+            if let Some(int) = number.as_i64() {
+                int.hash(state);
+            } else if let Some(uint) = number.as_u64() {
+                uint.hash(state);
+            } else if let Some(float) = number.as_f64() {
+                float.to_bits().hash(state);
+            }
+        }
+        Value::String(text) => {
+            3_u8.hash(state);
+            text.hash(state);
+        }
+        Value::Array(items) => {
+            4_u8.hash(state);
+            items.len().hash(state);
+            for item in items {
+                hash_value(item, state);
+            }
+        }
+        Value::Object(map) => {
+            5_u8.hash(state);
+            let mut acc = 0_u64;
+            for (key, value) in map {
+                let mut hasher = DefaultHasher::new();
+                key.hash(&mut hasher);
+                hash_value(value, &mut hasher);
+                acc = acc.wrapping_add(hasher.finish());
+            }
+            acc.hash(state);
         }
     }
-    hasher.finish()
 }
 
 fn compile_regexes(patterns: &[String]) -> Vec<regex::Regex> {
@@ -280,6 +321,20 @@ mod tests {
         })));
         assert_eq!(rules.regexes.len(), 1);
         assert_eq!(rules.regexes[0].as_str(), "\\bfoo\\b");
+    }
+
+    #[test]
+    fn rules_cache_key_tracks_config_changes() {
+        let before = map(json!({ "terms": ["badword"] }));
+        let same = map(json!({ "terms": ["badword"] }));
+        let after = map(json!({ "terms": ["badword", "worse"] }));
+        assert_eq!(map_hash(&before), map_hash(&same));
+        assert_ne!(map_hash(&before), map_hash(&after));
+        // A number and its string form are different configs.
+        assert_ne!(
+            map_hash(&map(json!({ "max_mentions": 5 }))),
+            map_hash(&map(json!({ "max_mentions": "5" })))
+        );
     }
 
     #[test]

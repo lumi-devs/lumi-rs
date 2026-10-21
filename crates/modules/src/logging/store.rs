@@ -6,19 +6,6 @@ use lumi_kernel::{Cache, Result, module_state};
 
 const MODULE: &str = "logging";
 
-async fn read_channel(
-    cache: &Cache,
-    db: &DatabaseConnection,
-    guild_id: u64,
-    key: &str,
-) -> Result<Option<u64>> {
-    Ok(
-        module_state::config_cached_value(cache, db, guild_id, MODULE, key)
-            .await
-            .and_then(|v| module_state::parse_id(&v)),
-    )
-}
-
 pub async fn is_ignored_channel(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -26,11 +13,15 @@ pub async fn is_ignored_channel(
     channel_id: u64,
 ) -> Result<bool> {
     let ignored =
-        module_state::config_cached_value(cache, db, guild_id, MODULE, "ignored_channels")
-            .await
-            .and_then(|v| v.as_array().cloned())
-            .unwrap_or_default();
-    Ok(ignored.iter().any(|v| v.as_u64() == Some(channel_id)))
+        module_state::config_cached_value(cache, db, guild_id, MODULE, "ignored_channels").await;
+    Ok(ignored
+        .as_ref()
+        .and_then(Value::as_array)
+        .is_some_and(|channels| {
+            channels
+                .iter()
+                .any(|value| module_state::parse_id(value) == Some(channel_id))
+        }))
 }
 
 /// The channel to post a given log event to, or `None` when the toggle is off
@@ -44,15 +35,16 @@ pub async fn target(
     event_channel_key: &str,
     group_channel_key: &str,
 ) -> Result<Option<serenity::GenericChannelId>> {
+    // One cache read + one decode for the whole lookup instead of four.
+    let config = module_state::config_cached(cache, db, guild_id, MODULE).await;
+
     // Matches lumi's `isToggleEnabled`: only an explicit `false` disables; a
     // missing value stays enabled.
-    if module_state::config_cached_value(cache, db, guild_id, MODULE, toggle_key).await
-        == Some(Value::Bool(false))
-    {
+    if config.get(toggle_key) == Some(&Value::Bool(false)) {
         return Ok(None);
     }
     for key in [event_channel_key, group_channel_key, "log_channel_id"] {
-        if let Some(id) = read_channel(cache, db, guild_id, key).await? {
+        if let Some(id) = config.get(key).and_then(module_state::parse_id) {
             return Ok(Some(serenity::GenericChannelId::new(id)));
         }
     }
