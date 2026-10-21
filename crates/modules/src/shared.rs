@@ -189,7 +189,6 @@ pub fn group_digits(n: i64) -> String {
     if n < 0 { format!("-{out}") } else { out }
 }
 
-/// Cut to at most `max` characters without changing the tail's meaning.
 pub fn truncate_chars(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
 }

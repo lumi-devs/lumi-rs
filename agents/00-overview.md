@@ -8,7 +8,7 @@ all the code first. Read this file first, then the topic doc you need.
 | `01-workspace.md` | Crate layout, dep direction, how to add a crate |
 | `02-modules.md` | Module trait, how to add a feature module |
 | `03-db.md` | Entities, migrations, typed helpers, no-raw-SQL rule |
-| `04-ui.md` | V2 card/panel/layout builders, TS parity |
+| `04-ui.md` | V2 card/panel/layout builders, snapshot-tested output |
 | `05-script.md` | Rhai addon host, capability gating, SSRF block |
 | `06-architecture.md` | Cluster model, shard math, scale targets |
 | `07-build.md` | Colab build, flake, cargo profiles, CI |

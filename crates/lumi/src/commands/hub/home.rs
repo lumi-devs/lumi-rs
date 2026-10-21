@@ -4,7 +4,6 @@ use lumi_ui::{Card, CardKind, CardOptions, CardReply};
 
 use super::{GuildCtx, HubView, tab_row};
 
-/// The hub landing card.
 pub async fn card(services: &Services, guild: &GuildCtx) -> Result<CardReply, Error> {
     let prefix = lumi_kernel::prefix::get(&services.cache, &services.db, guild.id)
         .await

@@ -1,8 +1,7 @@
 use crate::ids::GuildId;
 use sea_orm::entity::prelude::*;
 
-/// A named, per-guild monotonically increasing counter (e.g. moderation case
-/// numbers). Incremented atomically through `db::next_counter`.
+/// A named per-guild counter, incremented atomically through `db::next_counter`.
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "counters")]

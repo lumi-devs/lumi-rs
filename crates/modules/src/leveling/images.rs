@@ -84,11 +84,15 @@ fn http_client() -> Option<&'static reqwest::Client> {
         .get_or_init(|| {
             reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(4))
+                .no_proxy()
                 .build()
                 .ok()
         })
         .as_ref()
 }
+
+const MAX_AVATAR_BYTES: usize = 8 * 1024 * 1024;
+const AVATAR_SIZE: u32 = 256;
 
 /// Rewrite a Discord CDN image URL to its PNG raster.
 ///
@@ -106,23 +110,28 @@ fn png_url(url: &str) -> String {
         .or_else(|| path.strip_suffix(".jpeg"))
         .or_else(|| path.strip_suffix(".png"))
         .unwrap_or(path);
-    if query.is_empty() {
-        format!("{stem}.png")
-    } else {
-        format!("{stem}.png?{query}")
-    }
+    let mut params: Vec<String> = query
+        .split('&')
+        .filter(|param| !param.is_empty() && !param.starts_with("size="))
+        .map(str::to_string)
+        .collect();
+    params.push(format!("size={AVATAR_SIZE}"));
+    format!("{stem}.png?{}", params.join("&"))
 }
 
 pub async fn fetch_avatar_base64(url: Option<&str>) -> Option<String> {
     let url = png_url(url?);
-    let bytes = http_client()?
-        .get(url)
-        .send()
-        .await
-        .ok()?
-        .bytes()
-        .await
-        .ok()?;
+    let mut response = http_client()?.get(url).send().await.ok()?;
+    if response.content_length().unwrap_or(0) > MAX_AVATAR_BYTES as u64 {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if bytes.len() + chunk.len() > MAX_AVATAR_BYTES {
+            return None;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
     Some(format!("data:image/png;base64,{}", BASE64.encode(&bytes)))
 }
 
@@ -293,15 +302,15 @@ mod tests {
     fn avatar_url_is_forced_to_png() {
         assert_eq!(
             png_url("https://cdn.discordapp.com/avatars/1/abc.webp?size=1024"),
-            "https://cdn.discordapp.com/avatars/1/abc.png?size=1024"
+            "https://cdn.discordapp.com/avatars/1/abc.png?size=256"
         );
         assert_eq!(
             png_url("https://cdn.discordapp.com/avatars/1/a_abc.gif"),
-            "https://cdn.discordapp.com/avatars/1/a_abc.png"
+            "https://cdn.discordapp.com/avatars/1/a_abc.png?size=256"
         );
         assert_eq!(
             png_url("https://cdn.discordapp.com/embed/avatars/0.png"),
-            "https://cdn.discordapp.com/embed/avatars/0.png"
+            "https://cdn.discordapp.com/embed/avatars/0.png?size=256"
         );
     }
 

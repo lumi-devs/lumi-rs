@@ -170,6 +170,7 @@ impl ActionTracker {
             return None;
         }
         if entry.tripped_at.is_some() {
+            // Cooldown elapsed: start a fresh window instead of counting stale events.
             entry.tripped_at = None;
             entry.events.clear();
         }

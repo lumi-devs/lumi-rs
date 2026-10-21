@@ -26,7 +26,6 @@ const MAX_MULTI_VALUES: u8 = 25;
 /// Custom-id prefix of the field-edit modal (`lumi:cfgmodal:<module>:<key>:<section>`).
 const MODAL_PREFIX: &str = "cfgmodal";
 
-/// The feature/module list.
 pub async fn list_card(
     services: &Services,
     guild: &GuildCtx,
@@ -188,10 +187,7 @@ fn field_lines(field: &ConfigField, value: Option<&Value>) -> String {
     }
 }
 
-/// A module's config panel, one schema section at a time.
-///
-/// Values with per-field editors (inline toggle for booleans, an edit view for every other kind), a
-/// section picker, a module toggle, reset and prev/next arrows.
+/// A module's config panel: per-field editors, section picker, toggle, reset and pager.
 pub async fn config_card(
     services: &Services,
     guild: &GuildCtx,
@@ -436,7 +432,6 @@ async fn field_edit_card(
     )
 }
 
-/// Config change history for a module.
 fn history_card(services: &Services, module_name: &str, section: usize) -> CardReply {
     let Some(module) = services.registry.get(module_name) else {
         return Card::error(
@@ -474,7 +469,6 @@ fn history_card(services: &Services, module_name: &str, section: usize) -> CardR
         .into_reply()
 }
 
-/// Channel and role overrides for a module.
 fn overrides_card(services: &Services, module_name: &str, section: usize) -> CardReply {
     let Some(module) = services.registry.get(module_name) else {
         return Card::error(
@@ -531,7 +525,6 @@ fn field_modal(module_name: &str, field: &ConfigField, section: usize) -> Create
     ))])
 }
 
-/// The first value from any select menu, as a string.
 fn select_string(data: &serenity::ComponentInteractionData) -> Option<String> {
     match &data.kind {
         ComponentInteractionDataKind::StringSelect { values } => values.first().cloned(),

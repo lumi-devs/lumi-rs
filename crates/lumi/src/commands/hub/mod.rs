@@ -19,15 +19,12 @@ pub mod settings;
 
 /// Every hub custom id starts with this.
 pub const PREFIX: &str = "lumi";
-/// Fixed custom id of the set-prefix modal.
 pub const PREFIX_MODAL_ID: &str = "lumi:prefixmodal";
-/// Prefix of the addon management modals.
 pub const ADDON_MODAL_ID: &str = "lumi:addonmodal";
 
 /// The permit required to use any hub management action.
 pub const ADMIN_NODE: &str = "admin.*";
 
-/// A hub tab.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HubView {
     Home,
@@ -71,7 +68,6 @@ pub struct GuildCtx {
 /// A parsed `lumi:` custom id (shared scheme from `lumi_ui::ids`).
 pub use lumi_ui::ids::CustomId as HubId;
 
-/// Build a `lumi:` custom id from segments.
 #[must_use]
 pub fn cid(parts: &[&str]) -> String {
     lumi_ui::ids::build(PREFIX, parts)
@@ -566,7 +562,6 @@ pub fn tab_button(
         .style(style)
 }
 
-/// The five-tab row, marking `active`.
 pub fn tab_row(active: HubView) -> serenity::CreateActionRow<'static> {
     lumi_ui::panels::action_row_of(vec![
         tab_button(HubView::Home, active, "Hub", '🤖'),

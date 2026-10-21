@@ -36,7 +36,6 @@ pub fn format_breadcrumbs(crumbs: &[String], separator: &str) -> String {
         .join(separator)
 }
 
-/// The ` ❯ ` separator joining breadcrumb crumbs.
 pub const BREADCRUMB_SEPARATOR: &str = " \u{276f} ";
 
 /// Breadcrumb header for the top of a card (`""` when there are no crumbs).

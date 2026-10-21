@@ -131,17 +131,14 @@ async fn action(
                 error: None,
             }),
         ),
-        "cache.clear" => {
-            // Invalidate redis cache keys
-            (
-                StatusCode::OK,
-                Json(ActionResponse {
-                    success: true,
-                    data: Some(json!({ "message": "cache invalidation triggered" })),
-                    error: None,
-                }),
-            )
-        }
+        "cache.clear" => (
+            StatusCode::OK,
+            Json(ActionResponse {
+                success: true,
+                data: Some(json!({ "message": "cache invalidation triggered" })),
+                error: None,
+            }),
+        ),
         "modules.list" => {
             let modules: Vec<_> = state
                 .services

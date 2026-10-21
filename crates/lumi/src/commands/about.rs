@@ -156,7 +156,6 @@ pub async fn help(
     let mut categories: BTreeMap<String, Vec<(&str, &str)>> = BTreeMap::new();
     let mut claimed_commands = std::collections::HashSet::new();
 
-    // 1. Query the live ModuleRegistry dynamically: each module owns its name, emoji & commands
     for module in ctx.data().registry.iter() {
         let meta = module.metadata();
         let cat_header = format!("{} __{}__", meta.emoji, meta.display_name);
@@ -176,7 +175,6 @@ pub async fn help(
         }
     }
 
-    // 2. Put core root engine commands (not owned by optional modules) into Core
     let core_header = "✨ __Core System__".to_string();
     for cmd in all_commands {
         if !claimed_commands.contains(&cmd.name) {

@@ -17,20 +17,16 @@ use serde_json::Value;
 
 use crate::Result;
 
-/// Channel carrying cross-process invalidation messages.
 pub const INVALIDATE_CHANNEL: &str = "lumi:invalidate";
 
-/// Maximum number of entries held in each process's local tier.
 const LOCAL_CAPACITY: u64 = 10_000;
 
 /// Reconnect backoff bounds for the invalidation listener.
 const BACKOFF_MIN: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 
-/// How long a Redis connection may take to establish or answer.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Read one field out of a Redis `INFO` payload.
 fn info_field<T: std::str::FromStr>(info: &str, name: &str) -> Option<T> {
     info.lines()
         .find_map(|line| Some(line.strip_prefix(name)?.strip_prefix(':')?.trim()))
@@ -50,17 +46,13 @@ fn now_ms() -> i64 {
         .map_or(0, |elapsed| elapsed.as_millis() as i64)
 }
 
-/// Request coalescer to prevent cache stampedes (Thundering Herd).
-/// When multiple tasks request the same missing key, only the first
-/// executes the fetcher; others wait on the broadcast channel.
+/// Request coalescer: concurrent callers of a missing key share one fetcher.
 #[derive(Debug, Default)]
 pub struct SingleFlight {
     in_flight: Mutex<HashMap<String, broadcast::Sender<std::result::Result<Value, String>>>>,
 }
 
 impl SingleFlight {
-    /// Execute `fetcher` exactly once for `key`, sharing the result
-    /// with all concurrent callers.
     pub async fn get_or_fetch<F, Fut>(&self, key: &str, fetcher: F) -> Result<Value>
     where
         F: FnOnce() -> Fut,
@@ -132,7 +124,6 @@ impl SingleFlight {
     }
 }
 
-/// Wrap `value` with an absolute expiry timestamp.
 fn ttl_entry(value: &Value, ttl: Duration, now: i64) -> Value {
     let exp = now.saturating_add(ttl.as_millis() as i64);
     serde_json::to_value(TtlEntry {
@@ -142,7 +133,6 @@ fn ttl_entry(value: &Value, ttl: Duration, now: i64) -> Value {
     .unwrap_or_else(|_| serde_json::json!({ "exp": exp, "v": value }))
 }
 
-/// Unwrap a stored entry, returning `None` once it has expired.
 fn ttl_value(stored: &Value, now: i64) -> Option<Value> {
     let entry: TtlEntry = serde_json::from_value(stored.clone()).ok()?;
     (entry.exp > now).then_some(entry.v)
@@ -178,7 +168,6 @@ enum Invalidation {
     Prefix(String),
 }
 
-/// Local moka cache backed by a shared Redis connection.
 pub struct Cache {
     local: MokaCache<String, Value>,
     claims: Claims,
@@ -261,7 +250,6 @@ impl Cache {
         Ok((lookups > 0).then(|| hits as f64 / lookups as f64 * 100.0))
     }
 
-    /// Version reported by the connected Redis, e.g. `8.10.2`.
     pub async fn server_version(&self) -> Result<String> {
         let mut conn = self.redis.clone();
         let info: String = redis::cmd("INFO")
@@ -330,9 +318,7 @@ impl Cache {
         Ok(())
     }
 
-    /// Get a cached value or fetch it exactly once, sharing the result with
-    /// concurrent callers to prevent cache stampedes (Thundering Herd).
-    /// Checks local cache first, then Redis, then runs `fetcher` if missing.
+    /// Get a cached value or fetch it exactly once across concurrent callers.
     pub async fn get_or_fetch_json<F, Fut>(
         &self,
         key: &str,
@@ -343,12 +329,10 @@ impl Cache {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<Value>>,
     {
-        // Try local cache first
         if let Some(v) = self.get_json_ttl(key).await? {
             return Ok(v);
         }
 
-        // Use singleflight to coalesce concurrent fetches
         self.singleflight
             .get_or_fetch(key, || async {
                 let val = fetcher().await?;
@@ -358,7 +342,6 @@ impl Cache {
             .await
     }
 
-    /// Alias for [`Cache::get_or_fetch_json`].
     pub async fn get_or_fetch<F, Fut>(&self, key: &str, ttl: Duration, fetcher: F) -> Result<Value>
     where
         F: FnOnce() -> Fut,
@@ -373,8 +356,6 @@ impl Cache {
         self.claims.claim(key, ttl)
     }
 
-    /// Typed read: deserialize the cached JSON into `T` instead of handing
-    /// callers a raw [`Value`].
     pub async fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
         Ok(self
             .get_json(key)
@@ -383,7 +364,6 @@ impl Cache {
             .transpose()?)
     }
 
-    /// Typed write: serialize `T` as the cached JSON payload.
     pub async fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
         self.set_json(key, &serde_json::to_value(value)?).await
     }

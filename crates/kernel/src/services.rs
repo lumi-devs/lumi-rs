@@ -31,13 +31,9 @@ impl Services {
         &self.db_read
     }
 
-    /// Build every shared runtime service from `cfg`, one place to wire the
-    /// infrastructure instead of repeating it in each binary entry point.
-    ///
-    /// `registry` carries the modules the caller has registered; migration is
-    /// left to the caller. The returned value is `Arc` so it can go straight
-    /// into poise's framework data. The cross-process cache invalidation
-    /// listener is spawned here.
+    /// Build every shared runtime service from `cfg`. `registry` carries the
+    /// modules the caller has registered; migration is left to the caller. The
+    /// cross-process cache invalidation listener is spawned here.
     pub async fn bootstrap(cfg: Config, registry: ModuleRegistry) -> Result<Arc<Self>> {
         let db = lumi_db::connect(&cfg.database_url).await?;
         let db_read = match std::env::var("DATABASE_READ_URL") {

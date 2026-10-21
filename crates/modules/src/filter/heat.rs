@@ -126,6 +126,7 @@ pub async fn activate_auto_lockdown(
 ) -> bool {
     let mut conn = services.cache.redis();
     let key = format!("lumi:filter:{guild_id}:autolockdown");
+    // NX ensures only one shard schedules the unlock for a lockdown.
     let res: Option<String> = redis::cmd("SET")
         .arg(&key)
         .arg(now_millis().to_string())
@@ -198,7 +199,6 @@ pub async fn check_mention_flood(
             .await;
     }
 
-    // Schedule background unlock task
     let http = Arc::clone(&ctx.http);
     let cache = Arc::clone(&services.cache);
     tokio::spawn(async move {

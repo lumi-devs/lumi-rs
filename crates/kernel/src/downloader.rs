@@ -13,7 +13,261 @@ use sea_orm::{
 
 use lumi_db::entities::{downloader_module, downloader_repo, global, global_module_state};
 
+use std::sync::atomic::AtomicBool;
+
 use crate::{LumiError, Result};
+
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const CHANGELOG_LIMIT: usize = 20;
+const DIFF_STAT_LIMIT: usize = 30;
+const SHORT_SHA: usize = 7;
+
+fn git_error(context: &str, error: impl std::fmt::Display) -> LumiError {
+    LumiError::Other(format!("{context}: {error}"))
+}
+
+fn open(dir: &Path) -> Result<gix::Repository> {
+    gix::open(dir).map_err(|error| git_error("failed to open repository", error))
+}
+
+async fn blocking<T, F>(what: &'static str, work: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::time::timeout(GIT_TIMEOUT, tokio::task::spawn_blocking(work)).await {
+        Ok(joined) => joined.map_err(|error| git_error(what, error))?,
+        Err(_) => Err(LumiError::Other(format!("{what} timed out"))),
+    }
+}
+
+fn clone_blocking(url: &str, dir: &Path, branch: Option<&str>) -> Result<()> {
+    let mut prepare = gix::prepare_clone(url, dir)
+        .map_err(|error| git_error("failed to prepare clone", error))?;
+    if let Some(branch) = branch {
+        prepare = prepare
+            .with_ref_name(Some(branch))
+            .map_err(|error| git_error("invalid branch", error))?;
+    }
+    let interrupt = AtomicBool::new(false);
+    let (mut checkout, _) = prepare
+        .fetch_then_checkout(gix::progress::Discard, &interrupt)
+        .map_err(|error| git_error("git clone failed", error))?;
+    checkout
+        .main_worktree(gix::progress::Discard, &interrupt)
+        .map_err(|error| git_error("git checkout failed", error))?;
+    Ok(())
+}
+
+fn fetch_blocking(repo: &gix::Repository) -> Result<()> {
+    let remote = repo
+        .find_remote("origin")
+        .map_err(|error| git_error("repository has no origin remote", error))?;
+    let mut progress = gix::progress::Discard;
+    remote
+        .connect(gix::remote::Direction::Fetch)
+        .map_err(|error| git_error("failed to connect to origin", error))?
+        .prepare_fetch(&mut progress, gix::remote::ref_map::Options::default())
+        .map_err(|error| git_error("git fetch failed", error))?
+        .receive(&mut progress, &gix::interrupt::IS_INTERRUPTED)
+        .map_err(|error| git_error("git fetch failed", error))?;
+    Ok(())
+}
+
+fn head_sha_blocking(repo: &gix::Repository) -> Result<String> {
+    repo.head_id()
+        .map(|id| id.detach().to_string())
+        .map_err(|error| git_error("failed to read HEAD", error))
+}
+
+fn branch_name(repo: &gix::Repository) -> Option<String> {
+    repo.head_name()
+        .ok()
+        .flatten()
+        .map(|name| name.shorten().to_string())
+}
+
+fn short_sha(id: &gix::ObjectId) -> String {
+    id.to_string().chars().take(SHORT_SHA).collect()
+}
+
+fn clear_worktree(dir: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(LumiError::Io)? {
+        let entry = entry.map_err(LumiError::Io)?;
+        if entry.file_name() == ".git" {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path).map_err(LumiError::Io)?;
+        } else {
+            std::fs::remove_file(&path).map_err(LumiError::Io)?;
+        }
+    }
+    Ok(())
+}
+
+fn reset_blocking(repo: &gix::Repository, commit: gix::ObjectId) -> Result<()> {
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| LumiError::Other("repository has no worktree".to_string()))?
+        .to_path_buf();
+    let tree = repo
+        .find_commit(commit)
+        .map_err(|error| git_error("failed to read commit", error))?
+        .tree()
+        .map_err(|error| git_error("failed to read tree", error))?
+        .id;
+
+    clear_worktree(&workdir)?;
+    let mut index = repo
+        .index_from_tree(&tree)
+        .map_err(|error| git_error("failed to build index", error))?;
+    let mut options = repo
+        .checkout_options(gix::worktree::stack::state::attributes::Source::IdMapping)
+        .map_err(|error| git_error("failed to configure checkout", error))?;
+    options.destination_is_initially_empty = true;
+    let interrupt = AtomicBool::new(false);
+    gix_worktree_state::checkout(
+        &mut index,
+        &workdir,
+        repo.objects
+            .clone()
+            .into_arc()
+            .map_err(|error| git_error("failed to share object database", error))?,
+        &gix::progress::Discard,
+        &gix::progress::Discard,
+        &interrupt,
+        options,
+    )
+    .map_err(|error| git_error("git checkout failed", error))?;
+    index
+        .write(gix::index::write::Options::default())
+        .map_err(|error| git_error("failed to write index", error))
+}
+
+fn fast_forward_blocking(dir: &Path) -> Result<String> {
+    let repo = open(dir)?;
+    if repo
+        .is_dirty()
+        .map_err(|error| git_error("failed to inspect worktree", error))?
+    {
+        return Err(LumiError::Invalid(
+            "repository has uncommitted changes".to_string(),
+        ));
+    }
+    let branch = branch_name(&repo).unwrap_or_else(|| "main".to_string());
+    fetch_blocking(&repo)?;
+
+    let target = repo
+        .rev_parse_single(format!("refs/remotes/origin/{branch}").as_str())
+        .map_err(|error| git_error("failed to read origin branch", error))?
+        .detach();
+    let head = repo
+        .head_id()
+        .map_err(|error| git_error("failed to read HEAD", error))?
+        .detach();
+    if head == target {
+        return Ok(target.to_string());
+    }
+    let base = repo
+        .merge_base(head, target)
+        .map_err(|error| git_error("failed to find merge base", error))?
+        .map(gix::Id::detach);
+    if base != Some(head) {
+        return Err(LumiError::Invalid(
+            "origin has diverged from the local repository".to_string(),
+        ));
+    }
+    reset_blocking(&repo, target)?;
+    repo.reference(
+        format!("refs/heads/{branch}").as_str(),
+        target,
+        gix::refs::transaction::PreviousValue::Any,
+        "lumi pull",
+    )
+    .map_err(|error| git_error("failed to move branch", error))?;
+    Ok(target.to_string())
+}
+
+fn changelog_blocking(repo: &gix::Repository, from: &str, to: &str) -> Result<String> {
+    let head = repo
+        .rev_parse_single(from)
+        .map_err(|error| git_error("failed to resolve range start", error))?
+        .detach();
+    let target = repo
+        .rev_parse_single(to)
+        .map_err(|error| git_error("failed to resolve range end", error))?
+        .detach();
+    let mut lines = Vec::new();
+    for step in repo
+        .rev_walk([target])
+        .all()
+        .map_err(|error| git_error("failed to walk history", error))?
+        .take(CHANGELOG_LIMIT)
+    {
+        let step = step.map_err(|error| git_error("failed to walk history", error))?;
+        if step.id == head {
+            break;
+        }
+        let commit = repo
+            .find_object(step.id)
+            .map_err(|error| git_error("failed to read commit", error))?
+            .into_commit();
+        let summary = commit
+            .message()
+            .map_err(|error| git_error("failed to read commit message", error))?
+            .summary()
+            .to_string();
+        lines.push(format!("{} {summary}", short_sha(&step.id)));
+    }
+    Ok(lines.join("\n"))
+}
+
+fn diff_stat_blocking(repo: &gix::Repository, from: &str, to: &str) -> Result<String> {
+    let old = repo
+        .rev_parse_single(from)
+        .map_err(|error| git_error("failed to resolve range start", error))?
+        .detach();
+    let new = repo
+        .rev_parse_single(to)
+        .map_err(|error| git_error("failed to resolve range end", error))?
+        .detach();
+    let old_tree = repo
+        .find_commit(old)
+        .map_err(|error| git_error("failed to read commit", error))?
+        .tree()
+        .map_err(|error| git_error("failed to read tree", error))?;
+    let new_tree = repo
+        .find_commit(new)
+        .map_err(|error| git_error("failed to read commit", error))?
+        .tree()
+        .map_err(|error| git_error("failed to read tree", error))?;
+
+    let changes = repo
+        .diff_tree_to_tree(&old_tree, &new_tree, None)
+        .map_err(|error| git_error("failed to diff trees", error))?;
+    let mut lines: Vec<String> = changes
+        .iter()
+        .take(DIFF_STAT_LIMIT)
+        .map(|change| match change {
+            gix::object::tree::diff::ChangeDetached::Addition { location, .. } => {
+                format!("A {location}")
+            }
+            gix::object::tree::diff::ChangeDetached::Deletion { location, .. } => {
+                format!("D {location}")
+            }
+            gix::object::tree::diff::ChangeDetached::Rewrite { location, .. }
+            | gix::object::tree::diff::ChangeDetached::Modification { location, .. } => {
+                format!("M {location}")
+            }
+        })
+        .collect();
+    if changes.len() > DIFF_STAT_LIMIT {
+        lines.push(format!("... {} more", changes.len() - DIFF_STAT_LIMIT));
+    }
+    Ok(lines.join("\n"))
+}
 
 #[derive(Clone, Debug)]
 pub struct Downloader {
@@ -30,7 +284,6 @@ pub struct RepoUpdateCheck {
     pub changelog: Option<String>,
 }
 
-/// Outcome of pulling a repository.
 #[derive(Clone, Debug)]
 pub struct RepoUpdateResult {
     pub changed: bool,
@@ -79,25 +332,6 @@ fn safe_component(name: &str) -> Result<&str> {
         return Err(LumiError::Invalid(format!("'{name}' is not a valid name")));
     }
     Ok(trimmed)
-}
-
-/// Run `git` in `dir`, returning trimmed stdout or an error carrying stderr.
-async fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let output = tokio::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .await
-        .map_err(LumiError::Io)?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(LumiError::Other(format!(
-            "git {} failed: {err}",
-            args.join(" ")
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Best-effort removal of a file or directory; missing paths are ignored.
@@ -179,27 +413,25 @@ impl Downloader {
         let repo_dir = repos_dir.join(&repo_name);
         remove_path(&repo_dir).await;
 
-        let repo_path = repo_dir.to_string_lossy().to_string();
-        let mut args = vec!["clone"];
-        if let Some(branch) = branch {
-            args.push("-b");
-            args.push(branch);
-        }
-        args.push("--");
-        args.push(url);
-        args.push(&repo_path);
-        git(&repos_dir, &args).await?;
+        let url_owned = url.to_string();
+        let branch_owned = branch.map(str::to_string);
+        let dir = repo_dir.clone();
+        blocking("git clone", move || {
+            clone_blocking(&url_owned, &dir, branch_owned.as_deref())
+        })
+        .await?;
 
-        let resolved_branch = git(&repo_dir, &["rev-parse", "--abbrev-ref", "HEAD"])
-            .await
-            .ok()
-            .filter(|resolved| !resolved.is_empty())
-            .or_else(|| branch.map(str::to_string))
-            .unwrap_or_else(|| "main".to_string());
-        let commit_hash = git(&repo_dir, &["rev-parse", "HEAD"])
-            .await
-            .ok()
-            .filter(|commit| !commit.is_empty());
+        let (resolved_branch, commit_hash) = {
+            let dir = repo_dir.clone();
+            blocking("git inspect", move || {
+                let repo = open(&dir)?;
+                Ok((
+                    branch_name(&repo).unwrap_or_else(|| "main".to_string()),
+                    head_sha_blocking(&repo).ok(),
+                ))
+            })
+            .await?
+        };
 
         let now = Utc::now().fixed_offset();
         let inserted = downloader_repo::ActiveModel {
@@ -225,9 +457,8 @@ impl Downloader {
                 "repository directory for '{name}'"
             )));
         }
-
-        git(&repo_dir, &["pull"]).await?;
-        let new_commit = git(&repo_dir, &["rev-parse", "HEAD"]).await?;
+        let dir = repo_dir.clone();
+        let new_commit = blocking("git pull", move || fast_forward_blocking(&dir)).await?;
 
         let mut active: downloader_repo::ActiveModel = repo.into();
         active.commit = Set(Some(new_commit.clone()));
@@ -400,39 +631,43 @@ impl Downloader {
             });
         }
 
-        // why: a failed fetch is tolerated; we then compare against stale refs.
-        let _ = git(&repo_dir, &["fetch", "origin"]).await;
-        let local = git(&repo_dir, &["rev-parse", "HEAD"]).await?;
-        let upstream = git(&repo_dir, &["rev-parse", "--abbrev-ref", "@{u}"])
-            .await
-            .unwrap_or_default();
-        let target = if upstream.is_empty() || upstream.contains("@{u}") {
-            format!("origin/{}", repo.branch)
-        } else {
-            upstream
-        };
-        let remote = git(&repo_dir, &["rev-parse", target.as_str()]).await?;
-        if local == remote {
-            return Ok(RepoUpdateCheck {
+        let branch = repo.branch.clone();
+        let dir = repo_dir.clone();
+        let checked = blocking("git update check", move || {
+            let repo = open(&dir)?;
+            // A failed fetch just compares against the refs we already have.
+            let _ = fetch_blocking(&repo);
+            let local = head_sha_blocking(&repo)?;
+            let target_ref = format!("refs/remotes/origin/{branch}");
+            let remote = repo
+                .rev_parse_single(target_ref.as_str())
+                .map_err(|error| git_error("failed to read origin branch", error))?
+                .detach()
+                .to_string();
+            if local == remote {
+                return Ok(None);
+            }
+            let changelog = changelog_blocking(&repo, "HEAD", target_ref.as_str())?;
+            Ok::<_, LumiError>(Some(changelog))
+        })
+        .await?;
+
+        Ok(match checked {
+            Some(changelog) => RepoUpdateCheck {
+                ok: true,
+                reason: String::new(),
+                has_update: true,
+                changelog: (!changelog.is_empty()).then_some(changelog),
+            },
+            None => RepoUpdateCheck {
                 ok: true,
                 reason: "up to date".to_string(),
                 has_update: false,
                 changelog: None,
-            });
-        }
-
-        let changelog = git(&repo_dir, &["log", "--oneline", &format!("HEAD..{target}")])
-            .await
-            .unwrap_or_default();
-        Ok(RepoUpdateCheck {
-            ok: true,
-            reason: String::new(),
-            has_update: true,
-            changelog: (!changelog.is_empty()).then_some(changelog),
+            },
         })
     }
 
-    /// Pull a repository and report what changed.
     pub async fn update_repo(&self, name: &str) -> Result<RepoUpdateResult> {
         let repo = self.find_repo(name).await?;
         let old_sha = repo.commit.clone();
@@ -441,10 +676,15 @@ impl Downloader {
 
         let diff_stat = match (changed, old_sha.clone()) {
             (true, Some(old)) => {
-                let range = format!("{old}..{new_sha}");
-                git(&self.repo_dir(name)?, &["diff", "--stat", &range])
-                    .await
-                    .ok()
+                let dir = self.repo_dir(name)?;
+                let new = new_sha.clone();
+                blocking("git diff", move || {
+                    let repo = open(&dir)?;
+                    diff_stat_blocking(&repo, &old, &new)
+                })
+                .await
+                .ok()
+                .filter(|stat| !stat.is_empty())
             }
             _ => None,
         };
@@ -505,7 +745,6 @@ impl Downloader {
         Ok(true)
     }
 
-    /// Enable or disable a module globally.
     pub async fn toggle_module(&self, module_name: &str, enabled: bool) -> Result<()> {
         global_module_state::Entity::insert(global_module_state::ActiveModel {
             module_name: Set(module_name.to_string()),
@@ -527,7 +766,6 @@ impl Downloader {
         Ok(())
     }
 
-    /// Installed modules joined with their source repository name.
     pub async fn get_installed_modules_detailed(&self) -> Result<Vec<InstalledModule>> {
         let modules = self.list_installed_modules().await?;
         let names = self.repo_names().await?;
@@ -545,7 +783,6 @@ impl Downloader {
             .collect())
     }
 
-    /// Scan a repository checkout for module manifests.
     pub async fn get_modules_in_repo(&self, repo_name: &str) -> Result<Vec<RepoModuleInfo>> {
         let repo_dir = self.repo_dir(repo_name)?;
         if !repo_dir.is_dir() {
@@ -594,7 +831,6 @@ impl Downloader {
         Ok(out)
     }
 
-    /// Read the auto-update settings from `global_config`.
     pub async fn get_auto_update_config(&self) -> Result<AutoUpdateConfig> {
         let row = global::Entity::find()
             .order_by_asc(global::Column::Id)

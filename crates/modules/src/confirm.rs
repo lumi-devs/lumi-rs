@@ -4,9 +4,8 @@
 //! The collector is scoped to the prompt message and the invoking user, so
 //! concurrent prompts never cross wires.
 //!
-//! Cross-agent note: this belongs in `lumi_ui` (or `lumi_kernel::bot`) next to
-//! `panels::confirm_row` so UI callers share one implementation; it lives here
-//! only because `crates/ui` is out of this worktree's scope.
+//! Belongs in `lumi_ui` next to `panels::confirm_row` so UI callers share one
+//! implementation; it lives here because `crates/ui` is outside this worktree.
 
 use std::time::Duration;
 

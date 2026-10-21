@@ -19,6 +19,9 @@ serde_json  = { workspace = true }
 dashmap     = { workspace = true }
 moka        = { workspace = true }
 redis       = { workspace = true }
+gix         = { workspace = true }
+gix-worktree = { workspace = true }
+gix-worktree-state = { workspace = true }
 sea-orm     = { workspace = true }
 apalis      = { workspace = true }
 apalis-redis = { workspace = true }

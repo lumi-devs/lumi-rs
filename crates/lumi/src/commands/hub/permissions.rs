@@ -403,7 +403,6 @@ async fn node_names(services: &Services, guild: &GuildCtx) -> Result<Vec<String>
     Ok(names)
 }
 
-/// Route a permit-related interaction.
 pub async fn dispatch(
     services: &Services,
     guild: &GuildCtx,
@@ -599,7 +598,6 @@ fn parse_page(token: Option<&str>) -> usize {
     token.and_then(|t| t.parse().ok()).unwrap_or(0)
 }
 
-/// The first selected value from any select menu, as a string.
 fn first_value(data: &serenity::ComponentInteractionData) -> Option<String> {
     match &data.kind {
         ComponentInteractionDataKind::StringSelect { values } => values.first().cloned(),

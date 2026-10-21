@@ -54,14 +54,13 @@ async fn main() -> Result<()> {
             tracing::info!("starting All-In-One supervisor (Gateway + API + Scheduler + Worker)");
             let api_cfg = cfg.clone();
 
-            // 1. Spawn HTTP API in background
+            // Gateway stays foreground so its exit tears down the process.
             tokio::spawn(async move {
                 if let Err(e) = start_api(api_cfg).await {
                     tracing::error!(error = %e, "HTTP API service crashed");
                 }
             });
 
-            // 2. Run Gateway as foreground supervisor
             start_gateway(cfg).await?;
         }
     }
@@ -165,7 +164,6 @@ async fn start_worker(cfg: lumi_kernel::Config) -> Result<()> {
     let _cache = lumi_kernel::Cache::connect(&cfg.redis_url).await?;
     let _db = lumi_db::connect(&cfg.database_url).await?;
 
-    // Worker background loop listening on Redis stream/pubsub
     let shutdown = lumi::runtime::shutdown_signal();
     tokio::pin!(shutdown);
 
@@ -176,7 +174,6 @@ async fn start_worker(cfg: lumi_kernel::Config) -> Result<()> {
                 break;
             }
             () = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
-                // Background worker iteration (e.g. invalidate expired caches, process queues)
             }
         }
     }

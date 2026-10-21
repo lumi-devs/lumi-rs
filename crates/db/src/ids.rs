@@ -22,7 +22,6 @@ macro_rules! snowflake {
                 Self(i64::from_ne_bytes(raw.to_ne_bytes()))
             }
 
-            /// The Discord snowflake as a `u64`.
             #[must_use]
             pub const fn get(self) -> u64 {
                 u64::from_ne_bytes(self.0.to_ne_bytes())
@@ -81,18 +80,12 @@ macro_rules! snowflake {
     };
 }
 
-snowflake!(
-    /// A guild (server) snowflake.
-    GuildId
-);
+snowflake!(GuildId);
 snowflake!(
     /// A user snowflake. Also used for actors, moderators and message authors.
     UserId
 );
-snowflake!(
-    /// A channel snowflake.
-    ChannelId
-);
+snowflake!(ChannelId);
 snowflake!(
     /// A permit assignment target: a user, role or channel depending on
     /// `permit_assignments.target_type`.

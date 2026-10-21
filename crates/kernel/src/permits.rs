@@ -5,9 +5,6 @@
 //! `custom` buckets in chain order (user, channel, roles high→low). Deny wins
 //! inside a bucket, and the first tier that returns a verdict decides; a tier
 //! with no matching node passes to the next.
-//!
-//! One engine produces both the fast decision ([`PermitResolver::resolve`]) and
-//! the full tier walk ([`PermitResolver::explain`], [`explain_permit`]).
 
 use std::collections::HashMap;
 
@@ -18,7 +15,6 @@ use lumi_db::entities::{permit, permit_assignment};
 
 use crate::Result;
 
-/// A permit as loaded from the `permits` table.
 #[derive(Clone, Debug)]
 pub struct PermitRow {
     pub id: i32,
@@ -46,7 +42,6 @@ impl PermitRow {
     }
 }
 
-/// A permit-to-target binding.
 #[derive(Clone, Debug)]
 pub struct PermitAssignment {
     pub permit_id: i32,
@@ -55,7 +50,6 @@ pub struct PermitAssignment {
     pub target_id: i64,
 }
 
-/// The shape of a permit node pattern.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeScope {
     /// `*` — matches any node.
@@ -78,7 +72,6 @@ impl NodeScope {
     }
 }
 
-/// Match a granted node pattern against a required node.
 pub fn node_matches(pattern: &str, node: &str) -> bool {
     if pattern.is_empty() || node.is_empty() {
         return false;
@@ -391,7 +384,6 @@ impl PermitResolver {
     }
 }
 
-/// The target of a permit explain walk, as much as the caller can cheaply gather.
 #[derive(Clone, Debug)]
 pub struct ExplainSubject {
     pub user_id: u64,

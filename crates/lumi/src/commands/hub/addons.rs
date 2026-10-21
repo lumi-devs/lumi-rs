@@ -216,7 +216,6 @@ async fn installed_card(services: &Services) -> Result<CardReply, Error> {
         .into_reply())
 }
 
-/// Auto-update toggle, interval select and status.
 async fn autoupdate_card(services: &Services) -> Result<CardReply, Error> {
     let cfg = services.downloader.get_auto_update_config().await?;
 
@@ -422,7 +421,6 @@ async fn module_info_card(
     )
 }
 
-/// Repository update confirmation card.
 fn update_confirm_card(repo_name: &str, changelog: Option<&str>) -> CardReply {
     let body = changelog.filter(|c| !c.is_empty()).map_or_else(
         || "New commits are available on the tracked branch.".to_string(),
@@ -481,7 +479,6 @@ async fn update_all(services: &Services) -> Result<HubOutcome, Error> {
     Ok(HubOutcome::Ephemeral(reply))
 }
 
-/// Route an add-on interaction.
 pub async fn dispatch(
     services: &Services,
     _guild: &GuildCtx,
@@ -673,7 +670,6 @@ pub async fn dispatch(
     }
 }
 
-/// Install or uninstall a module, surfacing failures as an ephemeral card.
 async fn apply_module_action(
     services: &Services,
     act: &str,
@@ -696,7 +692,6 @@ async fn apply_module_action(
     }
 }
 
-/// Handle an add-on management modal submission.
 pub async fn handle_modal(
     services: &Services,
     _guild: &GuildCtx,
@@ -853,7 +848,6 @@ fn text_input(
     ))
 }
 
-/// The first selected value of a string select, if any.
 fn select_value(data: &serenity::ComponentInteractionData) -> Option<String> {
     match &data.kind {
         serenity::all::ComponentInteractionDataKind::StringSelect { values } => {

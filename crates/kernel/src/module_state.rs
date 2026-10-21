@@ -49,7 +49,6 @@ async fn global_enabled(db: &DatabaseConnection, module: &str) -> Option<bool> {
         .map(|row| row.enabled)
 }
 
-/// Whether a module runs in a guild.
 pub async fn is_enabled(db: &DatabaseConnection, guild_id: u64, module: &str) -> bool {
     let guild = guild_module_state::Entity::find()
         .filter(guild_module_state::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
@@ -62,7 +61,6 @@ pub async fn is_enabled(db: &DatabaseConnection, guild_id: u64, module: &str) ->
     resolve_enabled(global_enabled(db, module).await, guild)
 }
 
-/// Persist a guild's enable/disable choice for a module.
 pub async fn set_enabled(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -199,14 +197,12 @@ pub async fn config_cached(
     config
 }
 
-/// Invalidate guild config entry in cache.
 pub async fn invalidate_config(cache: &Cache, guild_id: u64, module: &str) -> Result<()> {
     let key = format!("lumi:cfg:{module}:{guild_id}");
     cache.invalidate(&key).await?;
     Ok(())
 }
 
-/// Fetch single config value with caching.
 pub async fn config_cached_value(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -242,8 +238,7 @@ pub fn parse_id(value: &Value) -> Option<u64> {
         .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
 }
 
-/// A single config value parsed as a snowflake, accepting a JSON number or a
-/// numeric string. `None` when unset or unparsable.
+/// A config value parsed as a snowflake; `None` when unset or unparsable.
 pub async fn config_u64(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -256,7 +251,6 @@ pub async fn config_u64(
         .and_then(parse_id))
 }
 
-/// Upsert one config key for a guild + module.
 pub async fn set_config_field(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -304,7 +298,6 @@ fn coerce_value(raw: &str, kind: &ConfigFieldKind) -> Result<Value> {
     }
 }
 
-/// Convert a raw select value into the field's JSON type, then store it.
 pub async fn set_config_value(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -327,7 +320,6 @@ pub async fn clear_config(db: &DatabaseConnection, guild_id: u64, module: &str) 
     Ok(result.rows_affected)
 }
 
-/// Cached version of `set_config_field` that also invalidates the cache.
 pub async fn set_config_field_cached(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -341,7 +333,6 @@ pub async fn set_config_field_cached(
     Ok(())
 }
 
-/// Cached version of `set_config_value` that also invalidates the cache.
 pub async fn set_config_value_cached(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -355,7 +346,6 @@ pub async fn set_config_value_cached(
     set_config_field_cached(cache, db, guild_id, module, key, value).await
 }
 
-/// Cached version of `clear_config` that also invalidates the cache.
 pub async fn clear_config_cached(
     cache: &Cache,
     db: &DatabaseConnection,

@@ -35,7 +35,6 @@ pub enum ShardStatus {
 }
 
 impl ShardStatus {
-    /// Status dot rendered next to the shard id.
     #[must_use]
     pub const fn dot(self) -> &'static str {
         match self {

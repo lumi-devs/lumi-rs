@@ -16,7 +16,6 @@ use crate::{LumiError, Result};
 
 type Storage = RedisStorage<Job>;
 
-/// A unit of scheduled work handed to the job handler.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
     pub name: String,
@@ -38,14 +37,12 @@ struct WorkerState {
     storage: Storage,
 }
 
-/// Redis-backed job queue backed by `apalis-redis`.
 #[derive(Clone, Debug)]
 pub struct Scheduler {
     storage: Storage,
 }
 
 impl Scheduler {
-    /// Connect to Redis and build a scheduler.
     pub async fn connect(redis_url: &str) -> Result<Self> {
         let conn = apalis_redis::connect(redis_url)
             .await
@@ -55,7 +52,6 @@ impl Scheduler {
         })
     }
 
-    /// Enqueue a job to run as soon as a worker is free.
     pub async fn enqueue(&self, job: Job) -> Result<()> {
         let mut storage = self.storage.clone();
         storage.push(job).await.map_err(sink_error)

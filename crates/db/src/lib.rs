@@ -33,7 +33,6 @@ fn env_number<T: std::str::FromStr>(name: &str, default: T) -> T {
     }
 }
 
-/// Read a textual env var, falling back to `default`.
 fn env_text(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_owned())
 }
@@ -165,7 +164,6 @@ pub async fn reset_prefix(db: &DatabaseConnection, guild_id: u64) -> Result<()> 
     Ok(())
 }
 
-/// How many modules a guild has explicitly enabled.
 pub async fn count_enabled_modules(db: &DatabaseConnection, guild_id: u64) -> Result<u64> {
     entities::guild_module_state::Entity::find()
         .filter(entities::guild_module_state::Column::GuildId.eq(GuildId::from(guild_id)))
@@ -208,7 +206,6 @@ fn counter(row: &QueryResult, column: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// A guild's permits ordered by their display position.
 pub async fn list_permits(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -220,7 +217,6 @@ pub async fn list_permits(
         .await
 }
 
-/// Delete a permit by id; returns how many rows were removed.
 pub async fn delete_permit(db: &DatabaseConnection, id: i32) -> Result<u64> {
     let result = entities::permit::Entity::delete_by_id(id).exec(db).await?;
     Ok(result.rows_affected)
@@ -273,7 +269,6 @@ pub async fn list_assignments(
     Ok(rows)
 }
 
-/// Fetch a single permit scoped to its guild.
 pub async fn get_permit(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -317,7 +312,6 @@ pub async fn assign_permit(
     Ok(())
 }
 
-/// Remove a permit binding if present.
 pub async fn unassign_permit(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -335,7 +329,6 @@ pub async fn unassign_permit(
     Ok(())
 }
 
-/// Permits of a single kind, in display order.
 pub async fn list_permits_for_kind(
     db: &DatabaseConnection,
     guild_id: u64,

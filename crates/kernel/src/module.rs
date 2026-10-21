@@ -51,27 +51,17 @@ pub enum ConfigFieldKind {
 pub trait Module: Send + Sync + 'static {
     fn name(&self) -> &'static str;
     fn metadata(&self) -> ModuleMeta;
-    /// The slash commands supplied by this module.
     fn commands(&self) -> Vec<crate::bot::Command> {
         Vec::new()
     }
-    /// Config fields exposed to the dashboard; empty by default.
     fn config_schema(&self) -> Vec<ConfigField> {
         Vec::new()
     }
     /// `custom_id` prefix this module owns for component/modal interactions.
-    ///
-    /// The dispatcher can resolve an interaction to a module instead of
-    /// hardcoding a `starts_with` chain; `None` (the default) means the module
-    /// handles no interactions.
     fn component_prefix(&self) -> Option<&'static str> {
         None
     }
-    /// Observe one gateway event. Default is a no-op, so a module overrides
-    /// only the events it cares about.
-    ///
-    /// A boxed future keeps the trait object-safe without an `async-trait`
-    /// dependency, and `&self` borrows let the dispatcher loop the registry.
+    /// Observe one gateway event; default no-op. Boxed so the trait stays object-safe.
     fn on_event<'a>(&'a self, _ctx: &'a Context, _event: &'a FullEvent) -> BoxFuture<'a, ()> {
         Box::pin(async {})
     }

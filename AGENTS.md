@@ -12,7 +12,7 @@ Detailed per-topic docs live in `agents/`. Read them before touching anything:
 | `agents/01-workspace.md` | Crate layout, dep direction |
 | `agents/02-modules.md` | Module trait, adding a feature |
 | `agents/03-db.md` | Entities, migrations, no-raw-SQL rule |
-| `agents/04-ui.md` | V2 cards/panels, TS parity |
+| `agents/04-ui.md` | V2 cards/panels, reference parity |
 | `agents/05-script.md` | Rhai host, caps, SSRF |
 | `agents/06-architecture.md` | Cluster model, shard math, scale |
 | `agents/07-build.md` | Colab build, flake, profiles |

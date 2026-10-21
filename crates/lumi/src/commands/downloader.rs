@@ -40,6 +40,7 @@ fn parse_host_port(url_str: &str) -> Option<(&str, u16)> {
         return None;
     };
     let authority = rest.split(['/', '?', '#']).next()?;
+    // Last '@' wins because userinfo may itself contain one.
     let host_port = authority.split('@').next_back()?;
     if host_port.starts_with('[') {
         let end_bracket = host_port.find(']')?;

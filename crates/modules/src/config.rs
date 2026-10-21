@@ -154,7 +154,6 @@ pub fn enum_field(
     )
 }
 
-/// A key present in the guild config, or `None`.
 #[must_use]
 pub fn value<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
     map.get(key)

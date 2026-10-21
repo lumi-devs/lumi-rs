@@ -60,6 +60,7 @@ pub async fn lease_shard_range(
                 .unwrap_or(());
         }
 
+        // Skip the shard that broke the run so the next block starts after it.
         start += claimed + 1;
     }
 

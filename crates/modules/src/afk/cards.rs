@@ -54,7 +54,6 @@ pub fn welcome_back_card(duration: &str, mentions: u64, custom_id: Option<String
     )
 }
 
-/// The `/afk` status card.
 pub fn status_card(title: &str, body: &str) -> CardReply {
     compact_card(title, body, Vec::new())
 }

@@ -49,10 +49,8 @@ pub struct Config {
     pub intents_guild_members: bool,
     /// Discord application public key (Ed25519) for verifying HTTP interactions.
     pub discord_public_key: Option<String>,
-    /// Whether dynamic Redis shard leasing coordinator is enabled.
     #[serde(default)]
     pub shard_coordinator: bool,
-    /// Maximum number of shards allocated per node when coordinator is enabled.
     #[serde(default = "default_max_shards_per_node")]
     pub max_shards_per_node: u16,
 }
@@ -74,7 +72,6 @@ fn default_max_shards_per_node() -> u16 {
 }
 
 impl Config {
-    /// Load process configuration directly from environment variables.
     pub fn load() -> Result<Self> {
         let token = std::env::var("BOT_TOKEN")
             .or_else(|_| std::env::var("DISCORD_TOKEN"))

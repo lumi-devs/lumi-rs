@@ -18,10 +18,8 @@ use super::mentions::{self, Mention};
 /// Custom-id prefix owned by this module.
 pub const PREFIX: &str = "afk";
 
-/// Mentions rendered per page.
 const PAGE_SIZE: usize = 5;
 
-/// Mention records kept at most; paging never exceeds this.
 pub async fn handle_component(
     ctx: &serenity::Context,
     services: &Services,

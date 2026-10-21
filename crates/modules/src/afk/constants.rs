@@ -2,7 +2,6 @@
 
 use std::time::Duration;
 
-/// Nickname prefix applied while AFK.
 pub const NICK_PREFIX: &str = "[AFK] ";
 /// Longest accepted AFK reason, in characters.
 pub const MAX_REASON: usize = 100;

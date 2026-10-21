@@ -44,13 +44,11 @@ impl CustomId {
         self.parts.get(index).map(String::as_str)
     }
 
-    /// Every segment after the prefix.
     #[must_use]
     pub fn segments(&self) -> &[String] {
         &self.parts
     }
 
-    /// The last segment, or `None` when there are none.
     #[must_use]
     pub fn last(&self) -> Option<&str> {
         self.parts.last().map(String::as_str)

@@ -225,14 +225,19 @@ fn compile_regexes(patterns: &[String]) -> Vec<regex::Regex> {
                 tracing::warn!(%pattern, "filter: skipping regex longer than 256 chars");
                 return None;
             }
-            RegexBuilder::new(pattern)
+            let regex = RegexBuilder::new(pattern)
                 .case_insensitive(true)
                 .build()
                 .map_err(|error| {
                     tracing::warn!(%pattern, %error, "filter: skipping invalid regex");
                     error
                 })
-                .ok()
+                .ok()?;
+            if regex.is_match("") {
+                tracing::warn!(%pattern, "filter: skipping regex that matches everything");
+                return None;
+            }
+            Some(regex)
         })
         .collect()
 }
@@ -266,6 +271,15 @@ mod tests {
         })));
         assert_eq!(rules.regexes.len(), 1);
         assert!(rules.active());
+    }
+
+    #[test]
+    fn skips_regex_that_would_match_every_message() {
+        let rules = FilterRules::from_map(&map(json!({
+            "regex_rules": [".*", "a*", "^", "a|", "\\bfoo\\b"]
+        })));
+        assert_eq!(rules.regexes.len(), 1);
+        assert_eq!(rules.regexes[0].as_str(), "\\bfoo\\b");
     }
 
     #[test]

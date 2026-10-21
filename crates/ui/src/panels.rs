@@ -17,7 +17,6 @@ pub fn component_emoji(name: &str) -> Option<ReactionType> {
     ReactionType::try_from(name).ok()
 }
 
-/// An action row of buttons.
 pub fn action_row_of(buttons: Vec<CreateButton<'static>>) -> CreateActionRow<'static> {
     CreateActionRow::buttons(buttons)
 }
@@ -69,7 +68,6 @@ pub fn setting_row(
     )
 }
 
-/// A string-select action row.
 pub fn string_select(
     custom_id: impl Into<String>,
     placeholder: impl Into<String>,
@@ -130,7 +128,6 @@ pub fn channel_select_of_types(
     )
 }
 
-/// A user-select action row.
 pub fn user_select(
     custom_id: impl Into<String>,
     placeholder: impl Into<String>,
@@ -146,7 +143,6 @@ pub fn user_select(
     )
 }
 
-/// A role-select action row.
 pub fn role_select(
     custom_id: impl Into<String>,
     placeholder: impl Into<String>,
@@ -199,7 +195,6 @@ pub fn role_select_multi(
     )
 }
 
-/// A single secondary "← Back" button row.
 pub fn back_button(custom_id: impl Into<String>) -> CreateActionRow<'static> {
     action_row_of(vec![
         CreateButton::new(custom_id.into())

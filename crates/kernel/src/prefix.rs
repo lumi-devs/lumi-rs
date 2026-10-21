@@ -13,14 +13,12 @@ use crate::{Cache, Result};
 /// Prefix entries expire well after a dashboard edit; writes invalidate them.
 const PREFIX_TTL: Duration = Duration::from_secs(600);
 
-/// Key prefix shared by every guild's cached prefix.
 pub const PREFIX_NAMESPACE: &str = "lumi:guild:prefix:";
 
 fn key(guild_id: u64) -> String {
     format!("{PREFIX_NAMESPACE}{guild_id}")
 }
 
-/// Resolve a guild's prefix, serving it from cache on the common path.
 pub async fn get(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> Result<String> {
     let key = key(guild_id);
     let cached = match cache.get_json_ttl(&key).await {
@@ -45,7 +43,6 @@ pub async fn get(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> Resul
     Ok(prefix)
 }
 
-/// Drop one guild's cached prefix after a set or reset.
 pub async fn invalidate(cache: &Cache, guild_id: u64) -> Result<()> {
     if let Err(err) = cache.invalidate(&key(guild_id)).await {
         tracing::warn!(error = %err, guild_id, "prefix cache invalidation failed");

@@ -79,6 +79,7 @@ impl serenity::EventHandler for Events {
                 let hash = command_set_hash(&services);
                 let key = format!("lumi:cmd:guild:{}", guild.id);
 
+                // Skip the PUT when the command set is unchanged; guild registration is rate-limited.
                 if let Some(hash) = hash {
                     match services.cache.get::<u64>(&key).await {
                         Ok(Some(cached)) if cached == hash => return,

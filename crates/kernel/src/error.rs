@@ -1,10 +1,6 @@
 use thiserror::Error;
 
 /// The single error type shared by the kernel and every crate built on it.
-///
-/// Keeping one typed enum (instead of `anyhow` scattered through the layers)
-/// lets callers match on failure modes and gives `?` a single hop from any
-/// underlying error.
 #[derive(Debug, Error)]
 pub enum LumiError {
     #[error("configuration error: {0}")]

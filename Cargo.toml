@@ -56,6 +56,14 @@ tower-http       = { version = "0.6", default-features = false, features = ["tra
 tower_governor   = { version = "0.8", default-features = false, features = ["axum"] }
 governor         = "0.10"
 
+# Git (addon repositories)
+gix = { version = "0.89", default-features = false, features = [
+  "blocking-network-client", "blocking-http-transport-reqwest-rust-tls",
+  "blob-diff", "index", "parallel", "revision", "sha1", "worktree-mutation",
+] }
+gix-worktree = { version = "0.58", default-features = false, features = ["attributes"] }
+gix-worktree-state = { version = "0.36", default-features = false }
+
 # Background jobs
 apalis       = "1"
 apalis-redis = "1"

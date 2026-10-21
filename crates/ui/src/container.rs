@@ -84,12 +84,10 @@ impl Container {
     }
 }
 
-/// `TextDisplay` from any string-like value.
 pub fn text_display(content: impl Into<String>) -> CreateTextDisplay<'static> {
     CreateTextDisplay::new(content.into())
 }
 
-/// A `Section` with a thumbnail accessory.
 pub fn section_with_thumbnail(
     components: Vec<CreateSectionComponent<'static>>,
     url: impl Into<String>,

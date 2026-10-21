@@ -11,7 +11,6 @@ use lumi_ui::{Card, CardKind, CardOptions, CardReply};
 
 use super::{GuildCtx, HubOutcome, HubView, cid, tab_row};
 
-/// The server settings card.
 pub async fn card(
     services: &Services,
     guild: &GuildCtx,
@@ -57,7 +56,6 @@ pub async fn card(
         .into_reply())
 }
 
-/// The set-prefix modal.
 pub fn prefix_modal() -> CreateModal<'static> {
     CreateModal::new(super::PREFIX_MODAL_ID, "Set Command Prefix").components(vec![
         CreateModalComponent::Label(CreateLabel::input_text(
