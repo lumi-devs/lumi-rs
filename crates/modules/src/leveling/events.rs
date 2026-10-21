@@ -124,8 +124,14 @@ async fn sync_channel(
     for (user_id, audible) in states {
         if audible {
             start_session(guild_id.get(), user_id.get());
-        } else {
-            flush_session(services, guild_id.get(), user_id.get()).await?;
+        } else if let Err(error) = flush_session(services, guild_id.get(), user_id.get()).await {
+            tracing::warn!(
+                %error,
+                guild_id = guild_id.get(),
+                user_id = user_id.get(),
+                channel_id = channel_id.get(),
+                "failed to flush voice session during channel sync"
+            );
         }
     }
     Ok(())
@@ -178,7 +184,16 @@ pub async fn on_voice_state_update(
 
     match session_transition(was_audible, now_audible) {
         SessionTransition::Start => start_session(guild, user_id.get()),
-        SessionTransition::Bank => flush_session(services, guild, user_id.get()).await?,
+        SessionTransition::Bank => {
+            if let Err(error) = flush_session(services, guild, user_id.get()).await {
+                tracing::warn!(
+                    %error,
+                    guild_id = guild,
+                    user_id = user_id.get(),
+                    "failed to flush voice session on state update"
+                );
+            }
+        }
     }
 
     // A join/leave changes whether the *other* members of the channel are alone.
