@@ -113,6 +113,9 @@ async fn process_event(
             }
         }
         DispatchedEvent::MessageUpdate { event } => {
+            if lumi_modules::filter::events::on_message_update(ctx, services, &event).await {
+                return;
+            }
             if let Err(error) =
                 lumi_modules::logging::events::on_message_update(ctx, services, None, *event).await
             {

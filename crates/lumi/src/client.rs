@@ -19,21 +19,15 @@ fn command_check(ctx: Context<'_>) -> poise::BoxFuture<'_, Result<bool, Error>> 
         let Some(guild_id) = ctx.guild_id() else {
             return Ok(true);
         };
-        let node = ctx
-            .command_tree()
-            .iter()
-            .rev()
-            .find_map(|cmd| lumi_kernel::permits::command_node(cmd));
-        let Some(node) = node else {
-            return Ok(true);
-        };
 
         let author_member = ctx.author_member().await;
-        let (is_guild_owner, is_manager, role_ids) = if let Some(guild) = ctx.guild() {
+        let (is_guild_owner, is_manager, role_ids, author_perms) = if let Some(guild) = ctx.guild()
+        {
             let is_guild_owner = guild.owner_id == author_id;
             let member_ref = author_member
                 .as_deref()
                 .or_else(|| guild.members.get(&author_id));
+            let author_perms = member_ref.map(|member| guild.member_permissions(member));
             let (is_manager, role_ids) = if let Some(member) = member_ref {
                 let perms = guild.member_permissions(member);
                 let is_manager = perms.contains(serenity::all::Permissions::ADMINISTRATOR)
@@ -50,13 +44,38 @@ fn command_check(ctx: Context<'_>) -> poise::BoxFuture<'_, Result<bool, Error>> 
             } else {
                 (false, Vec::new())
             };
-            (is_guild_owner, is_manager, role_ids)
+            (is_guild_owner, is_manager, role_ids, author_perms)
         } else {
-            (false, false, Vec::new())
+            (false, false, Vec::new(), None)
         };
+
+        // Discord only reads `default_member_permissions` from the root
+        // command, so a subcommand's requirement must be enforced here for
+        // slash invocations too. Prefix invocations are never checked by
+        // Discord at all.
+        let required = required_member_permissions(ctx.command_tree());
+        if !required.is_empty() && !author_perms.is_some_and(|has| holds_permissions(has, required))
+        {
+            let card = lumi_ui::Card::error(
+                "Permission Denied",
+                "You do not have the Discord permissions this command requires.",
+            )
+            .ephemeral();
+            ctx.send(card.into_reply().reply()).await?;
+            return Ok(false);
+        }
 
         let is_quarantined =
             lumi_modules::security::store::panic_locks_commands(&ctx.data(), guild_id.get()).await;
+
+        let node = ctx
+            .command_tree()
+            .iter()
+            .rev()
+            .find_map(|cmd| lumi_kernel::permits::command_node(cmd));
+        let Some(node) = node else {
+            return Ok(true);
+        };
 
         let check = lumi_kernel::permits::CheckContext {
             guild_id: guild_id.get().to_string(),
@@ -81,6 +100,20 @@ fn command_check(ctx: Context<'_>) -> poise::BoxFuture<'_, Result<bool, Error>> 
         ctx.send(card.into_reply().reply()).await?;
         Ok(false)
     })
+}
+
+/// Discord only enforces the root command's `default_member_permissions`, so
+/// every level in the tree contributes: a subcommand-only requirement (e.g.
+/// `/bank set`) would otherwise never be checked.
+fn required_member_permissions(tree: &[&lumi_kernel::bot::Command]) -> serenity::Permissions {
+    tree.iter()
+        .fold(serenity::Permissions::empty(), |required, command| {
+            required | command.default_member_permissions
+        })
+}
+
+fn holds_permissions(has: serenity::Permissions, required: serenity::Permissions) -> bool {
+    required.is_empty() || has.administrator() || has.contains(required)
 }
 
 pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
@@ -226,4 +259,65 @@ pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
     });
 
     Ok(client)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{holds_permissions, required_member_permissions};
+    use lumi_kernel::bot::Command;
+    use poise::serenity_prelude as serenity;
+
+    #[test]
+    fn prefix_permissions_union_the_command_tree() {
+        let mut root = Command::default();
+        root.name = "purge".into();
+        root.default_member_permissions = serenity::Permissions::MANAGE_MESSAGES;
+        let mut sub = Command::default();
+        sub.name = "messages".into();
+
+        let tree = [&root, &sub];
+        assert_eq!(
+            required_member_permissions(&tree),
+            serenity::Permissions::MANAGE_MESSAGES
+        );
+        assert!(required_member_permissions(&[&sub]).is_empty());
+    }
+
+    #[test]
+    fn subcommand_only_permissions_are_enforced() {
+        // Discord registers `bank` with an empty default and ignores the
+        // subcommand's MANAGE_GUILD, so the tree walk must pick it up.
+        let mut root = Command::default();
+        root.name = "bank".into();
+        let mut sub = Command::default();
+        sub.name = "set".into();
+        sub.default_member_permissions = serenity::Permissions::MANAGE_GUILD;
+
+        assert_eq!(
+            required_member_permissions(&[&root, &sub]),
+            serenity::Permissions::MANAGE_GUILD
+        );
+    }
+
+    #[test]
+    fn required_permissions_allow_admin_and_deny_others() {
+        let required = serenity::Permissions::MANAGE_MESSAGES;
+        assert!(holds_permissions(
+            serenity::Permissions::MANAGE_MESSAGES,
+            required
+        ));
+        assert!(holds_permissions(
+            serenity::Permissions::ADMINISTRATOR,
+            required
+        ));
+        assert!(!holds_permissions(serenity::Permissions::empty(), required));
+        assert!(!holds_permissions(
+            serenity::Permissions::SEND_MESSAGES,
+            required
+        ));
+        assert!(holds_permissions(
+            serenity::Permissions::empty(),
+            serenity::Permissions::empty()
+        ));
+    }
 }

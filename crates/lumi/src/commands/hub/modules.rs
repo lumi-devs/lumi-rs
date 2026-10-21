@@ -624,7 +624,8 @@ pub async fn dispatch(
                 .and_then(Value::as_bool)
                 .or_else(|| field.default.as_bool())
                 .unwrap_or(false);
-            module_state::set_config_field(
+            module_state::set_config_field_cached(
+                &services.cache,
                 &services.db,
                 guild.id,
                 name,
@@ -660,8 +661,16 @@ pub async fn dispatch(
             let Some(field) = schema.iter().find(|field| field.key == key) else {
                 return Ok(HubOutcome::Done);
             };
-            module_state::set_config_value(&services.db, guild.id, name, key, &choice, &field.kind)
-                .await?;
+            module_state::set_config_value_cached(
+                &services.cache,
+                &services.db,
+                guild.id,
+                name,
+                key,
+                &choice,
+                &field.kind,
+            )
+            .await?;
             Ok(HubOutcome::Update(
                 config_card(services, guild, name, section).await?,
             ))
@@ -679,7 +688,15 @@ pub async fn dispatch(
                 }
                 Some(first) => Value::String(first.clone()),
             };
-            module_state::set_config_field(&services.db, guild.id, name, key, value).await?;
+            module_state::set_config_field_cached(
+                &services.cache,
+                &services.db,
+                guild.id,
+                name,
+                key,
+                value,
+            )
+            .await?;
             Ok(HubOutcome::Update(
                 config_card(services, guild, name, section).await?,
             ))
@@ -702,7 +719,8 @@ pub async fn dispatch(
             let Some(name) = name else {
                 return Ok(HubOutcome::Done);
             };
-            module_state::clear_config(&services.db, guild.id, name).await?;
+            module_state::clear_config_cached(&services.cache, &services.db, guild.id, name)
+                .await?;
             Ok(HubOutcome::Update(
                 config_card(services, guild, name, 0).await?,
             ))
@@ -775,7 +793,15 @@ pub async fn handle_modal(
             .into_reply(),
         ));
     };
-    module_state::set_config_field(&services.db, guild.id, name, key, value).await?;
+    module_state::set_config_field_cached(
+        &services.cache,
+        &services.db,
+        guild.id,
+        name,
+        key,
+        value,
+    )
+    .await?;
     Ok(HubOutcome::Update(
         config_card(services, guild, name, section).await?,
     ))

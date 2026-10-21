@@ -28,7 +28,7 @@ pub struct PermitRow {
 }
 
 impl PermitRow {
-    fn from_model(model: permit::Model) -> Self {
+    pub(crate) fn from_model(model: permit::Model) -> Self {
         Self {
             id: model.id,
             guild_id: model.guild_id.to_string(),
@@ -152,183 +152,36 @@ pub fn command_node(command: &crate::bot::Command) -> Option<&'static str> {
         .or_else(|| required_node(&command.name))
 }
 
-#[derive(Debug)]
-pub struct PermitResolver {
+#[derive(Debug, Default)]
+struct ResolverData {
     permits: HashMap<i32, PermitRow>,
     by_user: HashMap<(String, i64), Vec<i32>>,
     by_channel: HashMap<(String, i64), Vec<i32>>,
     by_role: HashMap<(String, i64), Vec<i32>>,
 }
 
-fn tier_row(tier: &str, verdict: Verdict, detail: Option<String>) -> TierExplanation {
-    TierExplanation {
-        tier: tier.into(),
-        verdict,
-        detail,
-    }
-}
-
-/// Bucket key: guild + numeric target id.
-fn slot(guild_id: &str, id: u64) -> (String, i64) {
-    (guild_id.to_string(), i64::try_from(id).unwrap_or(i64::MAX))
-}
-
-impl PermitResolver {
-    pub async fn load(db: &DatabaseConnection) -> Result<Self> {
-        let permits = permit::Entity::find()
-            .all(db)
-            .await?
-            .into_iter()
-            .map(PermitRow::from_model)
-            .collect();
-
-        let assignments = permit_assignment::Entity::find()
-            .all(db)
-            .await?
-            .into_iter()
-            .map(|a| PermitAssignment {
-                permit_id: a.permit_id,
-                guild_id: a.guild_id.to_string(),
-                target_type: a.target_type,
-                target_id: a.target_id.as_i64(),
-            })
-            .collect();
-
-        Ok(Self::new(permits, assignments))
-    }
-
-    pub fn new(permits: Vec<PermitRow>, assignments: Vec<PermitAssignment>) -> Self {
-        let permit_map = permits.into_iter().map(|p| (p.id, p)).collect();
-
-        let mut by_user: HashMap<(String, i64), Vec<i32>> = HashMap::new();
-        let mut by_channel: HashMap<(String, i64), Vec<i32>> = HashMap::new();
-        let mut by_role: HashMap<(String, i64), Vec<i32>> = HashMap::new();
-
+impl ResolverData {
+    fn add(&mut self, permits: Vec<PermitRow>, assignments: Vec<PermitAssignment>) {
+        for permit in permits {
+            self.permits.insert(permit.id, permit);
+        }
         for a in assignments {
             let key = (a.guild_id, a.target_id);
             match a.target_type {
-                PermitTargetType::User => by_user.entry(key).or_default().push(a.permit_id),
-                PermitTargetType::Channel => by_channel.entry(key).or_default().push(a.permit_id),
-                PermitTargetType::Role => by_role.entry(key).or_default().push(a.permit_id),
+                PermitTargetType::User => self.by_user.entry(key).or_default().push(a.permit_id),
+                PermitTargetType::Channel => {
+                    self.by_channel.entry(key).or_default().push(a.permit_id);
+                }
+                PermitTargetType::Role => self.by_role.entry(key).or_default().push(a.permit_id),
             }
-        }
-
-        Self {
-            permits: permit_map,
-            by_user,
-            by_channel,
-            by_role,
         }
     }
 
-    /// Decide access for one node; the returned rows stop at the deciding tier.
-    pub fn resolve(&self, ctx: &CheckContext<'_>) -> Decision {
-        let rows = self.explain(ctx);
-        let allowed = rows
-            .iter()
-            .rev()
-            .find(|row| row.verdict != Verdict::Pass)
-            .is_some_and(|row| row.verdict == Verdict::Allow);
-        Decision { allowed, rows }
-    }
-
-    /// Every tier evaluated for one node, in resolution order, including
-    /// passing tiers. Stops at the first deciding tier.
-    pub fn explain(&self, ctx: &CheckContext<'_>) -> Vec<TierExplanation> {
-        let mut rows = Vec::new();
-
-        if ctx.is_owner {
-            rows.push(tier_row("owner", Verdict::Allow, Some("bot owner".into())));
-            return rows;
-        }
-        if ctx.is_guild_owner {
-            rows.push(tier_row(
-                "owner",
-                Verdict::Allow,
-                Some("server owner".into()),
-            ));
-            return rows;
-        }
-        rows.push(tier_row("owner", Verdict::Pass, None));
-
-        if ctx.is_manager {
-            rows.push(tier_row(
-                "manager",
-                Verdict::Allow,
-                Some("Administrator or ManageGuild".into()),
-            ));
-            return rows;
-        }
-        rows.push(tier_row("manager", Verdict::Pass, None));
-
-        let mut decided = false;
-        let mut allowed = false;
-        let user = slot(&ctx.guild_id, ctx.user_id);
-
-        consider(
-            &mut rows,
-            &mut decided,
-            &mut allowed,
-            self.evaluate_bucket("enforced:user", self.by_user.get(&user), ctx.node, true),
-        );
-        if decided || ctx.is_quarantined {
-            if ctx.is_quarantined && !decided {
-                rows.push(tier_row(
-                    "quarantine",
-                    Verdict::Deny,
-                    Some("user is quarantined".into()),
-                ));
-            }
-            return rows;
-        }
-
-        consider(
-            &mut rows,
-            &mut decided,
-            &mut allowed,
-            self.evaluate_bucket("custom:user", self.by_user.get(&user), ctx.node, false),
-        );
-        if decided {
-            return rows;
-        }
-
-        if let Some(channel_id) = ctx.channel_id {
-            let channel = slot(&ctx.guild_id, channel_id);
-            consider(
-                &mut rows,
-                &mut decided,
-                &mut allowed,
-                self.evaluate_bucket(
-                    "custom:channel",
-                    self.by_channel.get(&channel),
-                    ctx.node,
-                    false,
-                ),
-            );
-            if decided {
-                return rows;
-            }
-        }
-
-        for &role_id in ctx.role_ids {
-            let role = slot(&ctx.guild_id, role_id);
-            consider(
-                &mut rows,
-                &mut decided,
-                &mut allowed,
-                self.evaluate_bucket(
-                    &format!("custom:role:{role_id}"),
-                    self.by_role.get(&role),
-                    ctx.node,
-                    false,
-                ),
-            );
-            if decided {
-                return rows;
-            }
-        }
-
-        rows
+    fn remove_guild(&mut self, guild_id: &str) {
+        self.permits.retain(|_, permit| permit.guild_id != guild_id);
+        self.by_user.retain(|(guild, _), _| guild != guild_id);
+        self.by_channel.retain(|(guild, _), _| guild != guild_id);
+        self.by_role.retain(|(guild, _), _| guild != guild_id);
     }
 
     /// Deny wins inside one bucket, then grant, else the tier passes.
@@ -381,6 +234,191 @@ impl PermitResolver {
         } else {
             tier_row(tier, Verdict::Pass, None)
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct PermitResolver {
+    inner: std::sync::RwLock<ResolverData>,
+}
+
+fn tier_row(tier: &str, verdict: Verdict, detail: Option<String>) -> TierExplanation {
+    TierExplanation {
+        tier: tier.into(),
+        verdict,
+        detail,
+    }
+}
+
+/// Bucket key: guild + numeric target id.
+fn slot(guild_id: &str, id: u64) -> (String, i64) {
+    (guild_id.to_string(), i64::try_from(id).unwrap_or(i64::MAX))
+}
+
+impl PermitResolver {
+    pub async fn load(db: &DatabaseConnection) -> Result<Self> {
+        let permits = permit::Entity::find()
+            .all(db)
+            .await?
+            .into_iter()
+            .map(PermitRow::from_model)
+            .collect();
+
+        let assignments = permit_assignment::Entity::find()
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|a| PermitAssignment {
+                permit_id: a.permit_id,
+                guild_id: a.guild_id.to_string(),
+                target_type: a.target_type,
+                target_id: a.target_id.as_i64(),
+            })
+            .collect();
+
+        Ok(Self::new(permits, assignments))
+    }
+
+    pub fn new(permits: Vec<PermitRow>, assignments: Vec<PermitAssignment>) -> Self {
+        let mut data = ResolverData::default();
+        data.add(permits, assignments);
+        Self {
+            inner: std::sync::RwLock::new(data),
+        }
+    }
+
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, ResolverData> {
+        self.inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Replace every permit and assignment belonging to one guild, leaving the
+    /// other guilds untouched. Called after a dashboard/hub permit edit so the
+    /// change takes effect on the next command instead of the next restart.
+    pub fn replace_guild(
+        &self,
+        guild_id: &str,
+        permits: Vec<PermitRow>,
+        assignments: Vec<PermitAssignment>,
+    ) {
+        let mut data = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        data.remove_guild(guild_id);
+        data.add(permits, assignments);
+    }
+
+    /// Decide access for one node; the returned rows stop at the deciding tier.
+    pub fn resolve(&self, ctx: &CheckContext<'_>) -> Decision {
+        let rows = self.explain(ctx);
+        let allowed = rows
+            .iter()
+            .rev()
+            .find(|row| row.verdict != Verdict::Pass)
+            .is_some_and(|row| row.verdict == Verdict::Allow);
+        Decision { allowed, rows }
+    }
+
+    /// Every tier evaluated for one node, in resolution order, including
+    /// passing tiers. Stops at the first deciding tier.
+    pub fn explain(&self, ctx: &CheckContext<'_>) -> Vec<TierExplanation> {
+        let data = self.read();
+        let mut rows = Vec::new();
+
+        if ctx.is_owner {
+            rows.push(tier_row("owner", Verdict::Allow, Some("bot owner".into())));
+            return rows;
+        }
+        if ctx.is_guild_owner {
+            rows.push(tier_row(
+                "owner",
+                Verdict::Allow,
+                Some("server owner".into()),
+            ));
+            return rows;
+        }
+        rows.push(tier_row("owner", Verdict::Pass, None));
+
+        if ctx.is_manager {
+            rows.push(tier_row(
+                "manager",
+                Verdict::Allow,
+                Some("Administrator or ManageGuild".into()),
+            ));
+            return rows;
+        }
+        rows.push(tier_row("manager", Verdict::Pass, None));
+
+        let mut decided = false;
+        let mut allowed = false;
+        let user = slot(&ctx.guild_id, ctx.user_id);
+
+        consider(
+            &mut rows,
+            &mut decided,
+            &mut allowed,
+            data.evaluate_bucket("enforced:user", data.by_user.get(&user), ctx.node, true),
+        );
+        if decided || ctx.is_quarantined {
+            if ctx.is_quarantined && !decided {
+                rows.push(tier_row(
+                    "quarantine",
+                    Verdict::Deny,
+                    Some("user is quarantined".into()),
+                ));
+            }
+            return rows;
+        }
+
+        consider(
+            &mut rows,
+            &mut decided,
+            &mut allowed,
+            data.evaluate_bucket("custom:user", data.by_user.get(&user), ctx.node, false),
+        );
+        if decided {
+            return rows;
+        }
+
+        if let Some(channel_id) = ctx.channel_id {
+            let channel = slot(&ctx.guild_id, channel_id);
+            consider(
+                &mut rows,
+                &mut decided,
+                &mut allowed,
+                data.evaluate_bucket(
+                    "custom:channel",
+                    data.by_channel.get(&channel),
+                    ctx.node,
+                    false,
+                ),
+            );
+            if decided {
+                return rows;
+            }
+        }
+
+        for &role_id in ctx.role_ids {
+            let role = slot(&ctx.guild_id, role_id);
+            consider(
+                &mut rows,
+                &mut decided,
+                &mut allowed,
+                data.evaluate_bucket(
+                    &format!("custom:role:{role_id}"),
+                    data.by_role.get(&role),
+                    ctx.node,
+                    false,
+                ),
+            );
+            if decided {
+                return rows;
+            }
+        }
+
+        rows
     }
 }
 
@@ -592,5 +630,46 @@ mod tests {
             rows.iter()
                 .any(|r| r.tier == "manager" && r.verdict == Verdict::Pass)
         );
+    }
+
+    #[test]
+    fn replace_guild_revokes_without_restart() {
+        let resolver = PermitResolver::new(
+            vec![permit(
+                1,
+                PermitKind::Custom,
+                PermitPolarity::Grant,
+                &["mod.ban"],
+            )],
+            vec![assignment(1, PermitTargetType::User, 7)],
+        );
+        let c = ctx(&[], "mod.ban");
+        assert!(resolver.resolve(&c).allowed);
+
+        resolver.replace_guild("1", Vec::new(), Vec::new());
+        assert!(!resolver.resolve(&c).allowed);
+    }
+
+    #[test]
+    fn replace_guild_keeps_other_guilds() {
+        let mut other = permit(2, PermitKind::Custom, PermitPolarity::Grant, &["mod.ban"]);
+        other.guild_id = "2".into();
+        let mut other_assignment = assignment(2, PermitTargetType::User, 9);
+        other_assignment.guild_id = "2".into();
+
+        let resolver = PermitResolver::new(
+            vec![
+                permit(1, PermitKind::Custom, PermitPolarity::Grant, &["mod.ban"]),
+                other,
+            ],
+            vec![assignment(1, PermitTargetType::User, 7), other_assignment],
+        );
+
+        resolver.replace_guild("1", Vec::new(), Vec::new());
+
+        let mut c = ctx(&[], "mod.ban");
+        c.guild_id = "2".into();
+        c.user_id = 9;
+        assert!(resolver.resolve(&c).allowed);
     }
 }

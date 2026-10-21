@@ -1,6 +1,6 @@
 use chrono::{TimeDelta, Utc};
 use lumi_db::entities::{enums::CaseAction, mod_note, moderation_case, warn_threshold};
-use lumi_kernel::{Cache, Result, module_state};
+use lumi_kernel::{Cache, LumiError, Result, module_state};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect, Set,
@@ -8,7 +8,7 @@ use sea_orm::{
 
 use crate::config;
 
-const CONFIG_MODULE: &str = "mod";
+const CONFIG_MODULE: &str = "moderation";
 
 /// Resolved moderation settings. Loaded once per command instead of issuing a
 /// query per key, and shared by punishment + logging paths.
@@ -38,6 +38,12 @@ pub struct CreateCaseParams<'a> {
     pub duration_seconds: Option<i32>,
 }
 
+/// Case numbers are stored as `i32`; refuse to silently wrap the i64 counter.
+fn case_number(counter: i64) -> Result<i32> {
+    i32::try_from(counter)
+        .map_err(|_| LumiError::Other(format!("case counter overflowed i32: {counter}")))
+}
+
 /// Create a new moderation case using `db::next_counter` to ensure continuous
 /// per-guild case numbering without race conditions or raw SQL.
 pub async fn create_case(
@@ -45,6 +51,7 @@ pub async fn create_case(
     params: CreateCaseParams<'_>,
 ) -> Result<moderation_case::Model> {
     let case_num = lumi_db::next_counter(db, params.guild_id, "cases").await?;
+    let case_number = case_number(case_num)?;
     let now = Utc::now();
     let expires_at = params
         .duration_seconds
@@ -54,7 +61,7 @@ pub async fn create_case(
 
     let row = moderation_case::ActiveModel {
         guild_id: Set(lumi_db::ids::GuildId::from(params.guild_id)),
-        case_number: Set(case_num as i32),
+        case_number: Set(case_number),
         user_id: Set(lumi_db::ids::UserId::from(params.user_id)),
         moderator_id: Set(lumi_db::ids::UserId::from(params.moderator_id)),
         action: Set(params.action),
@@ -202,4 +209,22 @@ pub async fn quarantine_role(
             .await
             .and_then(|v| module_state::parse_id(&v)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CONFIG_MODULE, case_number};
+    use lumi_kernel::module::Module;
+
+    #[test]
+    fn case_numbers_reject_i32_overflow() {
+        assert_eq!(case_number(1).expect("in range"), 1);
+        assert_eq!(case_number(i64::from(i32::MAX)).expect("in range"), i32::MAX);
+        assert!(case_number(i64::from(i32::MAX) + 1).is_err());
+    }
+
+    #[test]
+    fn reads_the_config_key_the_hub_writes() {
+        assert_eq!(CONFIG_MODULE, crate::moderation::ModerationModule.name());
+    }
 }

@@ -1,6 +1,8 @@
 //! Channel and server lockdown commands.
 
-use serenity::all::{ChannelId, GenericChannelId};
+use serenity::all::{
+    ChannelId, GenericChannelId, PermissionOverwrite, PermissionOverwriteType, RoleId,
+};
 
 use lumi_kernel::bot::{Context, Error};
 use lumi_ui::{Card, CardKind};
@@ -8,6 +10,25 @@ use lumi_ui::{Card, CardKind};
 use crate::moderation::channels as permissions;
 
 use super::{guild_id, send_card};
+
+/// The channel's current `@everyone` overwrite, so locking merges instead of
+/// replacing unrelated permission bits.
+async fn everyone_overwrite(
+    ctx: Context<'_>,
+    channel_id: ChannelId,
+    everyone: RoleId,
+) -> Result<Option<PermissionOverwrite>, Error> {
+    let channel = channel_id.widen().to_channel(ctx, None).await?;
+    Ok(channel.guild().and_then(|channel| {
+        channel
+            .permission_overwrites
+            .iter()
+            .find(|overwrite| {
+                matches!(overwrite.kind, PermissionOverwriteType::Role(role) if role == everyone)
+            })
+            .cloned()
+    }))
+}
 
 /// Lock or unlock one channel for @everyone.
 #[poise::command(
@@ -47,11 +68,13 @@ pub async fn lock_enable(
     ctx.defer().await?;
     let guild = guild_id(ctx)?;
     let channel_id = ChannelId::new(channel.unwrap_or_else(|| ctx.channel_id()).get());
+    let existing = everyone_overwrite(ctx, channel_id, guild.everyone_role()).await?;
 
     permissions::set_channel_locked(
         ctx.http(),
         channel_id,
         guild.everyone_role(),
+        existing.as_ref(),
         true,
         "Channel locked",
     )
@@ -87,11 +110,13 @@ pub async fn lock_disable(
     ctx.defer().await?;
     let guild = guild_id(ctx)?;
     let channel_id = ChannelId::new(channel.unwrap_or_else(|| ctx.channel_id()).get());
+    let existing = everyone_overwrite(ctx, channel_id, guild.everyone_role()).await?;
 
     permissions::set_channel_locked(
         ctx.http(),
         channel_id,
         guild.everyone_role(),
+        existing.as_ref(),
         false,
         "Channel unlocked",
     )

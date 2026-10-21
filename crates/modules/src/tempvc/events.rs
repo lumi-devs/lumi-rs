@@ -14,14 +14,15 @@ const MAX_CHANNEL_NAME: usize = 100;
 const CREATE_COOLDOWN_MS: u64 = 30_000;
 
 fn channel_is_empty(ctx: &serenity::Context, guild_id: GuildId, channel_id: ChannelId) -> bool {
-    ctx.cache
-        .guild(guild_id)
-        .and_then(|guild| guild.channels.get(&channel_id).cloned())
-        .is_none_or(|channel| {
+    // An unknown channel (cache miss) is treated as non-empty: deleting on
+    // missing data would remove a channel that still has members in it.
+    ctx.cache.guild(guild_id).is_some_and(|guild| {
+        guild.channels.get(&channel_id).is_some_and(|channel| {
             channel
                 .members(&ctx.cache)
                 .is_ok_and(|members| members.is_empty())
         })
+    })
 }
 
 fn parent_of(
@@ -64,14 +65,23 @@ pub async fn on_voice_state_update(
                     channel_id = old_ch_id.get(),
                     "cleaning up empty tempvc"
                 );
-                if let Err(error) = ctx
+                match ctx
                     .http
                     .delete_channel(old_ch_id.into(), Some("TempVC channel empty cleanup"))
                     .await
                 {
-                    warn!(%error, channel_id = old_ch_id.get(), "tempvc cleanup delete failed");
+                    Ok(_) => {
+                        store::delete_record(&services.db, gid, old_ch_id.get()).await?;
+                    }
+                    Err(error) if super::channel_missing(&error) => {
+                        store::delete_record(&services.db, gid, old_ch_id.get()).await?;
+                    }
+                    Err(error) => {
+                        // Keep the record so a later voice event retries; dropping
+                        // it here would orphan a channel that still exists.
+                        warn!(%error, channel_id = old_ch_id.get(), "tempvc cleanup delete failed");
+                    }
                 }
-                store::delete_record(&services.db, gid, old_ch_id.get()).await?;
             }
         }
     }

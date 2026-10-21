@@ -67,6 +67,11 @@ pub async fn lease_shard_range(
     Ok(None)
 }
 
+/// A lease may only be extended by the node whose id is stored in it.
+fn lease_is_ours(current: Option<&str>, node_id: &str) -> bool {
+    current == Some(node_id)
+}
+
 /// Spawns a background task that refreshes shard leases every 10 seconds.
 pub fn spawn_lease_heartbeat(
     cache: Arc<Cache>,
@@ -82,17 +87,38 @@ pub fn spawn_lease_heartbeat(
 
             for shard_id in range.start..=range.end {
                 let key = format!("lumi:shard_lease:{shard_id}");
-                let res: redis::RedisResult<Option<String>> = redis::cmd("SET")
-                    .arg(&key)
-                    .arg(&node_id)
-                    .arg("XX")
-                    .arg("EX")
-                    .arg(30)
-                    .query_async(&mut conn)
-                    .await;
+                // Never `SET XX`: if our lease expired and another node claimed
+                // the shard, that would overwrite their ownership. Read first
+                // and only extend a lease whose value is still ours.
+                let current: redis::RedisResult<Option<String>> =
+                    redis::cmd("GET").arg(&key).query_async(&mut conn).await;
 
-                match res {
-                    Ok(Some(ref s)) if s == "OK" => {}
+                match current {
+                    Ok(current) if lease_is_ours(current.as_deref(), &node_id) => {
+                        let extended: redis::RedisResult<i64> = redis::cmd("EXPIRE")
+                            .arg(&key)
+                            .arg(30)
+                            .query_async(&mut conn)
+                            .await;
+                        match extended {
+                            Ok(1) => {}
+                            Ok(_) => {
+                                tracing::error!(
+                                    shard_id,
+                                    %node_id,
+                                    "shard lease refresh failed: lease expired"
+                                );
+                            }
+                            Err(err) => {
+                                tracing::error!(
+                                    shard_id,
+                                    %node_id,
+                                    error = %err,
+                                    "shard lease refresh command failed"
+                                );
+                            }
+                        }
+                    }
                     Ok(_) => {
                         tracing::error!(
                             shard_id,
@@ -112,4 +138,16 @@ pub fn spawn_lease_heartbeat(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lease_is_ours;
+
+    #[test]
+    fn only_the_owner_may_refresh_a_lease() {
+        assert!(lease_is_ours(Some("node-a"), "node-a"));
+        assert!(!lease_is_ours(Some("node-b"), "node-a"));
+        assert!(!lease_is_ours(None, "node-a"));
+    }
 }

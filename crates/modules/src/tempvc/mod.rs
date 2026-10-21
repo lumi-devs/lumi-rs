@@ -8,6 +8,15 @@ pub mod views;
 pub use commands::{commands, handle_component, handle_modal};
 pub use events::on_voice_state_update;
 
+/// True when a REST error means the target channel is already gone.
+pub(crate) fn channel_missing(error: &poise::serenity_prelude::Error) -> bool {
+    matches!(
+        error,
+        poise::serenity_prelude::Error::Http(http)
+            if http.status_code().is_some_and(|code| code.as_u16() == 404)
+    )
+}
+
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
 #[derive(Debug)]

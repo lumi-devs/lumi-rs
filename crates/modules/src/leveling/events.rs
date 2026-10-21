@@ -82,6 +82,24 @@ async fn flush_session(
     Ok(())
 }
 
+/// What a voice update does with the member's pending session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionTransition {
+    Start,
+    Bank,
+}
+
+/// Bank whenever the member is no longer audible. The old state is deliberately
+/// ignored: the post-update cache can make a leaver look inaudible before the
+/// event, and a session must never be left behind to accrue offline time.
+fn session_transition(_was_audible: bool, now_audible: bool) -> SessionTransition {
+    if now_audible {
+        SessionTransition::Start
+    } else {
+        SessionTransition::Bank
+    }
+}
+
 /// Reconcile every human in `channel_id` after an occupancy change, so the
 /// members who were already sitting there start/stop earning too.
 async fn sync_channel(
@@ -152,13 +170,15 @@ pub async fn on_voice_state_update(
 
     let old_channel = old.as_ref().and_then(|state| state.channel_id);
     let new_channel = new.channel_id;
+    // Cache is updated before dispatch, so a leaver is already gone from the
+    // channel's occupancy. Never use the old audibility to decide whether to
+    // bank a session: a stale session would then accrue time while offline.
     let was_audible = old.as_ref().is_some_and(|state| is_audible(ctx, state));
     let now_audible = is_audible(ctx, new);
 
-    if now_audible {
-        start_session(guild, user_id.get());
-    } else if was_audible {
-        flush_session(services, guild, user_id.get()).await?;
+    match session_transition(was_audible, now_audible) {
+        SessionTransition::Start => start_session(guild, user_id.get()),
+        SessionTransition::Bank => flush_session(services, guild, user_id.get()).await?,
     }
 
     // A join/leave changes whether the *other* members of the channel are alone.
@@ -171,4 +191,24 @@ pub async fn on_voice_state_update(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SessionTransition, session_transition};
+
+    #[test]
+    fn a_leaver_always_banks_even_when_the_cache_says_was_inaudible() {
+        assert_eq!(
+            session_transition(true, false),
+            SessionTransition::Bank,
+            "audible -> left must bank"
+        );
+        assert_eq!(
+            session_transition(false, false),
+            SessionTransition::Bank,
+            "a leaver whose old state saw the shrunken channel must still bank"
+        );
+        assert_eq!(session_transition(false, true), SessionTransition::Start);
+    }
 }

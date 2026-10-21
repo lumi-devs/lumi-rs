@@ -19,6 +19,16 @@ async fn read_channel(
     )
 }
 
+/// Whether a channel id appears in the configured ignore list. Dashboard
+/// writes store snowflakes as strings, so both JSON numbers and strings count.
+fn lists_channel(config: &Value, channel_id: u64) -> bool {
+    config.as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| module_state::parse_id(item) == Some(channel_id))
+    })
+}
+
 pub async fn is_ignored_channel(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -28,9 +38,8 @@ pub async fn is_ignored_channel(
     let ignored =
         module_state::config_cached_value(cache, db, guild_id, MODULE, "ignored_channels")
             .await
-            .and_then(|v| v.as_array().cloned())
             .unwrap_or_default();
-    Ok(ignored.iter().any(|v| v.as_u64() == Some(channel_id)))
+    Ok(lists_channel(&ignored, channel_id))
 }
 
 /// The channel to post a given log event to, or `None` when the toggle is off
@@ -57,4 +66,19 @@ pub async fn target(
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lists_channel;
+    use serde_json::json;
+
+    #[test]
+    fn ignore_list_accepts_dashboard_strings() {
+        let configured = json!(["123456789012345678", 42]);
+        assert!(lists_channel(&configured, 123_456_789_012_345_678));
+        assert!(lists_channel(&configured, 42));
+        assert!(!lists_channel(&configured, 7));
+        assert!(!lists_channel(&json!(null), 42));
+    }
 }
