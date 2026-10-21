@@ -78,3 +78,15 @@ clippy errors.
 - `xtask` — Operational helpers (e.g. `xtask migrate`).
 
 Keep `todo.md` current.
+
+## Process roles
+
+`crates/lumi` is one binary with role entry points: `gateway` (gateway session),
+`api` (axum RPC + interactions), `worker` (background jobs, no gateway session)
+and `all` (single-box). Every role builds the same `lumi::runtime::services`
+instance, so module registration and backend wiring live in one place.
+`Config::validate_for(role)` runs before any task starts: missing gateway token,
+missing/malformed `DISCORD_PUBLIC_KEY` for `api`/`all`, or impossible shard
+settings abort the process. Workers consume the kernel `Scheduler` queue and run
+periodic jobs through `runtime::run_job`; a lost shard lease shuts its shards
+down rather than running a duplicate gateway session.

@@ -32,12 +32,18 @@ impl Services {
     }
 
     /// Build every shared runtime service from `cfg`. `registry` carries the
-    /// modules the caller has registered; migration is left to the caller. The
-    /// cross-process cache invalidation listener is spawned here.
+    /// modules the caller has registered. Migrations run before any table is
+    /// read, and the cross-process cache invalidation listener is spawned here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database or Redis is unreachable, a migration
+    /// fails, or a permit/security snapshot cannot be loaded.
     pub async fn bootstrap(cfg: Config, registry: ModuleRegistry) -> Result<Arc<Self>> {
         let db = lumi_db::connect(&cfg.database_url).await?;
-        let db_read = match std::env::var("DATABASE_READ_URL") {
-            Ok(url) if !url.trim().is_empty() => lumi_db::connect_read(&url).await?,
+        lumi_db::migrate(&db).await?;
+        let db_read = match &cfg.database_read_url {
+            Some(url) if !url.trim().is_empty() => lumi_db::connect_read(url).await?,
             _ => db.clone(),
         };
         let cache = Arc::new(Cache::connect(&cfg.redis_url).await?);

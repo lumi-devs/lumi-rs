@@ -15,8 +15,8 @@ use serde_json::{Value, json};
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 
+use lumi_kernel::Result;
 use lumi_kernel::services::Services;
-use lumi_kernel::{Config, Result};
 
 mod interactions;
 
@@ -59,14 +59,16 @@ pub struct ActionResponse {
     pub error: Option<String>,
 }
 
-/// Serve the RPC surface on `addr`. `token` is the expected bearer token;
-/// `None` leaves `/action` unauthenticated (loopback/dev only).
-pub async fn serve(
-    addr: SocketAddr,
-    token: Option<String>,
-    config: &Config,
-    services: Arc<Services>,
-) -> Result<()> {
+/// Serve the RPC surface on `addr`. The bearer token comes from
+/// `RPC_TOKEN`; when unset, `/action` is unauthenticated (loopback/dev only).
+pub async fn serve(addr: SocketAddr, services: Arc<Services>) -> Result<()> {
+    init_metrics();
+
+    let token = services.cfg.rpc_token.clone();
+    if token.is_none() {
+        tracing::warn!("RPC_TOKEN is unset; /action accepts unauthenticated requests");
+    }
+    let interactions_router = interactions::router(&services.cfg);
     let state = RpcState { token, services };
 
     let governor_conf = GovernorConfigBuilder::default()
@@ -74,8 +76,6 @@ pub async fn serve(
         .burst_size(20)
         .finish()
         .unwrap_or_default();
-
-    let interactions_router = interactions::router(config);
 
     let api_routes = Router::new()
         .route("/action", post(action))

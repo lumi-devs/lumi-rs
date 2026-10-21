@@ -113,6 +113,7 @@ mod tests {
             role: lumi_kernel::Role::Api,
             token: "test".into(),
             database_url: "postgres://localhost".into(),
+            database_read_url: None,
             redis_url: "redis://localhost".into(),
             rpc_token: None,
             rpc_port: 8080,

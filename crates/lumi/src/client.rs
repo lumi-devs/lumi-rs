@@ -83,54 +83,19 @@ fn command_check(ctx: Context<'_>) -> poise::BoxFuture<'_, Result<bool, Error>> 
     })
 }
 
-pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
+pub async fn build(services: Data) -> Result<serenity::Client> {
     // The per-shard guild/member split uses Discord's shard math, so it needs the
     // fleet total as well as this process's shard latencies.
-    let mut shard_total = cfg.shard_count.map_or(1, u64::from);
-    if let Ok(token) = cfg.token.parse::<serenity::Token>() {
+    let mut shard_total = services.cfg.shard_count.map_or(1, u64::from);
+    if let Ok(token) = services.cfg.token.parse::<serenity::Token>() {
         let http = serenity::Http::new(token);
-        if cfg.shard_count.is_none() {
+        if services.cfg.shard_count.is_none() {
             match http.get_bot_gateway().await {
                 Ok(gateway) => shard_total = u64::from(gateway.shards.get()),
                 Err(e) => tracing::warn!(error = %e, "failed to read the recommended shard count"),
             }
         }
-        match http.get_current_application_info().await {
-            Ok(info) => {
-                if let Some(owner) = info.owner {
-                    let id = owner.id.get();
-                    if !cfg.owner_ids.contains(&id) {
-                        tracing::info!(owner_id = id, "resolved application owner from Discord");
-                        cfg.owner_ids.push(id);
-                    }
-                }
-                if let Some(team) = info.team {
-                    let team_owner = team.owner_user_id.get();
-                    if !cfg.owner_ids.contains(&team_owner) {
-                        tracing::info!(owner_id = team_owner, "resolved team owner from Discord");
-                        cfg.owner_ids.push(team_owner);
-                    }
-                    for member in team.members {
-                        if member.membership_state == serenity::MembershipState::Accepted {
-                            let id = member.user.id.get();
-                            if !cfg.owner_ids.contains(&id) {
-                                tracing::info!(
-                                    member_id = id,
-                                    "resolved team member owner from Discord"
-                                );
-                                cfg.owner_ids.push(id);
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to resolve application owner from Discord HTTP");
-            }
-        }
     }
-
-    let services = crate::runtime::services(cfg).await?;
 
     let commands = crate::commands::all_from_registry(&services.registry);
 

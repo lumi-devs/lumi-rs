@@ -11,7 +11,7 @@ crates/
   modules/  lumi-modules — all feature modules (afk, logging, moderation, …)
   api/      lumi-api     — axum dashboard / RPC + guild→pod routing
   rest/     lumi-rest    — Discord REST proxy (phase 2, mostly stub)
-  lumi/     lumi (bin)   — main entry: `lumi shard|api|rest|all`
+  lumi/     lumi (bin)   — entry: `lumi [all|gateway|api|worker]`
   lints/    lumi-lints   — internal proc-macro lints (placeholder for now)
 xtask/                   — codegen, release, db helpers
 ```

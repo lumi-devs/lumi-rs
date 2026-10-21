@@ -9,14 +9,18 @@
 
 ```
 N shard processes (each owns a shard range)
-  └─ runs gateway + all modules + timers in-process
+  └─ runs gateway + all modules + commands in-process
         │
         ├─► Postgres (guild_id-routed, guild_id leading in every index)
-        └─► Valkey/Redis (pub-sub, streams, addon KV)
+        └─► Valkey/Redis (pub-sub, streams, addon KV, shard leases)
 
-api process ──► dashboard/RPC, routes requests to the cluster that owns the guild
-rest proxy  ──► shared Discord REST ratelimiter (phase 2)
+worker process ──► scheduler queue + periodic jobs (no gateway session)
+api process    ──► dashboard/RPC + interactions, routes guild requests to the owner pod
+rest proxy     ──► shared Discord REST ratelimiter (phase 2)
 ```
+
+A shard node must hold its Redis lease: losing it (or failing to refresh
+within the TTL) shuts the gateway down instead of running a duplicate session.
 
 ## Shard → guild mapping (deterministic, no registry)
 
@@ -52,7 +56,7 @@ building `crates/rest`. Phase 2.
 ## Build order
 
 1. Monolith with `for_guild()` + minimal cache (now)
-2. Timers per shard range
+2. Worker tier for timers and background jobs (now)
 3. Multi-process StatefulSet
 4. Memory benchmark (RSS/1k guilds)
 5. `rest` proxy
