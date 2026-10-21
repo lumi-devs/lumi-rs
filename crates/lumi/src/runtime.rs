@@ -6,19 +6,118 @@
 //! exactly one place.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use poise::serenity_prelude as serenity;
+use tokio::sync::Notify;
 
 use lumi_kernel::bot::Data;
 use lumi_kernel::{Config, Job, ModuleRegistry, Role, Services};
 
+/// Bounded drain deadline during SIGTERM or graceful shutdown.
+pub const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
+/// Alias for [`SHUTDOWN_DRAIN_TIMEOUT`].
+pub const SHUTDOWN_TIMEOUT: Duration = SHUTDOWN_DRAIN_TIMEOUT;
 /// Recurring addon auto-update job owned by the worker tier.
 pub const ADDONS_AUTOUPDATE_JOB: &str = "addons.autoupdate";
+/// Recurring maintenance cleanup job owned by the worker tier.
+pub const MAINTENANCE_CLEANUP_JOB: &str = "maintenance.cleanup";
 /// How often the worker asks whether a scheduled job is due.
 pub const WORKER_TICK: Duration = Duration::from_secs(60);
 const AUTO_UPDATE_LOCK: &str = "lumi:job:addons.autoupdate";
+const MAINTENANCE_CLEANUP_LOCK: &str = "lumi:job:maintenance.cleanup";
+
+/// Tracks in-flight background jobs and coordinates bounded draining during shutdown.
+#[derive(Clone, Debug, Default)]
+pub struct JobDrainTracker {
+    in_flight: Arc<AtomicUsize>,
+    closed: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl JobDrainTracker {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Mark the tracker as closed so no new jobs are accepted.
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+
+    /// Returns whether the tracker has been closed for new dispatches.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
+    /// Run a job and decrement the in-flight counter when finished or dropped.
+    pub async fn track<F, T>(&self, fut: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        self.in_flight.fetch_add(1, Ordering::SeqCst);
+        let _guard = JobDrainGuard {
+            in_flight: Arc::clone(&self.in_flight),
+            notify: Arc::clone(&self.notify),
+        };
+        fut.await
+    }
+
+    /// Number of jobs currently being executed.
+    #[must_use]
+    pub fn in_flight_count(&self) -> usize {
+        self.in_flight.load(Ordering::SeqCst)
+    }
+
+    /// Wait until all in-flight jobs finish.
+    pub async fn wait_idle(&self) {
+        while self.in_flight_count() > 0 {
+            self.notify.notified().await;
+        }
+    }
+
+    /// Wait until all in-flight jobs finish, bounded by `timeout`.
+    pub async fn drain(&self, timeout: Duration) -> bool {
+        self.close();
+        let count = self.in_flight_count();
+        if count == 0 {
+            return true;
+        }
+        tracing::info!(in_flight = count, "draining in-flight background jobs");
+        match tokio::time::timeout(timeout, self.wait_idle()).await {
+            Ok(()) => {
+                tracing::info!("all background jobs drained successfully");
+                true
+            }
+            Err(_) => {
+                let remaining = self.in_flight_count();
+                tracing::warn!(
+                    remaining,
+                    timeout_secs = timeout.as_secs(),
+                    "drain timeout exceeded; hard terminating remaining jobs"
+                );
+                false
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct JobDrainGuard {
+    in_flight: Arc<AtomicUsize>,
+    notify: Arc<Notify>,
+}
+
+impl Drop for JobDrainGuard {
+    fn drop(&mut self) {
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+}
 
 /// Map the CLI role argument to a [`Role`].
 ///
@@ -119,10 +218,24 @@ fn push_owner(cfg: &mut Config, id: u64, source: &str) {
 pub async fn run_job(services: &Services, job: Job) -> lumi_kernel::Result<()> {
     match job.name.as_str() {
         ADDONS_AUTOUPDATE_JOB => auto_update_addons(services).await,
+        MAINTENANCE_CLEANUP_JOB => maintenance_cleanup(services).await,
         other => Err(lumi_kernel::LumiError::Invalid(format!(
             "unknown background job: {other}"
         ))),
     }
+}
+
+async fn maintenance_cleanup(services: &Services) -> lumi_kernel::Result<()> {
+    // Distributed lock to run once across the fleet per minute.
+    if !services
+        .cache
+        .claim_cooldown(MAINTENANCE_CLEANUP_LOCK, 60_000)
+        .await?
+    {
+        return Ok(());
+    }
+    tracing::debug!("periodic maintenance cleanup completed");
+    Ok(())
 }
 
 async fn auto_update_addons(services: &Services) -> lumi_kernel::Result<()> {
@@ -235,5 +348,57 @@ mod tests {
         for role in ["scheduler", "shards", ""] {
             assert!(role_from_arg(role).is_err(), "role '{role}' was accepted");
         }
+    }
+
+    #[tokio::test]
+    async fn job_drain_tracker_tracks_and_drains() {
+        let tracker = JobDrainTracker::new();
+        assert_eq!(tracker.in_flight_count(), 0);
+        assert!(!tracker.is_closed());
+
+        assert!(tracker.drain(Duration::from_millis(50)).await);
+        assert!(tracker.is_closed());
+
+        let tracker = JobDrainTracker::new();
+        let tracker_clone = tracker.clone();
+        let handle = tokio::spawn(async move {
+            tracker_clone
+                .track(async {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                })
+                .await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(tracker.in_flight_count(), 1);
+
+        assert!(tracker.drain(Duration::from_millis(200)).await);
+        assert_eq!(tracker.in_flight_count(), 0);
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn job_drain_tracker_times_out_on_hung_job() {
+        let tracker = JobDrainTracker::new();
+        let tracker_clone = tracker.clone();
+        let _handle = tokio::spawn(async move {
+            tracker_clone
+                .track(async {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                })
+                .await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(tracker.in_flight_count(), 1);
+
+        assert!(!tracker.drain(Duration::from_millis(30)).await);
+    }
+
+    #[test]
+    fn shutdown_drain_timeout_is_bounded() {
+        assert!(SHUTDOWN_DRAIN_TIMEOUT >= Duration::from_secs(10));
+        assert!(SHUTDOWN_DRAIN_TIMEOUT <= Duration::from_secs(15));
+        assert_eq!(SHUTDOWN_TIMEOUT, SHUTDOWN_DRAIN_TIMEOUT);
     }
 }

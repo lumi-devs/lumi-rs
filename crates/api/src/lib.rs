@@ -61,7 +61,23 @@ pub struct ActionResponse {
 
 /// Serve the RPC surface on `addr`. The bearer token comes from
 /// `RPC_TOKEN`; when unset, `/action` is unauthenticated (loopback/dev only).
+///
+/// # Errors
+///
+/// Returns an error if the listener fails to bind or the server fails.
 pub async fn serve(addr: SocketAddr, services: Arc<Services>) -> Result<()> {
+    serve_with_shutdown(addr, services, std::future::pending::<()>()).await
+}
+
+/// Serve the RPC surface on `addr` with graceful shutdown support.
+///
+/// # Errors
+///
+/// Returns an error if the listener fails to bind or the server fails.
+pub async fn serve_with_shutdown<F>(addr: SocketAddr, services: Arc<Services>, shutdown: F) -> Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
     init_metrics();
 
     let token = services.cfg.rpc_token.clone();
@@ -94,6 +110,7 @@ pub async fn serve(addr: SocketAddr, services: Arc<Services>) -> Result<()> {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown)
     .await?;
     Ok(())
 }

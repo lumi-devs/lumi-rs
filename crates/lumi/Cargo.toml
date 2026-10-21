@@ -29,3 +29,4 @@ clap         = { version = "4", features = ["derive"] }
 sysinfo      = { workspace = true }
 mimalloc     = { workspace = true }
 rustls       = { workspace = true }
+dashmap      = { workspace = true }
