@@ -195,6 +195,9 @@ pub async fn handle_modal(
     }
     if let Some(parsed) = HubId::parse(&modal.data.custom_id, PREFIX) {
         if parsed.head() == Some("cfgmodal") {
+            if !caller_may_manage_modal(ctx, services, modal).await {
+                return deny_modal(ctx, modal).await;
+            }
             let outcome =
                 modules::handle_modal(services, &guild_ctx_from_modal(ctx, modal), modal).await?;
             return respond_modal(ctx, modal, outcome).await;

@@ -127,16 +127,21 @@ pub async fn activate_auto_lockdown(
     let mut conn = services.cache.redis();
     let key = format!("lumi:filter:{guild_id}:autolockdown");
     // NX ensures only one shard schedules the unlock for a lockdown.
-    let res: Option<String> = redis::cmd("SET")
+    match redis::cmd("SET")
         .arg(&key)
         .arg(now_millis().to_string())
         .arg("EX")
         .arg(duration_minutes.saturating_mul(60).max(60))
         .arg("NX")
-        .query_async(&mut conn)
+        .query_async::<Option<String>>(&mut conn)
         .await
-        .ok();
-    res.as_deref() == Some("OK")
+    {
+        Ok(res) => res.as_deref() == Some("OK"),
+        Err(error) => {
+            tracing::warn!(%error, guild_id, "filter: failed to set auto-lockdown key in redis");
+            false
+        }
+    }
 }
 
 pub async fn check_mention_flood(
@@ -212,7 +217,13 @@ pub async fn check_mention_flood(
         .await;
         let mut conn = cache.redis();
         let key = format!("lumi:filter:{guild_id}:autolockdown");
-        let _: Result<(), _> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
+        if let Err(error) = redis::cmd("DEL").arg(&key).query_async::<()>(&mut conn).await {
+            tracing::warn!(
+                %error,
+                guild_id = guild_id.get(),
+                "filter: failed to delete auto-lockdown key from redis"
+            );
+        }
         tracing::info!(
             guild_id = guild_id.get(),
             "filter: auto-lockdown expired and lifted"
@@ -370,33 +381,44 @@ pub async fn check_heat(
                 "Heat escalation: exceeded {} heat ({heat:.1})",
                 rules.heat_quarantine
             );
-            if let Ok(Some(quarantine_role)) = crate::moderation::store::quarantine_role(
+            match crate::moderation::store::quarantine_role(
                 &services.cache,
                 &services.db,
                 guild_id.get(),
             )
             .await
             {
-                let _ = guild_id
-                    .edit_member(
-                        &ctx.http,
-                        user_id,
-                        EditMember::new().roles(vec![serenity::all::RoleId::new(quarantine_role)]),
-                    )
-                    .await;
-                if let Some(log_channel) = rules.log_channel {
-                    let log_card = Card::lines(
-                        "☣️ Member Quarantined (Heat)",
-                        vec![
-                            format!("**Target**: <@{}>", user_id.get()),
-                            format!("**Heat Level**: {heat:.1}"),
-                            format!("**Reason**: {reason}"),
-                        ],
-                    )
-                    .kind(CardKind::Error);
-                    let _ = GenericChannelId::new(log_channel)
-                        .send_message(&ctx.http, log_card.into_reply().message())
+                Ok(Some(quarantine_role)) => {
+                    let _ = guild_id
+                        .edit_member(
+                            &ctx.http,
+                            user_id,
+                            EditMember::new().roles(vec![serenity::all::RoleId::new(quarantine_role)]),
+                        )
                         .await;
+                    if let Some(log_channel) = rules.log_channel {
+                        let log_card = Card::lines(
+                            "☣️ Member Quarantined (Heat)",
+                            vec![
+                                format!("**Target**: <@{}>", user_id.get()),
+                                format!("**Heat Level**: {heat:.1}"),
+                                format!("**Reason**: {reason}"),
+                            ],
+                        )
+                        .kind(CardKind::Error);
+                        let _ = GenericChannelId::new(log_channel)
+                            .send_message(&ctx.http, log_card.into_reply().message())
+                            .await;
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        guild_id = guild_id.get(),
+                        user_id = user_id.get(),
+                        "filter: failed to look up quarantine role"
+                    );
                 }
             }
         }

@@ -1,9 +1,7 @@
 use std::borrow::Cow;
 
 use poise::serenity_prelude as serenity;
-use serenity::all::{
-    ChannelId, EditGuild, PermissionOverwrite, PermissionOverwriteType, Permissions,
-};
+use serenity::all::{ChannelId, EditGuild, PermissionOverwriteType, Permissions};
 
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind};
@@ -124,15 +122,20 @@ pub async fn on(ctx: Context<'_>) -> Result<(), Error> {
     }
 
     let channels = guild_id.channels(ctx.http()).await?;
+    let everyone = guild_id.everyone_role();
+    let mask = Permissions::SEND_MESSAGES | Permissions::ADD_REACTIONS;
     let mut locked = Vec::new();
 
     for channel in channels {
         let channel_id = channel.id;
         if channel.is_text_based() {
-            let overwrite = PermissionOverwrite {
-                allow: Permissions::empty(),
-                deny: Permissions::SEND_MESSAGES | Permissions::ADD_REACTIONS,
-                kind: PermissionOverwriteType::Role(guild_id.everyone_role()),
+            let existing = channel.permission_overwrites.iter().find(|overwrite| {
+                matches!(overwrite.kind, PermissionOverwriteType::Role(role) if role == everyone)
+            });
+            let Some(overwrite) = lumi_modules::moderation::channels::merge_everyone_overwrite(
+                existing, everyone, mask, true,
+            ) else {
+                continue;
             };
             if channel_id
                 .create_permission(ctx.http(), overwrite, Some("Panic mode activated"))
@@ -198,19 +201,45 @@ pub async fn off(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     };
 
+    // Only lift the bits panic added; deleting the overwrite outright would
+    // publish channels that were private before the lockdown.
+    let everyone = guild_id.everyone_role();
+    let mask = Permissions::SEND_MESSAGES | Permissions::ADD_REACTIONS;
+    let channels = match guild_id.channels(ctx.http()).await {
+        Ok(channels) => channels,
+        Err(error) => {
+            tracing::warn!(%error, "could not fetch channels to lift panic lockdown");
+            Default::default()
+        }
+    };
     let mut restored = 0;
     for ch_str in &prior.locked_channels {
         if let Ok(ch_num) = ch_str.parse::<u64>() {
             let ch_id = ChannelId::new(ch_num);
-            if ch_id
-                .delete_permission(
-                    ctx.http(),
-                    PermissionOverwriteType::Role(guild_id.everyone_role()),
-                    Some("Panic mode deactivated"),
-                )
-                .await
-                .is_ok()
-            {
+            let existing = channels.get(&ch_id).and_then(|channel| {
+                channel.permission_overwrites.iter().find(|overwrite| {
+                    matches!(overwrite.kind, PermissionOverwriteType::Role(role) if role == everyone)
+                })
+            });
+            let result = match lumi_modules::moderation::channels::merge_everyone_overwrite(
+                existing, everyone, mask, false,
+            ) {
+                Some(overwrite) => {
+                    ch_id
+                        .create_permission(ctx.http(), overwrite, Some("Panic mode deactivated"))
+                        .await
+                }
+                None => {
+                    ch_id
+                        .delete_permission(
+                            ctx.http(),
+                            PermissionOverwriteType::Role(everyone),
+                            Some("Panic mode deactivated"),
+                        )
+                        .await
+                }
+            };
+            if result.is_ok() {
                 restored += 1;
             }
         }

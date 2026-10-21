@@ -10,6 +10,69 @@ use lumi_kernel::{LumiError, Result};
 
 use super::config::EconomyConfig;
 
+const MAX_ATTEMPTS: usize = 3;
+const INITIAL_BACKOFF_MS: u64 = 25;
+
+fn is_conflict_db_err(err: &sea_orm::DbErr) -> bool {
+    use std::ops::Deref;
+    match err {
+        sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(e))
+        | sea_orm::DbErr::Query(sea_orm::RuntimeErr::SqlxError(e))
+        | sea_orm::DbErr::Conn(sea_orm::RuntimeErr::SqlxError(e)) => {
+            if let sea_orm::SqlxError::Database(db_err) = e.deref() {
+                if let Some(code) = db_err.code() {
+                    if code.as_ref() == "40001" || code.as_ref() == "40P01" {
+                        return true;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    let msg = err.to_string();
+    msg.contains("40001") || msg.contains("40P01")
+}
+
+fn is_conflict_error(err: &LumiError) -> bool {
+    match err {
+        LumiError::Db(db_err) => is_conflict_db_err(db_err),
+        _ => {
+            let msg = err.to_string();
+            msg.contains("40001") || msg.contains("40P01")
+        }
+    }
+}
+
+fn is_slots_conflict(err: &SlotsError) -> bool {
+    match err {
+        SlotsError::Other(lumi_err) => is_conflict_error(lumi_err),
+        _ => false,
+    }
+}
+
+macro_rules! run_with_retry {
+    ($op:expr) => {{
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match $op.await {
+                Ok(val) => break Ok(val),
+                Err(err) if attempt < MAX_ATTEMPTS && is_conflict_error(&err) => {
+                    let backoff = INITIAL_BACKOFF_MS * (1 << (attempt - 1));
+                    tracing::warn!(
+                        attempt,
+                        backoff_ms = backoff,
+                        error = %err,
+                        "retrying transaction after conflict (40001/40P01)"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+                }
+                Err(err) => break Err(err),
+            }
+        }
+    }};
+}
+
 const SLOT_SYMBOLS: [&str; 5] = ["🍒", "🍋", "🔔", "💎", "🍀"];
 
 /// Which balance an admin operation targets.
@@ -216,6 +279,15 @@ pub async fn claim_daily(
     user_id: u64,
     cfg: &EconomyConfig,
 ) -> Result<DailyOutcome> {
+    run_with_retry!(claim_daily_inner(db, guild_id, user_id, cfg))
+}
+
+async fn claim_daily_inner(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    cfg: &EconomyConfig,
+) -> Result<DailyOutcome> {
     let txn = db.begin().await?;
     let acc = locked_account(&txn, guild_id, user_id, cfg).await?;
 
@@ -267,6 +339,17 @@ pub async fn admin_set_balance(
     amount: i64,
     cfg: &EconomyConfig,
 ) -> Result<AccountBalance> {
+    run_with_retry!(admin_set_balance_inner(db, guild_id, user_id, vault, amount, cfg))
+}
+
+async fn admin_set_balance_inner(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    vault: Vault,
+    amount: i64,
+    cfg: &EconomyConfig,
+) -> Result<AccountBalance> {
     let txn = db.begin().await?;
     let acc = locked_account(&txn, guild_id, user_id, cfg).await?;
     let amount = amount.clamp(0, cfg.max_balance);
@@ -305,6 +388,17 @@ pub async fn admin_set_balance(
 }
 
 pub async fn admin_adjust_balance(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    vault: Vault,
+    delta: i64,
+    cfg: &EconomyConfig,
+) -> Result<AccountBalance> {
+    run_with_retry!(admin_adjust_balance_inner(db, guild_id, user_id, vault, delta, cfg))
+}
+
+async fn admin_adjust_balance_inner(
     db: &DatabaseConnection,
     guild_id: u64,
     user_id: u64,
@@ -373,6 +467,33 @@ pub async fn play_slots(
         });
     }
 
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match play_slots_inner(db, guild_id, user_id, bid, cfg).await {
+            Ok(outcome) => return Ok(outcome),
+            Err(err) if attempt < MAX_ATTEMPTS && is_slots_conflict(&err) => {
+                let backoff = INITIAL_BACKOFF_MS * (1 << (attempt - 1));
+                tracing::warn!(
+                    attempt,
+                    backoff_ms = backoff,
+                    error = %err,
+                    "retrying slots transaction after conflict (40001/40P01)"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+async fn play_slots_inner(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    bid: i64,
+    cfg: &EconomyConfig,
+) -> std::result::Result<SlotsOutcome, SlotsError> {
     let txn = db.begin().await?;
     let acc = locked_account(&txn, guild_id, user_id, cfg).await?;
     if acc.wallet < bid {
@@ -435,6 +556,20 @@ fn spin_symbols() -> [String; 3] {
 }
 
 pub async fn transfer(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    sender_id: u64,
+    recipient_id: u64,
+    amount: i64,
+    cfg: &EconomyConfig,
+) -> Result<Option<i64>> {
+    if sender_id == recipient_id {
+        return Ok(None);
+    }
+    run_with_retry!(transfer_inner(db, guild_id, sender_id, recipient_id, amount, cfg))
+}
+
+async fn transfer_inner(
     db: &DatabaseConnection,
     guild_id: u64,
     sender_id: u64,
@@ -509,6 +644,16 @@ pub async fn deposit(
     amount: i64,
     cfg: &EconomyConfig,
 ) -> Result<Option<(i64, i64)>> {
+    run_with_retry!(deposit_inner(db, guild_id, user_id, amount, cfg))
+}
+
+async fn deposit_inner(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    amount: i64,
+    cfg: &EconomyConfig,
+) -> Result<Option<(i64, i64)>> {
     let txn = db.begin().await?;
     let acc = locked_account(&txn, guild_id, user_id, cfg).await?;
 
@@ -544,6 +689,16 @@ pub async fn deposit(
 }
 
 pub async fn withdraw(
+    db: &DatabaseConnection,
+    guild_id: u64,
+    user_id: u64,
+    amount: i64,
+    cfg: &EconomyConfig,
+) -> Result<Option<(i64, i64)>> {
+    run_with_retry!(withdraw_inner(db, guild_id, user_id, amount, cfg))
+}
+
+async fn withdraw_inner(
     db: &DatabaseConnection,
     guild_id: u64,
     user_id: u64,
@@ -586,7 +741,8 @@ pub async fn withdraw(
 
 #[cfg(test)]
 mod tests {
-    use super::Vault;
+    use super::{Vault, is_conflict_db_err, is_conflict_error};
+    use lumi_kernel::LumiError;
 
     #[test]
     fn parses_vault() {
@@ -594,5 +750,20 @@ mod tests {
         assert_eq!(Vault::parse(Some("wallet")), Some(Vault::Wallet));
         assert_eq!(Vault::parse(Some("bank")), Some(Vault::Bank));
         assert_eq!(Vault::parse(Some("other")), None);
+    }
+
+    #[test]
+    fn detects_conflict_errors() {
+        let err_40001 = sea_orm::DbErr::Custom("could not serialize access: 40001".into());
+        let err_40p01 = sea_orm::DbErr::Custom("deadlock detected: 40P01".into());
+        let err_other = sea_orm::DbErr::Custom("other error".into());
+
+        assert!(is_conflict_db_err(&err_40001));
+        assert!(is_conflict_db_err(&err_40p01));
+        assert!(!is_conflict_db_err(&err_other));
+
+        assert!(is_conflict_error(&LumiError::Db(err_40001)));
+        assert!(is_conflict_error(&LumiError::Db(err_40p01)));
+        assert!(!is_conflict_error(&LumiError::Db(err_other)));
     }
 }

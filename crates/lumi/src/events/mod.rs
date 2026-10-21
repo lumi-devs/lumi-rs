@@ -131,18 +131,36 @@ impl serenity::EventHandler for Events {
                 };
                 match interaction {
                     serenity::Interaction::Component(component) => {
+                        let guild_id = component.guild_id.map(|g| g.get());
+                        let user_id = component.user.id.get();
+                        let custom_id = &component.data.custom_id;
                         if let Err(error) =
                             crate::interactions::handle_component(ctx, services.as_ref(), component)
                                 .await
                         {
-                            tracing::warn!(%error, "component interaction failed");
+                            tracing::warn!(
+                                %error,
+                                guild_id = ?guild_id,
+                                user_id,
+                                custom_id,
+                                "component interaction failed"
+                            );
                         }
                     }
                     serenity::Interaction::Modal(modal) => {
+                        let guild_id = modal.guild_id.map(|g| g.get());
+                        let user_id = modal.user.id.get();
+                        let custom_id = &modal.data.custom_id;
                         if let Err(error) =
                             crate::interactions::handle_modal(ctx, services.as_ref(), modal).await
                         {
-                            tracing::warn!(%error, "modal interaction failed");
+                            tracing::warn!(
+                                %error,
+                                guild_id = ?guild_id,
+                                user_id,
+                                custom_id,
+                                "modal interaction failed"
+                            );
                         }
                     }
                     _ => {}
@@ -225,6 +243,8 @@ impl serenity::EventHandler for Events {
                 ..
             } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
+                let guild_id = event.guild_id.get();
+                let user_id = event.user.id.get();
                 if let Err(error) = lumi_modules::logging::events::on_member_update(
                     ctx,
                     services.as_ref(),
@@ -233,7 +253,7 @@ impl serenity::EventHandler for Events {
                 )
                 .await
                 {
-                    tracing::warn!(%error, "logging member update failed");
+                    tracing::warn!(%error, guild_id, user_id, "logging member update failed");
                 }
                 if let Err(error) = lumi_modules::security::events::on_member_update(
                     ctx,
@@ -243,7 +263,7 @@ impl serenity::EventHandler for Events {
                 )
                 .await
                 {
-                    tracing::warn!(%error, "security member update handler failed");
+                    tracing::warn!(%error, guild_id, user_id, "security member update handler failed");
                 }
             }
             serenity::FullEvent::GuildBanAddition {
@@ -252,6 +272,8 @@ impl serenity::EventHandler for Events {
                 ..
             } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
+                let gid = guild_id.get();
+                let user_id = banned_user.id.get();
                 if let Err(error) = lumi_modules::logging::events::on_ban_add(
                     ctx,
                     services.as_ref(),
@@ -260,7 +282,7 @@ impl serenity::EventHandler for Events {
                 )
                 .await
                 {
-                    tracing::warn!(%error, "logging ban add failed");
+                    tracing::warn!(%error, guild_id = gid, user_id, "logging ban add failed");
                 }
             }
             serenity::FullEvent::GuildBanRemoval {
@@ -269,6 +291,8 @@ impl serenity::EventHandler for Events {
                 ..
             } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
+                let gid = guild_id.get();
+                let user_id = unbanned_user.id.get();
                 if let Err(error) = lumi_modules::logging::events::on_ban_remove(
                     ctx,
                     services.as_ref(),
@@ -277,7 +301,7 @@ impl serenity::EventHandler for Events {
                 )
                 .await
                 {
-                    tracing::warn!(%error, "logging ban remove failed");
+                    tracing::warn!(%error, guild_id = gid, user_id, "logging ban remove failed");
                 }
             }
             serenity::FullEvent::GuildUpdate {
@@ -286,6 +310,7 @@ impl serenity::EventHandler for Events {
                 ..
             } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
+                let guild_id = new_data.id.get();
                 if let Err(error) = lumi_modules::security::events::on_guild_update(
                     ctx,
                     services.as_ref(),
@@ -294,7 +319,7 @@ impl serenity::EventHandler for Events {
                 )
                 .await
                 {
-                    tracing::warn!(%error, "security guild update handler failed");
+                    tracing::warn!(%error, guild_id, "security guild update handler failed");
                 }
             }
             serenity::FullEvent::GuildRoleUpdate {
@@ -303,6 +328,8 @@ impl serenity::EventHandler for Events {
                 ..
             } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
+                let guild_id = new.guild_id.get();
+                let role_id = new.id.get();
                 if let Err(error) = lumi_modules::security::events::on_role_update(
                     ctx,
                     services.as_ref(),
@@ -311,7 +338,7 @@ impl serenity::EventHandler for Events {
                 )
                 .await
                 {
-                    tracing::warn!(%error, "security role update handler failed");
+                    tracing::warn!(%error, guild_id, role_id, "security role update handler failed");
                 }
             }
             serenity::FullEvent::GuildAuditLogEntryCreate {
@@ -326,17 +353,32 @@ impl serenity::EventHandler for Events {
             }
             serenity::FullEvent::VoiceStateUpdate { old, new, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
+                let guild_id = new
+                    .guild_id
+                    .or_else(|| old.as_ref().and_then(|o| o.guild_id))
+                    .map(|g| g.get());
+                let user_id = new.user_id.get();
                 if let Err(error) =
                     lumi_modules::tempvc::on_voice_state_update(ctx, services.as_ref(), old, new)
                         .await
                 {
-                    tracing::warn!(%error, "tempvc voice state update handler failed");
+                    tracing::warn!(
+                        %error,
+                        guild_id = ?guild_id,
+                        user_id,
+                        "tempvc voice state update handler failed"
+                    );
                 }
                 if let Err(error) =
                     lumi_modules::leveling::on_voice_state_update(ctx, services.as_ref(), old, new)
                         .await
                 {
-                    tracing::warn!(%error, "leveling voice state update handler failed");
+                    tracing::warn!(
+                        %error,
+                        guild_id = ?guild_id,
+                        user_id,
+                        "leveling voice state update handler failed"
+                    );
                 }
             }
             _ => {}

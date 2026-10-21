@@ -33,6 +33,29 @@ impl Services {
         &self.db_read
     }
 
+    /// Re-read one guild's permits and assignments after they were edited, so
+    /// the change is enforced immediately instead of after a process restart.
+    pub async fn reload_guild_permits(&self, guild_id: u64) -> Result<()> {
+        let permits = lumi_db::list_permits(&self.db, guild_id)
+            .await?
+            .into_iter()
+            .map(crate::permits::PermitRow::from_model)
+            .collect();
+        let assignments = lumi_db::list_assignments(&self.db, guild_id)
+            .await?
+            .into_iter()
+            .map(|row| crate::permits::PermitAssignment {
+                permit_id: row.permit_id,
+                guild_id: guild_id.to_string(),
+                target_type: row.target_type,
+                target_id: row.target_id.as_i64(),
+            })
+            .collect();
+        self.permits
+            .replace_guild(&guild_id.to_string(), permits, assignments);
+        Ok(())
+    }
+
     /// Build every shared runtime service from `cfg`. `registry` carries the
     /// modules the caller has registered; migration is left to the caller. The
     /// cross-process cache invalidation listener is spawned here.

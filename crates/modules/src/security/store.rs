@@ -108,12 +108,18 @@ pub async fn anti_nuke_settings(
 pub async fn panic_locks_commands(services: &Services, guild_id: u64) -> bool {
     // Check the in-memory panic cache first so the config read only happens
     // while a guild is actually in lockdown.
-    if !services
+    let is_panic_active = match services
         .security
         .get_panic_status(&guild_id.to_string())
         .await
-        .is_ok_and(|status| status.is_some())
     {
+        Ok(status) => status.is_some(),
+        Err(error) => {
+            tracing::warn!(%error, guild_id, "failed to check panic status for command lock");
+            false
+        }
+    };
+    if !is_panic_active {
         return false;
     }
     let map = module_state::config_cached(&services.cache, &services.db, guild_id, MODULE).await;

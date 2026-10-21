@@ -140,6 +140,46 @@ fn may_manage(
     is_admin(ctx, guild_id, user) || services.cfg.is_owner(user.get())
 }
 
+/// Owner or staff may operate a channel's controls.
+fn may_control(owner_id: u64, actor: UserId, is_staff: bool) -> bool {
+    actor.get() == owner_id || is_staff
+}
+
+/// Whether the recorded owner is still connected to the channel. Unknown cache
+/// state counts as present so a cache miss cannot hand the channel to a claimer.
+fn owner_connected(
+    ctx: &serenity::Context,
+    guild_id: GuildId,
+    channel_id: u64,
+    owner_id: u64,
+) -> bool {
+    ctx.cache.guild(guild_id).map_or(true, |guild| {
+        guild
+            .voice_states
+            .get(&UserId::new(owner_id))
+            .is_some_and(|state| state.channel_id == Some(ChannelId::new(channel_id)))
+    })
+}
+
+/// Whether `user` may edit the channel's panel: it must be an active managed
+/// channel owned by them, or they must hold staff permissions.
+async fn may_edit_panel(
+    ctx: &serenity::Context,
+    services: &Services,
+    guild_id: GuildId,
+    channel_id: u64,
+    user: UserId,
+) -> Result<bool, Error> {
+    let Some(record) = store::get_record(&services.db, guild_id.get(), channel_id).await? else {
+        return Ok(false);
+    };
+    Ok(may_control(
+        record.owner_id.get(),
+        user,
+        may_manage(ctx, services, guild_id, user),
+    ))
+}
+
 fn error_card(message: &str) -> CardReply {
     Card::error("TempVC Error", message).into_reply()
 }
@@ -330,6 +370,15 @@ async fn panel_action(
             )
             .await;
         }
+        if owner_connected(ctx, guild_id, channel_id, record.owner_id.get()) {
+            return respond(
+                ctx,
+                interaction,
+                error_card("The current owner is still in the channel, so it cannot be claimed."),
+                true,
+            )
+            .await;
+        }
         store::set_owner(&services.db, guild_id.get(), channel_id, caller.get()).await?;
         return respond(
             ctx,
@@ -344,7 +393,11 @@ async fn panel_action(
         .await;
     }
 
-    if caller.get() != record.owner_id.get() && !may_manage(ctx, services, guild_id, caller) {
+    if !may_control(
+        record.owner_id.get(),
+        caller,
+        may_manage(ctx, services, guild_id, caller),
+    ) {
         return respond(
             ctx,
             interaction,
@@ -476,14 +529,25 @@ async fn panel_action(
             .await
         }
         "delok" => {
-            store::delete_record(&services.db, guild_id.get(), channel_id).await?;
-            if let Err(error) = ctx
+            match ctx
                 .http
                 .delete_channel(channel.into(), Some("TempVC: deleted"))
                 .await
             {
-                tracing::warn!(%error, channel_id, "tempvc channel delete failed");
+                Ok(_) => {}
+                Err(error) if super::channel_missing(&error) => {}
+                Err(error) => {
+                    tracing::warn!(%error, channel_id, "tempvc channel delete failed");
+                    return respond(
+                        ctx,
+                        interaction,
+                        error_card("I could not delete the channel. Check my permissions."),
+                        true,
+                    )
+                    .await;
+                }
             }
+            store::delete_record(&services.db, guild_id.get(), channel_id).await?;
             respond(
                 ctx,
                 interaction,
@@ -675,6 +739,7 @@ pub async fn handle_component(
     }
 }
 
+/// Apply a picker action (trust/block/kick/transfer) to a channel.
 async fn handle_pick(
     ctx: &serenity::Context,
     services: &Services,
@@ -683,6 +748,29 @@ async fn handle_pick(
     channel_id: u64,
     action: &str,
 ) -> Result<(), Error> {
+    let Some(record) = store::get_record(&services.db, guild_id.get(), channel_id).await? else {
+        return respond(
+            ctx,
+            interaction,
+            error_card("This voice channel is no longer active or managed by TempVC."),
+            false,
+        )
+        .await;
+    };
+    if !may_control(
+        record.owner_id.get(),
+        interaction.user.id,
+        may_manage(ctx, services, guild_id, interaction.user.id),
+    ) {
+        return respond(
+            ctx,
+            interaction,
+            error_card("Only the channel owner or staff can use these controls."),
+            true,
+        )
+        .await;
+    }
+
     let users = selected_users(interaction);
     let roles = selected_roles(interaction);
     if users.is_empty() && roles.is_empty() {
@@ -801,6 +889,14 @@ pub async fn handle_modal(
 
     match parts.as_slice() {
         ["tempvc", "namem", _] => {
+            if !may_edit_panel(ctx, services, guild_id, channel_id, modal.user.id).await? {
+                return respond_modal(
+                    ctx,
+                    modal,
+                    error_card("Only the channel owner or staff can use these controls."),
+                )
+                .await;
+            }
             let name = truncate_chars(value.trim(), MAX_CHANNEL_NAME);
             if name.is_empty() {
                 return respond_modal(ctx, modal, error_card("Give the channel a name.")).await;
@@ -819,6 +915,14 @@ pub async fn handle_modal(
             .await
         }
         ["tempvc", "limitm", _] => {
+            if !may_edit_panel(ctx, services, guild_id, channel_id, modal.user.id).await? {
+                return respond_modal(
+                    ctx,
+                    modal,
+                    error_card("Only the channel owner or staff can use these controls."),
+                )
+                .await;
+            }
             let Ok(limit) = value.parse::<i32>() else {
                 return respond_modal(ctx, modal, error_card("Enter 0-99 (0 = unlimited).")).await;
             };
@@ -931,6 +1035,15 @@ mod tests {
             admin.default_member_permissions,
             serenity::Permissions::MANAGE_CHANNELS
         );
+    }
+
+    #[test]
+    fn only_owner_or_staff_control_a_channel() {
+        let owner = UserId::new(7);
+        let stranger = UserId::new(9);
+        assert!(may_control(owner.get(), owner, false));
+        assert!(!may_control(owner.get(), stranger, false));
+        assert!(may_control(owner.get(), stranger, true));
     }
 
     #[test]
