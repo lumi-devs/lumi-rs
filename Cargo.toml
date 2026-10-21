@@ -88,6 +88,7 @@ croner      = "2.1"
 mimalloc    = { version = "0.1", default-features = false }
 
 # Observability
+metrics              = "0.24"
 tracing              = "0.1"
 tracing-subscriber   = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 metrics-exporter-prometheus = { version = "0.16", default-features = false }

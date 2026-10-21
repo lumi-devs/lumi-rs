@@ -4,11 +4,28 @@
 //! module set and the poise user-data invariant live in exactly one place.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 
 use lumi_kernel::bot::Data;
 use lumi_kernel::{Config, ModuleRegistry, Services};
+
+/// Postgres may still be starting when this process is; retry the initial
+/// connect instead of crashing the whole tier on a cold-start race.
+async fn connect_db(url: &str) -> Result<lumi_db::DatabaseConnection> {
+    let url = url.to_owned();
+    lumi_kernel::retry_transient(3, Duration::from_millis(250), || {
+        let url = url.clone();
+        async move {
+            lumi_db::connect(&url)
+                .await
+                .map_err(lumi_kernel::LumiError::from)
+        }
+    })
+    .await
+    .map_err(anyhow::Error::from)
+}
 
 /// Every feature module the host knows about, in display order.
 ///
@@ -29,12 +46,40 @@ pub fn registry() -> ModuleRegistry {
     registry
 }
 
+/// How often the always-on backend latency probes run. Metrics scrapes are
+/// independent of the dashboard, so these must not depend on `/ping` traffic.
+const BACKEND_PROBE_INTERVAL: Duration = Duration::from_secs(15);
+
+fn spawn_backend_probe(services: &Data) {
+    let services = Arc::clone(services);
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(BACKEND_PROBE_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+
+            let started = std::time::Instant::now();
+            if services.db.ping().await.is_ok() {
+                metrics::gauge!("lumi.db.latency_ms")
+                    .set(started.elapsed().as_secs_f64() * 1000.0);
+            } else {
+                metrics::counter!("lumi.db.probe_failed").increment(1);
+            }
+
+            match services.cache.probe_read_ms().await {
+                Ok(ms) => metrics::gauge!("lumi.redis.latency_ms").set(ms),
+                Err(_) => metrics::counter!("lumi.redis.probe_failed").increment(1),
+            }
+        }
+    });
+}
+
 /// Connect every shared backend and build the process-wide [`Services`].
 pub async fn services(cfg: Config) -> Result<Data> {
-    let db = lumi_db::connect(&cfg.database_url).await?;
+    let db = connect_db(&cfg.database_url).await?;
     lumi_db::migrate(&db).await?;
     let db_read = match std::env::var("DATABASE_READ_URL") {
-        Ok(url) if !url.trim().is_empty() => lumi_db::connect_read(&url).await?,
+        Ok(url) if !url.trim().is_empty() => connect_db(&url).await?,
         _ => db.clone(),
     };
 
@@ -59,6 +104,8 @@ pub async fn services(cfg: Config) -> Result<Data> {
 
     // One subscriber per process; every process tier wants cache coherence.
     tokio::spawn(async move { cache.spawn_invalidation().await });
+
+    spawn_backend_probe(&services);
 
     Ok(services)
 }

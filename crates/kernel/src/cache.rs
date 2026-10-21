@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Result;
+use crate::retry::{retry_transient, with_timeout};
 
 pub const INVALIDATE_CHANNEL: &str = "lumi:invalidate";
 
@@ -63,6 +64,17 @@ fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis() as i64)
+}
+
+/// Local-tier hit ratio is what tells a cache regression apart from a Redis
+/// problem, so count it where the lookup happens rather than only in `/ping`.
+fn record_local(result: &'static str) {
+    metrics::counter!("lumi.cache.local", "result" => result).increment(1);
+}
+
+fn record_redis_op(op: &'static str, started: Instant) {
+    metrics::histogram!("lumi.redis.op_ms", "op" => op)
+        .record(started.elapsed().as_secs_f64() * 1000.0);
 }
 
 /// Request coalescer: concurrent callers of a missing key share one fetcher.
@@ -223,10 +235,23 @@ impl std::fmt::Debug for Cache {
 impl Cache {
     pub async fn connect(redis_url: &str) -> Result<Self> {
         let client = redis::Client::open(redis_url)?;
-        let config = ConnectionManagerConfig::new()
-            .set_connection_timeout(CONNECT_TIMEOUT)
-            .set_response_timeout(CONNECT_TIMEOUT);
-        let redis = client.get_connection_manager_with_config(config).await?;
+        let connector = client.clone();
+        let redis = retry_transient(3, Duration::from_millis(200), || {
+            let connector = connector.clone();
+            async move {
+                with_timeout("redis connect", CONNECT_TIMEOUT, async move {
+                    let config = ConnectionManagerConfig::new()
+                        .set_connection_timeout(CONNECT_TIMEOUT)
+                        .set_response_timeout(CONNECT_TIMEOUT);
+                    connector
+                        .get_connection_manager_with_config(config)
+                        .await
+                        .map_err(crate::LumiError::from)
+                })
+                .await
+            }
+        })
+        .await?;
         let capacity = local_capacity();
         Ok(Self {
             local: MokaCache::builder().max_capacity(capacity).build(),
@@ -296,21 +321,25 @@ impl Cache {
         let now = now_ms();
         if let Some(entry) = self.local.get(key).await {
             if entry.live(now) {
+                record_local("hit");
                 return Ok(Some(entry.v.clone()));
             }
             self.local.invalidate(key).await;
+            record_local("miss");
             return Ok(None);
         }
+        record_local("miss");
         let mut conn = self.redis.clone();
-        let raw: Option<String> = conn.get(key).await?;
-        let Some(raw) = raw else {
+        let started = Instant::now();
+        let raw: redis::RedisResult<Option<String>> = conn.get(key).await;
+        record_redis_op("get", started);
+        let Some(raw) = raw? else {
             return Ok(None);
         };
         let entry: TtlEntry = serde_json::from_str(&raw)?;
         if !entry.live(now) {
             return Ok(None);
         }
-        // Stored as a struct: a local hit skips parsing the payload again.
         let value = entry.v.clone();
         self.local.insert(key.to_string(), Arc::new(entry)).await;
         Ok(Some(value))
@@ -324,9 +353,9 @@ impl Cache {
         let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
         let mut conn = self.redis.clone();
         let opts = SetOptions::default().with_expiration(SetExpiry::PX(ttl_ms));
+        let started = Instant::now();
         let _: Option<String> = conn.set_options(key, raw, opts).await?;
-        // Persist first: a failed Redis write must not leave this process
-        // serving a value no other process can see.
+        record_redis_op("set", started);
         self.local.insert(key.to_string(), Arc::new(entry)).await;
         Ok(())
     }
@@ -458,6 +487,7 @@ impl Cache {
             match self.subscribe_loop().await {
                 Ok(()) => backoff = BACKOFF_MIN,
                 Err(err) => {
+                    metrics::counter!("lumi.cache.invalidation_errors").increment(1);
                     tracing::warn!(error = %err, backoff_secs = backoff.as_secs(), "cache invalidation listener dropped; resubscribing");
                     tokio::time::sleep(backoff).await;
                     backoff = (backoff * 2).min(BACKOFF_MAX);

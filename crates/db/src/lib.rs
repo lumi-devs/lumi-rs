@@ -9,10 +9,12 @@ use sea_orm::entity::prelude::{ChronoUtc, DateTimeWithTimeZone};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
-    DatabaseBackend as DbBackend, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QueryResult, Set, Statement, TransactionTrait,
+    DatabaseBackend as DbBackend, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QueryResult,
+    Set, Statement, TransactionTrait,
 };
 use sea_orm_migration::MigratorTrait;
+
+pub use sea_orm::DatabaseConnection;
 
 use crate::entities::enums::{PermitKind, PermitTargetType};
 use crate::entities::{permit, permit_assignment};
@@ -49,6 +51,10 @@ fn options(url: &str) -> ConnectOptions {
     options
         .max_connections(max_connections)
         .min_connections(min_connections)
+        .connect_timeout(Duration::from_millis(env_number(
+            "DATABASE_CONNECT_TIMEOUT_MS",
+            5_000,
+        )))
         .acquire_timeout(Duration::from_millis(acquire_timeout_ms))
         .idle_timeout(Duration::from_secs(env_number(
             "DATABASE_IDLE_TIMEOUT_SECS",

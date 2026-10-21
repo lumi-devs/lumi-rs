@@ -135,14 +135,25 @@ async fn collect_fresh(services: &Services, ctx: &SerenityContext) -> PingData {
         .unwrap_or_default();
     let started = Instant::now();
 
-    let (db_latency_ms, redis_hit_ratio) = tokio::join!(
+    let (db_latency_ms, redis_hit_ratio, redis_latency_ms) = tokio::join!(
         async {
             let started = Instant::now();
             services.db.ping().await.ok()?;
             Some(started.elapsed().as_secs_f64() * 1000.0)
         },
         async { services.cache.hit_ratio().await.unwrap_or(None) },
+        async { services.cache.probe_read_ms().await.ok() },
     );
+
+    if let Some(ms) = db_latency_ms {
+        metrics::gauge!("lumi.db.latency_ms").set(ms);
+    }
+    if let Some(ms) = redis_latency_ms {
+        metrics::gauge!("lumi.redis.latency_ms").set(ms);
+    }
+    if let Some(ratio) = redis_hit_ratio {
+        metrics::gauge!("lumi.cache.hit_ratio").set(ratio);
+    }
 
     let process_after = tokio::task::spawn_blocking(process_snapshot)
         .await
@@ -184,7 +195,13 @@ async fn collect_fresh(services: &Services, ctx: &SerenityContext) -> PingData {
             shard.guilds = *guilds;
             shard.users = *members;
         }
+        metrics::gauge!("lumi.shard.ping_ms", "shard" => shard.id.to_string()).set(shard.ping);
+        metrics::gauge!("lumi.shard.guilds", "shard" => shard.id.to_string())
+            .set(shard.guilds as f64);
+        metrics::gauge!("lumi.shard.users", "shard" => shard.id.to_string())
+            .set(shard.users as f64);
     }
+    metrics::gauge!("lumi.shard.total").set(shard_total as f64);
 
     let current_user = ctx.cache.current_user();
     let avatar_url = current_user

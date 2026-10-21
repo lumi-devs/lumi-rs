@@ -20,6 +20,7 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let _ = rustls::crypto::ring::default_provider().install_default();
     init_tracing();
+    lumi_api::init_metrics();
 
     let cli = Cli::parse();
     let mut cfg = lumi_kernel::Config::load()?;
@@ -78,9 +79,16 @@ async fn start_api(cfg: lumi_kernel::Config) -> Result<()> {
 }
 
 async fn start_gateway(cfg: lumi_kernel::Config) -> Result<()> {
+    let mut lease: Option<(
+        std::sync::Arc<lumi_kernel::Cache>,
+        lumi_kernel::config::ShardRange,
+        String,
+        lumi_kernel::coordinator::LeaseHeartbeat,
+    )> = None;
+
     let dynamic_range = if cfg.shard_coordinator && cfg.shard_range.is_none() {
         if let Some(total) = cfg.shard_count {
-            let cache = lumi_kernel::Cache::connect(&cfg.redis_url).await?;
+            let cache = std::sync::Arc::new(lumi_kernel::Cache::connect(&cfg.redis_url).await?);
             let node_id = std::env::var("HOSTNAME")
                 .unwrap_or_else(|_| format!("node-{}", std::process::id()));
             let leased = lumi_kernel::coordinator::lease_shard_range(
@@ -98,11 +106,12 @@ async fn start_gateway(cfg: lumi_kernel::Config) -> Result<()> {
                     total,
                     "leased shard range from coordinator"
                 );
-                lumi_kernel::coordinator::spawn_lease_heartbeat(
-                    std::sync::Arc::new(cache),
+                let heartbeat = lumi_kernel::coordinator::spawn_lease_heartbeat(
+                    std::sync::Arc::clone(&cache),
                     range,
-                    node_id,
+                    node_id.clone(),
                 );
+                lease = Some((cache, range, node_id, heartbeat));
                 Some(range)
             } else {
                 return Err(anyhow::anyhow!(
@@ -123,16 +132,36 @@ async fn start_gateway(cfg: lumi_kernel::Config) -> Result<()> {
     let mut client = lumi::client::build(cfg).await?;
     let shutdown_trigger = client.shard_manager.get_shutdown_trigger();
 
+    let (stop_tx, mut stop_rx) = tokio::sync::mpsc::channel::<&'static str>(2);
+    let lease_stop = stop_tx.clone();
     tokio::spawn(async move {
         lumi::runtime::shutdown_signal().await;
-        tracing::info!("shutdown signal received, closing gateway shards");
-        shutdown_trigger();
+        let _ = stop_tx.send("shutdown signal").await;
     });
 
-    match shards {
+    // Lease loss is a fencing event: stop serving this shard range immediately
+    // instead of continuing after another node may have claimed it.
+    if let Some((_, _, _, heartbeat)) = &lease {
+        let mut lost = heartbeat.lost();
+        tokio::spawn(async move {
+            while !*lost.borrow() {
+                if lost.changed().await.is_err() {
+                    return;
+                }
+            }
+            let _ = lease_stop.send("shard lease lost").await;
+        });
+    }
+
+    tokio::spawn(async move {
+        if let Some(reason) = stop_rx.recv().await {
+            tracing::warn!(reason, "closing gateway shards");
+            shutdown_trigger();
+        }
+    });
+
+    let result = match shards {
         (Some(range), Some(total)) => {
-            // Serenity's range end is INCLUSIVE: start_shard_range(4..7, 10) runs
-            // shards 4 through 7, while start_shards(n) means 0..n-1.
             tracing::info!(
                 start = range.start,
                 end = range.end,
@@ -140,22 +169,45 @@ async fn start_gateway(cfg: lumi_kernel::Config) -> Result<()> {
                 "starting shard range"
             );
             client
-                .start_shard_range(range.start..range.end, total)
-                .await?;
+                .start_shard_range(range.start_range(), total)
+                .await
+                .map_err(anyhow::Error::from)
         }
         (None, Some(total)) => {
             tracing::info!(total, "starting forced shard count");
-            client.start_shards(total).await?;
+            client
+                .start_shards(total)
+                .await
+                .map_err(anyhow::Error::from)
         }
-        (None, None) => client.start_autosharded().await?,
-        (Some(range), None) => {
-            return Err(anyhow::anyhow!(
-                "SHARD_RANGE {}-{} is set but SHARDS (fleet total) is missing",
-                range.start,
-                range.end
-            ));
+        (None, None) => client
+            .start_autosharded()
+            .await
+            .map_err(anyhow::Error::from),
+        (Some(range), None) => Err(anyhow::anyhow!(
+            "SHARD_RANGE {}-{} is set but SHARDS (fleet total) is missing",
+            range.start,
+            range.end
+        )),
+    };
+
+    if let Some((cache, range, node_id, heartbeat)) = lease.take() {
+        heartbeat.abort();
+        match lumi_kernel::coordinator::release_shard_range(&cache, range, &node_id).await {
+            Ok(()) => {
+                tracing::info!(
+                    start = range.start,
+                    end = range.end,
+                    "released shard leases"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to release shard leases");
+            }
         }
     }
+
+    result?;
     Ok(())
 }
 

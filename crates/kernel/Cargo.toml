@@ -12,6 +12,7 @@ lumi-db     = { workspace = true }
 tokio       = { workspace = true }
 futures     = { workspace = true }
 tracing     = { workspace = true }
+metrics     = { workspace = true }
 anyhow      = { workspace = true }
 thiserror   = { workspace = true }
 serde       = { workspace = true }

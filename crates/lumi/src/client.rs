@@ -158,6 +158,35 @@ pub async fn build(mut cfg: lumi_kernel::Config) -> Result<serenity::Client> {
         owners,
         initialize_owners: true,
         on_error: |error| Box::pin(crate::errors::on_error(error)),
+        // Measure the slice poise owns (after checks, around the command body)
+        // so a slow command is visible without changing every handler.
+        pre_command: |ctx| {
+            Box::pin(async move {
+                ctx.set_invocation_data(std::time::Instant::now()).await;
+            })
+        },
+        post_command: |ctx| {
+            Box::pin(async move {
+                let command = ctx.command().qualified_name.to_string();
+                let kind = if matches!(ctx, poise::Context::Application(_)) {
+                    "slash"
+                } else {
+                    "prefix"
+                };
+                if let Some(started) = ctx.invocation_data::<std::time::Instant>().await {
+                    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+                    drop(started);
+                    metrics::histogram!(
+                        "lumi.command.duration_ms",
+                        "command" => command.clone(),
+                        "kind" => kind
+                    )
+                    .record(elapsed_ms);
+                }
+                metrics::counter!("lumi.command.completed", "command" => command, "kind" => kind)
+                    .increment(1);
+            })
+        },
         reply_callback: Some(|ctx, reply| {
             if let poise::Context::Prefix(_) = ctx {
                 reply.reply(true)
