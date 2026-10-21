@@ -35,10 +35,12 @@ where
     F: FnOnce() -> Result<T> + Send + 'static,
     T: Send + 'static,
 {
-    match tokio::time::timeout(GIT_TIMEOUT, tokio::task::spawn_blocking(work)).await {
-        Ok(joined) => joined.map_err(|error| git_error(what, error))?,
-        Err(_) => Err(LumiError::Other(format!("{what} timed out"))),
-    }
+    crate::retry::with_timeout(what, GIT_TIMEOUT, async {
+        tokio::task::spawn_blocking(work)
+            .await
+            .map_err(|error| git_error(what, error))?
+    })
+    .await
 }
 
 fn clone_blocking(url: &str, dir: &Path, branch: Option<&str>) -> Result<()> {

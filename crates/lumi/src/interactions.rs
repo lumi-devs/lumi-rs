@@ -75,6 +75,16 @@ impl ModalRoute {
 }
 
 /// The one component router. Unknown prefixes are ignored.
+#[tracing::instrument(
+    name = "interaction.component",
+    skip(ctx, services, component),
+    fields(
+        guild_id = ?component.guild_id.map(|id| id.get()),
+        channel_id = %component.channel_id,
+        user_id = %component.user.id,
+        custom_id = %component.data.custom_id,
+    )
+)]
 pub async fn handle_component(
     ctx: &serenity::Context,
     services: &Services,
@@ -104,6 +114,16 @@ pub async fn handle_component(
 }
 
 /// The one modal router.
+#[tracing::instrument(
+    name = "interaction.modal",
+    skip(ctx, services, modal),
+    fields(
+        guild_id = ?modal.guild_id.map(|id| id.get()),
+        channel_id = %modal.channel_id,
+        user_id = %modal.user.id,
+        custom_id = %modal.data.custom_id,
+    )
+)]
 pub async fn handle_modal(
     ctx: &serenity::Context,
     services: &Services,

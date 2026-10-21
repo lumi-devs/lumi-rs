@@ -23,6 +23,15 @@ pub struct ShardRange {
     pub end: u16,
 }
 
+impl ShardRange {
+    /// Serenity takes an exclusive range, while our config and leases are
+    /// inclusive, so the upper bound must be advanced.
+    #[must_use]
+    pub fn start_range(self) -> std::ops::Range<u16> {
+        self.start..self.end.saturating_add(1)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -217,6 +226,12 @@ fn parse_shard_range(raw: &str, shard_count: Option<u16>) -> Result<ShardRange> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shard_range_is_inclusive_when_starting_serenity() {
+        assert_eq!(ShardRange { start: 0, end: 0 }.start_range(), 0..1);
+        assert_eq!(ShardRange { start: 3, end: 7 }.start_range(), 3..8);
+    }
 
     #[test]
     fn shard_range_valid() {

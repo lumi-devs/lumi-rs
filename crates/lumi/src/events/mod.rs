@@ -113,6 +113,12 @@ impl serenity::EventHandler for Events {
             }
             serenity::FullEvent::InteractionCreate { interaction, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
+                let started = std::time::Instant::now();
+                let kind = match interaction {
+                    serenity::Interaction::Component(_) => Some("component"),
+                    serenity::Interaction::Modal(_) => Some("modal"),
+                    _ => None,
+                };
                 match interaction {
                     serenity::Interaction::Component(component) => {
                         if let Err(error) =
@@ -131,6 +137,27 @@ impl serenity::EventHandler for Events {
                     }
                     _ => {}
                 }
+                // Slash/prefix commands are dispatched by poise, not here; only
+                // count the latency this router actually owns.
+                if let Some(kind) = kind {
+                    metrics::histogram!("lumi.interaction.handle_ms", "kind" => kind)
+                        .record(started.elapsed().as_secs_f64() * 1000.0);
+                }
+            }
+            serenity::FullEvent::ShardStageUpdate { event, .. } => {
+                let connected = event.new == serenity::ConnectionStage::Connected;
+                let shard = event.shard_id.get().to_string();
+                metrics::gauge!("lumi.shard.connected", "shard" => shard.clone())
+                    .set(if connected { 1.0 } else { 0.0 });
+                if event.new == serenity::ConnectionStage::Resuming {
+                    metrics::counter!("lumi.shard.reconnects", "shard" => shard).increment(1);
+                }
+                tracing::info!(
+                    shard_id = event.shard_id.get(),
+                    from = ?event.old,
+                    to = ?event.new,
+                    "shard connection stage changed"
+                );
             }
             serenity::FullEvent::Message { new_message, .. } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();

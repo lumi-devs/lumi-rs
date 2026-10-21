@@ -91,16 +91,70 @@ fn dedupe_key(error: &poise::FrameworkError<'_, Data, Error>) -> String {
     format!("{command}: {}", traceback(error))
 }
 
+/// Errors the user caused (bad arguments, cooldown, missing permission) are
+/// not internal failures and must not page anyone.
+fn is_user_error(error: &poise::FrameworkError<'_, Data, Error>) -> bool {
+    use poise::FrameworkError as E;
+    matches!(
+        error,
+        E::SubcommandRequired { .. }
+            | E::ArgumentParse { .. }
+            | E::CooldownHit { .. }
+            | E::MissingUserPermissions { .. }
+            | E::NotAnOwner { .. }
+            | E::GuildOnly { .. }
+            | E::DmOnly { .. }
+            | E::NsfwOnly { .. }
+            | E::CommandCheckFailed { .. }
+            | E::UnknownCommand { .. }
+            | E::UnknownInteraction { .. }
+            | E::NonCommandMessage { .. }
+    )
+}
+
 /// Poise `FrameworkOptions::on_error` hook: log one deduplicated line, then
 /// defer to the default user-facing reply.
 pub async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     let traceback = traceback(&error);
     let (count, age_secs) = record(dedupe_key(&error), traceback.clone());
-    tracing::error!(
-        occurrences = count,
-        first_seen_secs_ago = age_secs,
-        "command error: {traceback}"
+    let class = if is_user_error(&error) {
+        "user"
+    } else {
+        "internal"
+    };
+
+    let command = error
+        .ctx()
+        .map_or_else(String::new, |ctx| ctx.command().qualified_name.to_string());
+    let guild_id = error.ctx().and_then(|ctx| ctx.guild_id()).map(|id| id.get());
+    let channel_id = error.ctx().map(|ctx| ctx.channel_id().get());
+    let user_id = error.ctx().map(|ctx| ctx.author().id.get());
+
+    metrics::counter!("lumi.command.failed", "command" => command.clone(), "class" => class)
+        .increment(1);
+    let span = tracing::error_span!(
+        "command_error",
+        command = %command,
+        class,
+        guild_id = ?guild_id,
+        channel_id = ?channel_id,
+        user_id = ?user_id,
     );
+    let entered = span.enter();
+    if class == "user" {
+        tracing::warn!(
+            occurrences = count,
+            first_seen_secs_ago = age_secs,
+            "user error: {traceback}"
+        );
+    } else {
+        tracing::error!(
+            occurrences = count,
+            first_seen_secs_ago = age_secs,
+            "command error: {traceback}"
+        );
+    }
+    drop(entered);
 
     if let Err(err) = poise::builtins::on_error(error).await {
         tracing::error!(error = %err, "failed to deliver error response");

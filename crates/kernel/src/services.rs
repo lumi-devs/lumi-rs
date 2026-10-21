@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use sea_orm::DatabaseConnection;
 
@@ -9,6 +10,7 @@ use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::module::ModuleRegistry;
 use crate::permits::PermitResolver;
+use crate::retry::retry_transient;
 use crate::security::SecurityManager;
 
 /// Everything a command, listener or addon needs at runtime.
@@ -35,9 +37,28 @@ impl Services {
     /// modules the caller has registered; migration is left to the caller. The
     /// cross-process cache invalidation listener is spawned here.
     pub async fn bootstrap(cfg: Config, registry: ModuleRegistry) -> Result<Arc<Self>> {
-        let db = lumi_db::connect(&cfg.database_url).await?;
+        let db_url = cfg.database_url.clone();
+        let db = retry_transient(3, Duration::from_millis(250), || {
+            let db_url = db_url.clone();
+            async move {
+                lumi_db::connect(&db_url)
+                    .await
+                    .map_err(crate::LumiError::from)
+            }
+        })
+        .await?;
         let db_read = match std::env::var("DATABASE_READ_URL") {
-            Ok(url) if !url.trim().is_empty() => lumi_db::connect_read(&url).await?,
+            Ok(url) if !url.trim().is_empty() => {
+                retry_transient(3, Duration::from_millis(250), || {
+                    let url = url.clone();
+                    async move {
+                        lumi_db::connect_read(&url)
+                            .await
+                            .map_err(crate::LumiError::from)
+                    }
+                })
+                .await?
+            }
             _ => db.clone(),
         };
         let cache = Arc::new(Cache::connect(&cfg.redis_url).await?);
