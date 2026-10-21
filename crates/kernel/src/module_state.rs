@@ -197,12 +197,6 @@ pub async fn config_cached(
     config
 }
 
-pub async fn invalidate_config(cache: &Cache, guild_id: u64, module: &str) -> Result<()> {
-    let key = format!("lumi:cfg:{module}:{guild_id}");
-    cache.invalidate(&key).await?;
-    Ok(())
-}
-
 pub async fn config_cached_value(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -318,43 +312,6 @@ pub async fn clear_config(db: &DatabaseConnection, guild_id: u64, module: &str) 
         .exec(db)
         .await?;
     Ok(result.rows_affected)
-}
-
-pub async fn set_config_field_cached(
-    cache: &Cache,
-    db: &DatabaseConnection,
-    guild_id: u64,
-    module: &str,
-    key: &str,
-    value: Value,
-) -> Result<()> {
-    set_config_field(db, guild_id, module, key, value).await?;
-    invalidate_config(cache, guild_id, module).await?;
-    Ok(())
-}
-
-pub async fn set_config_value_cached(
-    cache: &Cache,
-    db: &DatabaseConnection,
-    guild_id: u64,
-    module: &str,
-    key: &str,
-    raw: &str,
-    kind: &ConfigFieldKind,
-) -> Result<()> {
-    let value = coerce_value(raw, kind)?;
-    set_config_field_cached(cache, db, guild_id, module, key, value).await
-}
-
-pub async fn clear_config_cached(
-    cache: &Cache,
-    db: &DatabaseConnection,
-    guild_id: u64,
-    module: &str,
-) -> Result<u64> {
-    let result = clear_config(db, guild_id, module).await?;
-    invalidate_config(cache, guild_id, module).await?;
-    Ok(result)
 }
 
 /// Render a config value the way the dashboard does (mentions, glyphs, codes).

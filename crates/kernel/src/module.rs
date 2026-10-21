@@ -57,10 +57,6 @@ pub trait Module: Send + Sync + 'static {
     fn config_schema(&self) -> Vec<ConfigField> {
         Vec::new()
     }
-    /// `custom_id` prefix this module owns for component/modal interactions.
-    fn component_prefix(&self) -> Option<&'static str> {
-        None
-    }
     /// Observe one gateway event; default no-op. Boxed so the trait stays object-safe.
     fn on_event<'a>(&'a self, _ctx: &'a Context, _event: &'a FullEvent) -> BoxFuture<'a, ()> {
         Box::pin(async {})
@@ -113,28 +109,6 @@ impl ModuleRegistry {
         self.modules.iter().map(|module| &**module)
     }
 
-    /// Every command supplied by every registered module, in registration order.
-    pub fn commands(&self) -> Vec<crate::bot::Command> {
-        self.iter().flat_map(Module::commands).collect()
-    }
-
-    /// The module owning a component/modal `custom_id`, by registered prefix.
-    #[must_use]
-    pub fn module_for_component(&self, custom_id: &str) -> Option<&dyn Module> {
-        self.iter().find(|module| {
-            module
-                .component_prefix()
-                .is_some_and(|prefix| custom_id.starts_with(prefix))
-        })
-    }
-
-    /// Let every module observe one gateway event, in registration order.
-    pub async fn dispatch_event(&self, ctx: &Context, event: &FullEvent) {
-        for module in self.iter() {
-            module.on_event(ctx, event).await;
-        }
-    }
-
     #[must_use]
     pub fn len(&self) -> usize {
         self.modules.len()
@@ -184,37 +158,5 @@ mod tests {
         registry.register(Box::new(Example("dup")));
         registry.register(Box::new(Example("dup")));
         assert_eq!(registry.len(), 1);
-    }
-
-    struct PrefixModule;
-
-    impl Module for PrefixModule {
-        fn name(&self) -> &'static str {
-            "prefixed"
-        }
-
-        fn metadata(&self) -> ModuleMeta {
-            ModuleMeta {
-                display_name: "Prefixed".to_string(),
-                emoji: String::new(),
-                description: String::new(),
-                version: "1.0.0".to_string(),
-            }
-        }
-
-        fn component_prefix(&self) -> Option<&'static str> {
-            Some("p:")
-        }
-    }
-
-    #[test]
-    fn component_prefix_routes_to_module() {
-        let mut registry = ModuleRegistry::new();
-        registry.register(Box::new(PrefixModule));
-        assert_eq!(
-            registry.module_for_component("p:start").map(Module::name),
-            Some("prefixed")
-        );
-        assert!(registry.module_for_component("other:start").is_none());
     }
 }

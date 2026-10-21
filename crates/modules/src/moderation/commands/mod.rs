@@ -8,7 +8,7 @@ mod utility;
 use std::time::Duration;
 
 use poise::serenity_prelude as serenity;
-use serenity::all::{GuildId, UserId};
+use serenity::all::UserId;
 
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::Card;
@@ -73,9 +73,7 @@ pub(super) fn parse_target_list(single: Option<UserId>, extra: Option<&str>) -> 
     targets
 }
 
-pub(super) fn guild_id(ctx: Context<'_>) -> Result<GuildId, Error> {
-    ctx.guild_id().ok_or_else(|| anyhow::anyhow!("guild only"))
-}
+pub(super) use crate::shared::require_guild;
 
 pub(super) async fn send_card(ctx: Context<'_>, card: Card) -> Result<(), Error> {
     ctx.send(card.into_reply().reply()).await?;

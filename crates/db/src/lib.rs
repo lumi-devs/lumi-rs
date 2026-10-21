@@ -9,8 +9,8 @@ use sea_orm::entity::prelude::{ChronoUtc, DateTimeWithTimeZone};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
-    DatabaseBackend as DbBackend, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QueryResult, Set, Statement, TransactionTrait,
+    DatabaseBackend as DbBackend, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    Statement, TransactionTrait,
 };
 use sea_orm_migration::MigratorTrait;
 
@@ -164,14 +164,6 @@ pub async fn reset_prefix(db: &DatabaseConnection, guild_id: u64) -> Result<()> 
     Ok(())
 }
 
-pub async fn count_enabled_modules(db: &DatabaseConnection, guild_id: u64) -> Result<u64> {
-    entities::guild_module_state::Entity::find()
-        .filter(entities::guild_module_state::Column::GuildId.eq(GuildId::from(guild_id)))
-        .filter(entities::guild_module_state::Column::Enabled.eq(true))
-        .count(db)
-        .await
-}
-
 /// Server version reported by the connected PostgreSQL, e.g. `18.6`.
 pub async fn server_version(db: &DatabaseConnection) -> Result<String> {
     let row = db
@@ -185,27 +177,6 @@ pub async fn server_version(db: &DatabaseConnection) -> Result<String> {
         .unwrap_or_else(|| "unknown".to_string()))
 }
 
-/// Lifetime commit total of the connected database, for the dashboard's
-/// transaction rate.
-pub async fn committed_transactions(db: &DatabaseConnection) -> Result<u64> {
-    let row = db
-        .query_one_raw(Statement::from_string(
-            DbBackend::Postgres,
-            "SELECT xact_commit AS commits FROM pg_stat_database WHERE datname = current_database()"
-                .to_owned(),
-        ))
-        .await?;
-    Ok(row.as_ref().map_or(0, |row| counter(row, "commits")))
-}
-
-/// Read a non-negative `bigint` column, treating anything unexpected as zero.
-fn counter(row: &QueryResult, column: &str) -> u64 {
-    row.try_get::<i64>("", column)
-        .ok()
-        .and_then(|value| u64::try_from(value).ok())
-        .unwrap_or(0)
-}
-
 pub async fn list_permits(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -215,11 +186,6 @@ pub async fn list_permits(
         .order_by_asc(entities::permit::Column::Position)
         .all(db)
         .await
-}
-
-pub async fn delete_permit(db: &DatabaseConnection, id: i32) -> Result<u64> {
-    let result = entities::permit::Entity::delete_by_id(id).exec(db).await?;
-    Ok(result.rows_affected)
 }
 
 /// A permit assignment joined with its permit's display fields.

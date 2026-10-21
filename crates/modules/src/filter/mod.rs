@@ -15,15 +15,11 @@ use crate::config;
 pub struct FilterModule;
 
 fn string_array(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
-    config::string_array_field(key, label, description, group)
-}
-
-fn boolean(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
-    config::bool_field(key, label, description, false, group)
+    config::string_array_field(key, label, description, Some(group))
 }
 
 fn number(key: &str, label: &str, description: &str, default: i64, group: &str) -> ConfigField {
-    config::int_field(key, label, description, default, group)
+    config::int_field(key, label, description, default, Some(group))
 }
 
 impl Module for FilterModule {
@@ -41,6 +37,7 @@ impl Module for FilterModule {
     }
 
     fn config_schema(&self) -> Vec<ConfigField> {
+        let defaults = store::FilterRules::from_map(&serde_json::Map::new());
         let terms = "Terms & Patterns";
         let links = "Invites & Links";
         let spam = "Spam Limits";
@@ -60,11 +57,12 @@ impl Module for FilterModule {
                 "Regular expressions to block (case-insensitive, max 256 chars each), one per line. Invalid patterns are skipped.",
                 terms,
             ),
-            boolean(
+            config::bool_field(
                 "block_invites",
                 "Block Invites",
                 "Delete messages containing Discord server invites.",
-                links,
+                defaults.block_invites,
+                Some(links),
             ),
             string_array(
                 "invite_allowlist",
@@ -72,11 +70,12 @@ impl Module for FilterModule {
                 "Invite codes that are always allowed (e.g. your own server's), one per line.",
                 links,
             ),
-            boolean(
+            config::bool_field(
                 "block_links",
                 "Block Links",
                 "Delete messages containing links, except allowlisted domains.",
-                links,
+                defaults.block_links,
+                Some(links),
             ),
             string_array(
                 "link_allowlist",
@@ -88,55 +87,55 @@ impl Module for FilterModule {
                 "max_mentions",
                 "Max Mentions",
                 "Maximum user+role mentions per message. 0 disables the rule.",
-                0,
+                defaults.max_mentions,
                 spam,
             ),
             number(
                 "max_caps_percent",
                 "Max Caps %",
                 "Delete messages whose letters are more than this % uppercase. 0 disables the rule.",
-                0,
+                defaults.caps_pct,
                 spam,
             ),
             number(
                 "caps_min_length",
                 "Caps Min Length",
                 "Messages shorter than this never trip the caps rule.",
-                12,
+                store::DEFAULT_CAPS_MIN_LENGTH,
                 spam,
             ),
             config::role_array_field(
                 "exempt_roles",
                 "Exempt Roles",
                 "Roles that bypass all filter rules (members with Manage Messages are always exempt).",
-                punish,
+                Some(punish),
             ),
             number(
                 "timeout_minutes",
                 "Timeout (minutes)",
                 "Timeout the author for this many minutes on a filter hit. 0 disables punishment.",
-                0,
+                defaults.timeout_minutes,
                 punish,
             ),
             number(
                 "spam_timeout_minutes",
                 "Spam Timeout (minutes)",
                 "Timeout for mention-spam/caps hits. 0 falls back to Timeout (minutes).",
-                0,
+                defaults.spam_timeout_minutes,
                 punish,
             ),
             number(
                 "invite_timeout_minutes",
                 "Invite Timeout (minutes)",
                 "Timeout for invite-block hits. 0 falls back to Timeout (minutes).",
-                0,
+                defaults.invite_timeout_minutes,
                 punish,
             ),
             number(
                 "link_timeout_minutes",
                 "Link Timeout (minutes)",
                 "Timeout for link-block hits. 0 falls back to Timeout (minutes).",
-                0,
+                defaults.link_timeout_minutes,
                 punish,
             ),
             config::string_field(
@@ -144,123 +143,124 @@ impl Module for FilterModule {
                 "Warning Message",
                 "Transient warning sent after a deletion. Placeholders: {user}, {reason}. Empty disables the warning.",
                 store::DEFAULT_WARN_MESSAGE,
-                punish,
+                Some(punish),
             ),
             config::channel_field(
                 "log_channel_id",
                 "Log Channel",
                 "Channel where filter hits are logged.",
-                punish,
+                Some(punish),
             ),
-            boolean(
+            config::bool_field(
                 "heat_enabled",
                 "Enable Heat Engine",
                 "Track member activity heat to detect rapid-fire spam and raids.",
-                heat,
+                defaults.heat_enabled,
+                Some(heat),
             ),
             number(
                 "heat_per_message",
                 "Heat Per Message",
                 "Points added per message sent.",
-                1,
+                defaults.heat_per_message,
                 heat,
             ),
             number(
                 "heat_per_mention",
                 "Heat Per Mention",
                 "Points added per user/role mention.",
-                2,
+                defaults.heat_per_mention,
                 heat,
             ),
             number(
                 "heat_per_filter_hit",
                 "Heat Per Filter Hit",
                 "Points added when a message trips any filter rule.",
-                5,
+                defaults.heat_per_filter_hit,
                 heat,
             ),
             number(
                 "heat_per_attachment",
                 "Heat Per Attachment",
                 "Points added per file attachment.",
-                2,
+                defaults.heat_per_attachment,
                 heat,
             ),
             number(
                 "heat_per_emoji",
                 "Heat Per Emoji",
                 "Points added per emoji in the message.",
-                1,
+                defaults.heat_per_emoji,
                 heat,
             ),
             number(
                 "heat_per_link",
                 "Heat Per Link",
                 "Points added if message contains any link.",
-                2,
+                defaults.heat_per_link,
                 heat,
             ),
             number(
                 "heat_per_zalgo",
                 "Heat Per Zalgo",
                 "Points added if message is heavily composed of zalgo/combining characters.",
-                3,
+                defaults.heat_per_zalgo,
                 heat,
             ),
             number(
                 "heat_decay_per_minute",
                 "Heat Decay / Min",
                 "Points subtracted per minute of inactivity.",
-                5,
+                defaults.heat_decay_per_minute,
                 heat,
             ),
             number(
                 "heat_warn",
                 "Warn Threshold",
                 "Heat level that triggers an automated warning. 0 disables.",
-                15,
+                defaults.heat_warn,
                 heat,
             ),
             number(
                 "heat_timeout",
                 "Timeout Threshold",
                 "Heat level that triggers a timeout. 0 disables.",
-                30,
+                defaults.heat_timeout,
                 heat,
             ),
             number(
                 "heat_timeout_minutes",
                 "Heat Timeout Duration (m)",
                 "Duration in minutes for heat-triggered timeouts.",
-                10,
+                defaults.heat_timeout_minutes,
                 heat,
             ),
             number(
                 "heat_quarantine",
                 "Quarantine Threshold",
                 "Heat level that triggers quarantine. 0 disables.",
-                50,
+                defaults.heat_quarantine,
                 heat,
             ),
             number(
                 "lockdown_mention_threshold",
                 "Mention Flood Threshold",
                 "Mentions within the window that trigger a server-wide channel lockdown. 0 disables.",
-                0,
+                defaults.lockdown_mention_threshold,
                 lockdown,
             ),
             number(
                 "lockdown_window_seconds",
                 "Mention Window (s)",
                 "Window in seconds to aggregate mentions.",
-                10,
+                defaults.lockdown_window_seconds,
                 lockdown,
             ),
             number(
                 "lockdown_duration_minutes",
                 "Lockdown Duration (m)",
                 "How long text channels stay locked before auto-unlocking.",
-                10,
+                defaults.lockdown_duration_minutes,
                 lockdown,
             ),
         ]

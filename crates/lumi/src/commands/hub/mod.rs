@@ -2,13 +2,13 @@
 
 use poise::serenity_prelude as serenity;
 use serenity::all::{
-    ComponentInteraction, CreateAllowedMentions, CreateInteractionResponse,
-    CreateInteractionResponseMessage, CreateModal, GuildId, MessageFlags, ModalInteraction,
+    ChannelId, ComponentInteraction, CreateInteractionResponse, CreateModal, GuildId,
+    ModalInteraction, UserId,
 };
 
 use lumi_kernel::Services;
 use lumi_kernel::bot::{Command, Context, Error};
-use lumi_kernel::permits::CheckContext;
+use lumi_kernel::permits::{ADMIN_NODE, CheckContext};
 use lumi_ui::{Card, CardReply};
 
 pub mod addons;
@@ -20,10 +20,6 @@ pub mod settings;
 /// Every hub custom id starts with this.
 pub const PREFIX: &str = "lumi";
 pub const PREFIX_MODAL_ID: &str = "lumi:prefixmodal";
-pub const ADDON_MODAL_ID: &str = "lumi:addonmodal";
-
-/// The permit required to use any hub management action.
-pub const ADMIN_NODE: &str = "admin.*";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HubView {
@@ -42,17 +38,6 @@ impl HubView {
             Self::Permissions => "permissions",
             Self::Settings => "settings",
             Self::Addons => "addons",
-        }
-    }
-
-    pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "home" => Some(Self::Home),
-            "modules" => Some(Self::Modules),
-            "permissions" => Some(Self::Permissions),
-            "settings" => Some(Self::Settings),
-            "addons" => Some(Self::Addons),
-            _ => None,
         }
     }
 }
@@ -119,21 +104,14 @@ async fn open(ctx: Context<'_>) -> Result<(), Error> {
             app.interaction
                 .create_response(
                     ctx.http(),
-                    CreateInteractionResponse::Message(v2_message(card.components)),
+                    CreateInteractionResponse::Message(card.interaction_message()),
                 )
                 .await?;
         }
         poise::Context::Prefix(pfx) => {
             pfx.msg
                 .channel_id
-                .send_message(
-                    ctx.http(),
-                    serenity::CreateMessage::new()
-                        .reference_message(pfx.msg)
-                        .components(card.components)
-                        .flags(MessageFlags::IS_COMPONENTS_V2)
-                        .allowed_mentions(CreateAllowedMentions::new()),
-                )
+                .send_message(ctx.http(), card.message().reference_message(pfx.msg))
                 .await?;
         }
     }
@@ -182,14 +160,7 @@ pub async fn handle_modal(
         if !caller_may_manage_modal(ctx, services, modal).await {
             return deny_modal(ctx, modal).await;
         }
-        let guild = modal.guild_id.map_or_else(
-            || GuildCtx {
-                id: 0,
-                name: "this server".to_string(),
-                icon: None,
-            },
-            |id| guild_ctx(ctx, id),
-        );
+        let guild = guild_ctx_from_modal(ctx, modal);
         let outcome = settings::handle_prefix_modal(services, &guild, modal).await?;
         return respond_modal(ctx, modal, outcome).await;
     }
@@ -203,14 +174,7 @@ pub async fn handle_modal(
             if !services.cfg.is_owner(modal.user.id.get()) {
                 return deny_modal(ctx, modal).await;
             }
-            let guild = modal.guild_id.map_or_else(
-                || GuildCtx {
-                    id: 0,
-                    name: "this server".to_string(),
-                    icon: None,
-                },
-                |id| guild_ctx(ctx, id),
-            );
+            let guild = guild_ctx_from_modal(ctx, modal);
             let outcome =
                 addons::handle_modal(services, &guild, modal, parsed.get(1).unwrap_or_default())
                     .await?;
@@ -286,49 +250,15 @@ pub async fn caller_may_manage(
     let Some(guild_id) = component.guild_id else {
         return false;
     };
-    if services.cfg.is_owner(component.user.id.get()) {
-        return true;
-    }
-    let is_quarantined =
-        lumi_modules::security::store::panic_locks_commands(services, guild_id.get()).await;
-    let (is_guild_owner, is_manager, roles) = if let Some(guild) = ctx.cache.guild(guild_id) {
-        let is_owner = guild.owner_id == component.user.id;
-        let (manager, roles) = if let Some(member) = component
-            .member
-            .as_deref()
-            .or_else(|| guild.members.get(&component.user.id))
-        {
-            let perms = guild.member_permissions(member);
-            let roles: Vec<u64> = member.roles.iter().map(|r| r.get()).collect();
-            (perms.administrator() || perms.manage_guild(), roles)
-        } else {
-            (false, Vec::new())
-        };
-        (is_owner, manager, roles)
-    } else {
-        let manager = component
-            .member
-            .as_deref()
-            .and_then(|m| m.permissions)
-            .is_some_and(|p| p.administrator() || p.manage_guild());
-        let roles = component
-            .member
-            .as_deref()
-            .map_or_else(Vec::new, |m| m.roles.iter().map(|r| r.get()).collect());
-        (false, manager, roles)
-    };
-    let check = CheckContext {
-        guild_id: guild_id.get().to_string(),
-        user_id: component.user.id.get(),
-        channel_id: Some(component.channel_id.get()),
-        role_ids: &roles,
-        is_owner: services.cfg.is_owner(component.user.id.get()),
-        is_guild_owner,
-        is_manager,
-        is_quarantined,
-        node: ADMIN_NODE,
-    };
-    services.permits.resolve(&check).allowed
+    may_manage(
+        ctx,
+        services,
+        guild_id,
+        component.user.id,
+        component.channel_id,
+        component.member.as_deref(),
+    )
+    .await
 }
 
 async fn caller_may_manage_modal(
@@ -336,20 +266,36 @@ async fn caller_may_manage_modal(
     services: &Services,
     modal: &ModalInteraction,
 ) -> bool {
-    if services.cfg.is_owner(modal.user.id.get()) {
-        return true;
-    }
     let Some(guild_id) = modal.guild_id else {
         return false;
     };
+    may_manage(
+        ctx,
+        services,
+        guild_id,
+        modal.user.id,
+        modal.channel_id,
+        modal.member.as_deref(),
+    )
+    .await
+}
+
+async fn may_manage(
+    ctx: &serenity::Context,
+    services: &Services,
+    guild_id: GuildId,
+    user_id: UserId,
+    channel_id: ChannelId,
+    member: Option<&serenity::Member>,
+) -> bool {
+    if services.cfg.is_owner(user_id.get()) {
+        return true;
+    }
     let is_quarantined =
         lumi_modules::security::store::panic_locks_commands(services, guild_id.get()).await;
     let (is_guild_owner, is_manager, roles) = if let Some(guild) = ctx.cache.guild(guild_id) {
-        let is_owner = guild.owner_id == modal.user.id;
-        let (manager, roles) = if let Some(member) = modal
-            .member
-            .as_deref()
-            .or_else(|| guild.members.get(&modal.user.id))
+        let is_owner = guild.owner_id == user_id;
+        let (manager, roles) = if let Some(member) = member.or_else(|| guild.members.get(&user_id))
         {
             let perms = guild.member_permissions(member);
             let roles: Vec<u64> = member.roles.iter().map(|r| r.get()).collect();
@@ -359,23 +305,18 @@ async fn caller_may_manage_modal(
         };
         (is_owner, manager, roles)
     } else {
-        let manager = modal
-            .member
-            .as_deref()
+        let manager = member
             .and_then(|m| m.permissions)
             .is_some_and(|p| p.administrator() || p.manage_guild());
-        let roles = modal
-            .member
-            .as_deref()
-            .map_or_else(Vec::new, |m| m.roles.iter().map(|r| r.get()).collect());
+        let roles = member.map_or_else(Vec::new, |m| m.roles.iter().map(|r| r.get()).collect());
         (false, manager, roles)
     };
     let check = CheckContext {
         guild_id: guild_id.get().to_string(),
-        user_id: modal.user.id.get(),
-        channel_id: Some(modal.channel_id.get()),
+        user_id: user_id.get(),
+        channel_id: Some(channel_id.get()),
         role_ids: &roles,
-        is_owner: services.cfg.is_owner(modal.user.id.get()),
+        is_owner: services.cfg.is_owner(user_id.get()),
         is_guild_owner,
         is_manager,
         is_quarantined,
@@ -392,15 +333,11 @@ async fn respond_outcome(
     outcome: HubOutcome,
 ) -> Result<(), Error> {
     let response = match outcome {
-        HubOutcome::Update(card) => {
-            CreateInteractionResponse::UpdateMessage(v2_message(card.components))
+        HubOutcome::Update(card) => card.update(),
+        HubOutcome::Ephemeral(mut card) => {
+            card.ephemeral = true;
+            CreateInteractionResponse::Message(card.interaction_message())
         }
-        HubOutcome::Ephemeral(card) => CreateInteractionResponse::Message(
-            CreateInteractionResponseMessage::new()
-                .components(card.components)
-                .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
-                .allowed_mentions(CreateAllowedMentions::new()),
-        ),
         HubOutcome::Modal(modal) => CreateInteractionResponse::Modal(modal),
         HubOutcome::Done => CreateInteractionResponse::Acknowledge,
     };
@@ -416,19 +353,15 @@ async fn respond_modal(
     match outcome {
         HubOutcome::Update(card) => {
             modal
-                .create_response(
-                    &ctx.http,
-                    CreateInteractionResponse::UpdateMessage(v2_message(card.components)),
-                )
+                .create_response(&ctx.http, card.update())
                 .await?;
         }
-        HubOutcome::Ephemeral(card) => {
+        HubOutcome::Ephemeral(mut card) => {
+            card.ephemeral = true;
             modal
                 .create_response(
                     &ctx.http,
-                    CreateInteractionResponse::Message(
-                        v2_message(card.components).flags(MessageFlags::EPHEMERAL),
-                    ),
+                    CreateInteractionResponse::Message(card.interaction_message()),
                 )
                 .await?;
         }
@@ -461,12 +394,7 @@ async fn deny(ctx: &serenity::Context, component: &ComponentInteraction) -> Resu
     component
         .create_response(
             &ctx.http,
-            CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new()
-                    .components(reply.components)
-                    .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
-                    .allowed_mentions(CreateAllowedMentions::new()),
-            ),
+            CreateInteractionResponse::Message(reply.interaction_message()),
         )
         .await?;
     Ok(())
@@ -482,12 +410,7 @@ async fn deny_modal(ctx: &serenity::Context, modal: &ModalInteraction) -> Result
     modal
         .create_response(
             &ctx.http,
-            CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new()
-                    .components(reply.components)
-                    .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
-                    .allowed_mentions(CreateAllowedMentions::new()),
-            ),
+            CreateInteractionResponse::Message(reply.interaction_message()),
         )
         .await?;
     Ok(())
@@ -506,14 +429,19 @@ pub fn read_input(components: &[serenity::ModalComponent], custom_id: &str) -> O
     None
 }
 
-/// Wrap V2 components in an update message payload.
-pub fn v2_message(
-    components: Vec<serenity::CreateComponent<'static>>,
-) -> CreateInteractionResponseMessage<'static> {
-    CreateInteractionResponseMessage::new()
-        .components(components)
-        .flags(MessageFlags::IS_COMPONENTS_V2)
-        .allowed_mentions(CreateAllowedMentions::new())
+/// The first selected value from a string/user/role select, as a plain string.
+pub(super) fn selected_value(data: &serenity::ComponentInteractionData) -> Option<String> {
+    use serenity::all::ComponentInteractionDataKind;
+    match &data.kind {
+        ComponentInteractionDataKind::StringSelect { values } => values.first().cloned(),
+        ComponentInteractionDataKind::UserSelect { values } => {
+            values.first().map(|id| id.get().to_string())
+        }
+        ComponentInteractionDataKind::RoleSelect { values } => {
+            values.first().map(|id| id.get().to_string())
+        }
+        _ => None,
+    }
 }
 
 /// Guild context for a modal submission, falling back to a placeholder.

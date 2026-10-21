@@ -8,7 +8,7 @@ use serenity::all::{
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::{Card, CardKind};
 
-use crate::commands::guild_id;
+use lumi_modules::shared::require_guild;
 
 /// Toggle the `INVITES_DISABLED` guild feature. Returns whether the change
 /// applied so callers can record the real invite state.
@@ -52,7 +52,7 @@ pub async fn panic(ctx: Context<'_>) -> Result<(), Error> {
 
 async fn panic_status_action(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = guild_id(ctx)?;
+    let guild_id = require_guild(ctx)?;
     let sec = &ctx.data().security;
 
     let current = sec.get_panic_status(&guild_id.to_string()).await?;
@@ -100,7 +100,7 @@ async fn panic_status_action(ctx: Context<'_>) -> Result<(), Error> {
 )]
 pub async fn on(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = guild_id(ctx)?;
+    let guild_id = require_guild(ctx)?;
     let actor_id = ctx.author().id;
     let sec = &ctx.data().security;
 
@@ -183,7 +183,7 @@ pub async fn on(ctx: Context<'_>) -> Result<(), Error> {
 )]
 pub async fn off(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = guild_id(ctx)?;
+    let guild_id = require_guild(ctx)?;
     let sec = &ctx.data().security;
 
     let prior_status = sec.deactivate_panic(&guild_id.to_string()).await?;

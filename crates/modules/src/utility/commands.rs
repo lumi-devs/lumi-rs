@@ -1,8 +1,7 @@
 use poise::serenity_prelude as serenity;
 use serenity::all::{
-    ButtonStyle, ChannelType, ComponentInteraction, CreateButton, CreateInteractionResponse,
-    CreateInteractionResponseMessage, CreateMediaGallery, CreateMediaGalleryItem,
-    CreateUnfurledMediaItem, EditMember, GetMessages, Message, MessageFlags, MessageId,
+    ButtonStyle, ChannelType, ComponentInteraction, CreateButton, CreateMediaGallery,
+    CreateMediaGalleryItem, CreateUnfurledMediaItem, EditMember, GetMessages, Message, MessageId,
     Permissions, User, UserId,
 };
 
@@ -14,6 +13,8 @@ use lumi_ui::{Card, CardKind, CardOptions};
 use crate::shared::{
     claim_cooldown, cooldown_key, format_seconds, require_guild, secs_ceil, truncate_chars,
 };
+
+use super::DEFAULT_MEDIA_COOLDOWN_SECS;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MediaType {
@@ -126,7 +127,7 @@ async fn media_request(
     )
     .await
     .and_then(|v| module_state::parse_id(&v))
-    .unwrap_or(10);
+    .unwrap_or(u64::from(DEFAULT_MEDIA_COOLDOWN_SECS));
     let key = cooldown_key("media", guild_id, ctx.author().id.get());
     if let Some(remaining) = claim_cooldown(
         &ctx.data().cache,
@@ -172,15 +173,7 @@ pub async fn handle_component(
     let card = build_media_card(&user, kind, true, true);
 
     interaction
-        .create_response(
-            &ctx.http,
-            CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new()
-                    .components(card.into_reply().components)
-                    .allowed_mentions(serenity::all::CreateAllowedMentions::new())
-                    .flags(MessageFlags::IS_COMPONENTS_V2),
-            ),
-        )
+        .create_response(&ctx.http, card.into_reply().update())
         .await?;
     Ok(())
 }

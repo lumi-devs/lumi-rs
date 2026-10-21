@@ -15,7 +15,7 @@ use lumi_ui::panels::{
 };
 use lumi_ui::{Card, CardKind, CardOptions, CardReply, cut_text, format_page_footer};
 
-use super::{GuildCtx, HubId, HubOutcome, HubView, cid, tab_row};
+use super::{GuildCtx, HubId, HubOutcome, HubView, cid, selected_value, tab_row};
 
 /// Mirrors lumi's `FeaturesPerPage` / `FieldsPerPage`: a V2 container rejects
 /// more than 40 components in total, and every row costs a section plus a button.
@@ -525,13 +525,6 @@ fn field_modal(module_name: &str, field: &ConfigField, section: usize) -> Create
     ))])
 }
 
-fn select_string(data: &serenity::ComponentInteractionData) -> Option<String> {
-    match &data.kind {
-        ComponentInteractionDataKind::StringSelect { values } => values.first().cloned(),
-        _ => None,
-    }
-}
-
 /// Every selected snowflake id from a user/role/channel select, in order.
 fn select_ids(data: &serenity::ComponentInteractionData) -> Vec<String> {
     match &data.kind {
@@ -599,7 +592,7 @@ pub async fn dispatch(
             let Some(name) = name else {
                 return Ok(HubOutcome::Done);
             };
-            let Some(section) = select_string(data).and_then(|value| value.parse().ok()) else {
+            let Some(section) = selected_value(data).and_then(|value| value.parse().ok()) else {
                 return Ok(HubOutcome::Done);
             };
             Ok(HubOutcome::Update(
@@ -650,7 +643,7 @@ pub async fn dispatch(
                 return Ok(HubOutcome::Done);
             };
             let section = id.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
-            let Some(choice) = select_string(data) else {
+            let Some(choice) = selected_value(data) else {
                 return Ok(HubOutcome::Done);
             };
             let Some(module) = services.registry.get(name) else {

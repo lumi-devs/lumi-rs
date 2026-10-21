@@ -1,8 +1,5 @@
 use poise::serenity_prelude as serenity;
-use serenity::all::{
-    ComponentInteraction, CreateAllowedMentions, CreateInteractionResponse,
-    CreateInteractionResponseMessage, MessageFlags, UserId,
-};
+use serenity::all::{ComponentInteraction, UserId};
 
 use lumi_kernel::bot::{Command, Context, Error};
 use lumi_ui::panels::pagination_row;
@@ -550,15 +547,7 @@ pub async fn handle_component(
     )
     .await?;
     interaction
-        .create_response(
-            &ctx.http,
-            CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new()
-                    .components(reply.components)
-                    .allowed_mentions(CreateAllowedMentions::new())
-                    .flags(MessageFlags::IS_COMPONENTS_V2),
-            ),
-        )
+        .create_response(&ctx.http, reply.update())
         .await?;
     Ok(())
 }

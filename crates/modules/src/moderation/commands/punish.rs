@@ -8,12 +8,11 @@ use lumi_db::entities::enums::CaseAction;
 use lumi_kernel::bot::{Context, Error};
 use lumi_ui::{Card, CardKind};
 
-use crate::confirm;
 use crate::moderation::actions::{self, BulkOutcome};
 use crate::moderation::store::{self, CreateCaseParams, ModConfig};
 use crate::moderation::views::{action_color, action_success_card, human_seconds, punishment_card};
 
-use super::{autocomplete_reason, guild_id, parse_duration, parse_target_list, send_card};
+use super::{autocomplete_reason, parse_duration, parse_target_list, require_guild, send_card};
 
 async fn notify_outcome(
     ctx: Context<'_>,
@@ -51,7 +50,7 @@ async fn apply_warn_escalation(
         return Ok(None);
     };
 
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     let bot_id = ctx.framework().bot_id().get();
     let reason = format!(
         "Auto: {total_warns} warns reached threshold ({}).",
@@ -141,7 +140,7 @@ pub async fn warn(
     reason: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = guild_id(ctx)?.get();
+    let guild_id = require_guild(ctx)?.get();
     let config = store::config(&ctx.data().cache, &ctx.data().db, guild_id).await;
 
     let case = store::create_case(
@@ -236,7 +235,15 @@ pub async fn kick(
         "Are you sure you want to kick the following member(s)?\n\n{display}\n\n**Reason**: {}",
         reason.as_deref().unwrap_or("No reason provided")
     );
-    if !confirm::confirm(ctx, "moderation", "⚠️ Confirm Kick", &body, "Confirm Kick").await? {
+    if !lumi_ui::confirm_poise(
+        ctx,
+        "⚠️ Confirm Kick",
+        &body,
+        "Confirm Kick",
+        std::time::Duration::from_secs(30),
+    )
+    .await?
+    {
         return send_card(
             ctx,
             Card::lines(
@@ -248,7 +255,7 @@ pub async fn kick(
     }
 
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     let http = ctx.http();
     let reason_owned = reason.clone();
     let outcome = actions::apply_bulk(
@@ -312,7 +319,15 @@ pub async fn ban(
         "Are you sure you want to ban the following user(s)?\n\n{display}\n\n**Delete Messages**: {days} day(s)\n**Reason**: {}",
         reason.as_deref().unwrap_or("No reason provided")
     );
-    if !confirm::confirm(ctx, "moderation", "⚠️ Confirm Ban", &body, "Confirm Ban").await? {
+    if !lumi_ui::confirm_poise(
+        ctx,
+        "⚠️ Confirm Ban",
+        &body,
+        "Confirm Ban",
+        std::time::Duration::from_secs(30),
+    )
+    .await?
+    {
         return send_card(
             ctx,
             Card::lines(
@@ -324,7 +339,7 @@ pub async fn ban(
     }
 
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     let http = ctx.http();
     let reason_owned = reason.clone();
     let outcome = actions::apply_bulk(
@@ -368,7 +383,7 @@ pub async fn unban(
     reason: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     guild.unban(ctx.http(), user, reason.as_deref()).await?;
 
     let config = store::config(&ctx.data().cache, &ctx.data().db, guild.get()).await;
@@ -437,7 +452,7 @@ pub async fn mute(
         .await;
     }
 
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     let duration = duration.min(actions::MAX_TIMEOUT);
     let seconds = i32::try_from(duration.as_secs()).unwrap_or(i32::MAX);
     actions::apply_timeout(
@@ -491,7 +506,7 @@ pub async fn unmute(
     reason: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     actions::clear_timeout(
         ctx.http(),
         guild,
@@ -546,7 +561,7 @@ pub async fn softban(
     reason: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     let days = days.unwrap_or(1).clamp(1, 7);
 
     guild
@@ -657,7 +672,7 @@ pub async fn quarantine_add(
     reason: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     let config = store::config(&ctx.data().cache, &ctx.data().db, guild.get()).await;
     let Some(role) = quarantine_role_or_reply(ctx, &config).await? else {
         return Ok(());
@@ -717,7 +732,7 @@ pub async fn quarantine_remove(
     reason: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     let config = store::config(&ctx.data().cache, &ctx.data().db, guild.get()).await;
     let Some(role) = quarantine_role_or_reply(ctx, &config).await? else {
         return Ok(());

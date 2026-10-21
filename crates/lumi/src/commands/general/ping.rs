@@ -1,7 +1,7 @@
 use poise::serenity_prelude as serenity;
 use serenity::all::{
-    CacheHttp, ComponentInteraction, CreateAllowedMentions, CreateInteractionResponse,
-    CreateInteractionResponseMessage, HttpError, JsonErrorCode, MessageFlags,
+    CacheHttp, ComponentInteraction, CreateInteractionResponse, HttpError, JsonErrorCode,
+    MessageFlags,
 };
 
 use lumi_kernel::Services;
@@ -16,33 +16,22 @@ use crate::ping::collect;
 pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
     let data = collect(ctx.data().as_ref(), ctx.serenity_context()).await;
     let user_id = ctx.author().id.get();
-    let card = build_overview_card(&data, user_id, 0, PING_PREFIX);
+    let mut card = build_overview_card(&data, user_id, 0, PING_PREFIX);
 
     match ctx {
         poise::Context::Application(app) => {
+            card.ephemeral = true;
             app.interaction
                 .create_response(
                     ctx.http(),
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .components(card.components)
-                            .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
-                            .allowed_mentions(CreateAllowedMentions::new()),
-                    ),
+                    CreateInteractionResponse::Message(card.interaction_message()),
                 )
                 .await?;
         }
         poise::Context::Prefix(pfx) => {
             pfx.msg
                 .channel_id
-                .send_message(
-                    ctx.http(),
-                    serenity::CreateMessage::new()
-                        .reference_message(pfx.msg)
-                        .components(card.components)
-                        .flags(MessageFlags::IS_COMPONENTS_V2)
-                        .allowed_mentions(CreateAllowedMentions::new()),
-                )
+                .send_message(ctx.http(), card.message().reference_message(pfx.msg))
                 .await?;
         }
     }
@@ -128,27 +117,14 @@ pub async fn handle_component(
 
     let data = collect(services, ctx).await;
     let page = requested_page.min(shard_page_count(&data).saturating_sub(1));
-    let card = build_overview_card(&data, user_id, page, PING_PREFIX);
-
-    let mut flags = MessageFlags::IS_COMPONENTS_V2;
-    if component
+    let mut card = build_overview_card(&data, user_id, page, PING_PREFIX);
+    card.ephemeral = component
         .message
         .flags
-        .is_some_and(|flags| flags.contains(MessageFlags::EPHEMERAL))
-    {
-        flags |= MessageFlags::EPHEMERAL;
-    }
+        .is_some_and(|flags| flags.contains(MessageFlags::EPHEMERAL));
 
     if let Err(error) = component
-        .create_response(
-            ctx.http(),
-            CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new()
-                    .components(card.components)
-                    .flags(flags)
-                    .allowed_mentions(CreateAllowedMentions::new()),
-            ),
-        )
+        .create_response(ctx.http(), card.update())
         .await
     {
         if is_gone(&error) {

@@ -1,6 +1,5 @@
 pub mod afk;
 pub mod config;
-pub mod confirm;
 pub mod economy;
 pub mod filter;
 pub mod leveling;
@@ -11,7 +10,6 @@ pub mod regex;
 pub mod security;
 pub mod shared;
 pub mod tempvc;
-pub mod text;
 pub mod utility;
 
 pub use afk::AfkModule;

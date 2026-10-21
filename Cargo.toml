@@ -54,19 +54,13 @@ reqwest          = { version = "0.12", default-features = false, features = ["ru
 axum             = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
 tower-http       = { version = "0.6", default-features = false, features = ["trace"] }
 tower_governor   = { version = "0.8", default-features = false, features = ["axum"] }
-governor         = "0.10"
 
 # Git (addon repositories)
 gix = { version = "0.89", default-features = false, features = [
   "blocking-network-client", "blocking-http-transport-reqwest-rust-tls",
   "blob-diff", "index", "parallel", "revision", "sha1", "worktree-mutation",
 ] }
-gix-worktree = { version = "0.58", default-features = false, features = ["attributes"] }
 gix-worktree-state = { version = "0.36", default-features = false }
-
-# Background jobs
-apalis       = "1"
-apalis-redis = "1"
 
 # Serde / errors / utils
 aho-corasick = "1.1"
@@ -80,11 +74,6 @@ thiserror   = "2"
 uuid        = { version = "1", features = ["v4", "serde"] }
 chrono      = { version = "0.4", features = ["serde"] }
 dashmap     = "6"
-once_cell   = "1"
-arc-swap    = "1"
-figment     = { version = "0.10", features = ["toml", "env"] }
-humantime   = "2.1"
-croner      = "2.1"
 mimalloc    = { version = "0.1", default-features = false }
 
 # Observability

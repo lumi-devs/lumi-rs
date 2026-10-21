@@ -4,12 +4,11 @@ use serenity::all::{
 };
 
 use lumi_kernel::Services;
-use lumi_ui::{Card, CardKind};
+use lumi_ui::{Card, CardKind, cut_text};
 
 use super::enforce;
 use super::heat;
 use super::store::{self, FilterRules};
-use crate::text::cut;
 
 /// Screen a created message. Returns `true` when it was enforced (deleted), so
 /// the caller can stop before running the other message listeners.
@@ -229,7 +228,7 @@ async fn log_hit(
         format!("**Rule**: `{action}`"),
         format!("**Reason**: {reason}"),
         format!("**Channel**: <#{}>", message.channel_id.get()),
-        format!("**Message**: {}", cut(message.content.as_str(), 200)),
+        format!("**Message**: {}", cut_text(message.content.as_str(), 200)),
     ];
     let card = Card::lines("🚫 Filter", lines)
         .kind(CardKind::Error)

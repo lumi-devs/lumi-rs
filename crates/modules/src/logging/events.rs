@@ -4,8 +4,10 @@ use serenity::all::{
     MessageUpdateEvent, RoleId, User,
 };
 
-use super::{store, views};
+use crate::shared::truncate_chars;
 use lumi_kernel::Result;
+
+use super::{store, views};
 
 const GROUP_MESSAGE: &str = "message_log_channel_id";
 const GROUP_MEMBER: &str = "member_log_channel_id";
@@ -54,15 +56,6 @@ async fn emit(
 
 fn member_line(user: &User) -> String {
     format!("**Member**: <@{}> ({})", user.id.get(), user.id.get())
-}
-
-/// lumi truncates message content to 450 (edits) / 900 (deletes); mirror that
-/// so a single text display never exceeds Discord's limit.
-fn cut(content: &str, max: usize) -> String {
-    if content.chars().count() <= max {
-        return content.to_string();
-    }
-    content.chars().take(max).collect()
 }
 
 /// Role mentions added to / removed from a member, as `<@&id>` strings.
@@ -157,8 +150,9 @@ pub async fn on_message_update(
                     new.author.id.get()
                 ),
                 format!("**Channel**: <#{}>", new.channel_id.get()),
-                format!("**Before**: {}", cut(&before, 450)),
-                format!("**After**: {}", cut(&after, 450)),
+                // lumi caps each side at 450 so one text display stays under Discord's limit.
+                format!("**Before**: {}", truncate_chars(&before, 450)),
+                format!("**After**: {}", truncate_chars(&after, 450)),
                 format!("[Jump to message]({})", new.link()),
             ],
         },
@@ -321,7 +315,8 @@ pub async fn on_member_update(
 
 #[cfg(test)]
 mod tests {
-    use super::{cut, role_changes};
+    use super::role_changes;
+    use crate::shared::truncate_chars;
     use serenity::all::RoleId;
 
     #[test]
@@ -335,8 +330,8 @@ mod tests {
     }
 
     #[test]
-    fn cut_respects_char_boundaries() {
-        assert_eq!(cut("hello", 10), "hello");
-        assert_eq!(cut("hello", 3), "hel");
+    fn truncate_respects_char_boundaries() {
+        assert_eq!(truncate_chars("hello", 10), "hello");
+        assert_eq!(truncate_chars("hello", 3), "hel");
     }
 }

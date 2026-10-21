@@ -5,7 +5,7 @@ use serenity::all::{CreateAllowedMentions, CreateMessage, EditMember, GenericCha
 use lumi_kernel::bot::{Context, Error};
 use lumi_ui::{Card, CardKind};
 
-use super::{guild_id, send_card};
+use super::{require_guild, send_card};
 
 /// Relay a direct message through the bot to a user.
 #[poise::command(
@@ -115,7 +115,7 @@ pub async fn sanitize(
     #[description = "Member to sanitize"] member: UserId,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
 
     let guild_member = guild.member(ctx.http(), member).await?;
     let current = guild_member

@@ -12,7 +12,7 @@ use lumi_kernel::downloader::AutoUpdateConfig;
 use lumi_ui::panels::{action_row_of, back_button, pagination_row, setting_row, string_select};
 use lumi_ui::{Card, CardKind, CardOptions, CardReply, cut_text};
 
-use super::{GuildCtx, HubId, HubOutcome, HubView, cid, read_input, tab_row};
+use super::{GuildCtx, HubId, HubOutcome, HubView, cid, read_input, selected_value, tab_row};
 
 /// Selectable auto-update cadences (minutes, label).
 const AUTO_UPDATE_INTERVALS: [(u64, &str); 5] = [
@@ -510,7 +510,7 @@ pub async fn dispatch(
             Ok(HubOutcome::Update(autoupdate_card(services).await?))
         }
         ("addon", Some("autoupdate_interval")) => {
-            if let Some(minutes) = select_value(data).and_then(|v| v.parse::<u64>().ok())
+            if let Some(minutes) = selected_value(data).and_then(|v| v.parse::<u64>().ok())
                 && minutes > 0
             {
                 let cfg = services.downloader.get_auto_update_config().await?;
@@ -634,7 +634,7 @@ pub async fn dispatch(
             ))
         }
         ("addon", Some("repo_pick")) => {
-            let repo = select_value(data).unwrap_or_default();
+            let repo = selected_value(data).unwrap_or_default();
             if repo.is_empty() {
                 return Ok(HubOutcome::Done);
             }
@@ -643,7 +643,7 @@ pub async fn dispatch(
             ))
         }
         ("addon", Some("mod_action")) => {
-            let value = select_value(data).unwrap_or_default();
+            let value = selected_value(data).unwrap_or_default();
             let Some((act, rest)) = value.split_once(':') else {
                 return Ok(HubOutcome::Done);
             };
@@ -846,15 +846,6 @@ fn text_input(
             .required(required)
             .placeholder(placeholder.into()),
     ))
-}
-
-fn select_value(data: &serenity::ComponentInteractionData) -> Option<String> {
-    match &data.kind {
-        serenity::all::ComponentInteractionDataKind::StringSelect { values } => {
-            values.first().cloned()
-        }
-        _ => None,
-    }
 }
 
 /// `Some(trimmed)` unless the value is blank.

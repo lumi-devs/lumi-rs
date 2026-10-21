@@ -3,10 +3,10 @@
 
 use serenity::all::{
     Colour, CreateActionRow, CreateAllowedMentions, CreateComponent, CreateContainer,
-    CreateContainerComponent, CreateMediaGallery, CreateMediaGalleryItem, CreateMessage,
-    CreateSection, CreateSectionAccessory, CreateSectionComponent, CreateSeparator,
-    CreateTextDisplay, CreateThumbnail, CreateUnfurledMediaItem, MessageFlags,
-    SeparatorSpacingSize,
+    CreateContainerComponent, CreateInteractionResponse, CreateInteractionResponseMessage,
+    CreateMediaGallery, CreateMediaGalleryItem, CreateMessage, CreateSection,
+    CreateSectionAccessory, CreateSectionComponent, CreateSeparator, CreateTextDisplay,
+    CreateThumbnail, CreateUnfurledMediaItem, MessageFlags, SeparatorSpacingSize,
 };
 
 use crate::layout::{format_breadcrumb_header, format_status_badge, format_subtitle};
@@ -112,6 +112,19 @@ impl CardReply {
             .components(self.components.clone())
             .allowed_mentions(CreateAllowedMentions::new())
             .flags(self.flags())
+    }
+
+    /// Interaction-response payload for this card, V2/ephemeral flags included.
+    pub fn interaction_message(&self) -> CreateInteractionResponseMessage<'static> {
+        CreateInteractionResponseMessage::new()
+            .components(self.components.clone())
+            .allowed_mentions(CreateAllowedMentions::new())
+            .flags(self.flags())
+    }
+
+    /// Replace the interaction's original message with this card.
+    pub fn update(&self) -> CreateInteractionResponse<'static> {
+        CreateInteractionResponse::UpdateMessage(self.interaction_message())
     }
 }
 

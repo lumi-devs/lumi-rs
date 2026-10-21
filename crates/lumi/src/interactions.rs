@@ -6,18 +6,13 @@
 //! gateway itself never inspects raw custom ids.
 
 use poise::serenity_prelude as serenity;
-use serenity::all::{
-    ComponentInteraction, CreateAllowedMentions, CreateInteractionResponse,
-    CreateInteractionResponseMessage, MessageFlags, MessageInteractionMetadata, ModalInteraction,
-    UserId,
-};
+use serenity::all::{ComponentInteraction, ModalInteraction};
 
 use lumi_kernel::Services;
-use lumi_kernel::bot::{Context, Error};
-use lumi_ui::{Card, CardKind, CardOptions, CardReply};
+use lumi_kernel::bot::Error;
 
 pub const HUB_PREFIX: &str = crate::commands::hub::PREFIX;
-pub const TEMPVC_PREFIX: &str = "tempvc";
+pub const TEMPVC_PREFIX: &str = lumi_modules::tempvc::views::PREFIX;
 pub const MEDIA_PREFIX: &str = "media";
 pub const ECONOMY_PREFIX: &str = "econ";
 pub const PING_PREFIX: &str = "ping";
@@ -114,124 +109,6 @@ pub async fn handle_modal(
         Some(ModalRoute::TempVc) => lumi_modules::tempvc::handle_modal(ctx, services, modal).await,
         None => Ok(()),
     }
-}
-
-/// The user who originally rendered a component panel.
-///
-/// Discord attaches this to interaction response messages, so panels can be
-/// owner-locked without trusting a user id embedded in the custom id (which is
-/// rewritten by some UI builders).
-#[must_use]
-pub fn panel_owner(component: &ComponentInteraction) -> Option<UserId> {
-    let metadata = component.message.interaction_metadata.as_deref()?;
-    match metadata {
-        MessageInteractionMetadata::Command(meta) => Some(meta.user.id),
-        MessageInteractionMetadata::Component(meta) => Some(meta.user.id),
-        MessageInteractionMetadata::ModalSubmit(meta) => Some(meta.user.id),
-        _ => None,
-    }
-}
-
-/// Whether `component.user` owns the panel. Falls back to the id encoded in the
-/// custom id when Discord did not attach interaction metadata.
-#[must_use]
-pub fn caller_is_owner(component: &ComponentInteraction, fallback_id: u64) -> bool {
-    panel_owner(component).map_or_else(
-        || fallback_id == 0 || fallback_id == component.user.id.get(),
-        |owner| owner == component.user.id,
-    )
-}
-
-/// Replace the panel with a freshly rendered card.
-pub async fn update_message(
-    http: &serenity::Http,
-    component: &ComponentInteraction,
-    reply: &CardReply,
-) -> Result<(), serenity::Error> {
-    component
-        .create_response(
-            http,
-            CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new()
-                    .components(reply.components.clone())
-                    .allowed_mentions(CreateAllowedMentions::new())
-                    .flags(MessageFlags::IS_COMPONENTS_V2),
-            ),
-        )
-        .await
-}
-
-/// Send an ephemeral (only-visible-to-caller) text response.
-pub async fn reply_ephemeral(
-    http: &serenity::Http,
-    component: &ComponentInteraction,
-    content: impl Into<String>,
-) -> Result<(), serenity::Error> {
-    let card = Card::warning("Notice", content.into()).ephemeral();
-    let reply = card.into_reply();
-    component
-        .create_response(
-            http,
-            CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new()
-                    .components(reply.components)
-                    .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
-                    .allowed_mentions(CreateAllowedMentions::new()),
-            ),
-        )
-        .await
-}
-
-/// Generic confirmation collector: prompts the command caller with a warning
-/// card and Confirm/Cancel buttons, awaiting their decision for up to 30s.
-pub async fn confirm(
-    ctx: Context<'_>,
-    title: &str,
-    body: &str,
-    confirm_label: Option<&str>,
-) -> Result<bool, Error> {
-    let confirm_id = "confirm:yes";
-    let cancel_id = "confirm:no";
-    let opts = CardOptions {
-        action_rows: vec![lumi_ui::panels::confirm_row(
-            confirm_id,
-            cancel_id,
-            confirm_label,
-            Some("Cancel"),
-        )],
-        ..Default::default()
-    };
-
-    let card = Card::lines(title, vec![body.to_string()])
-        .kind(CardKind::Warning)
-        .options(opts);
-
-    let reply = ctx.send(card.into_reply().reply()).await?;
-    let msg = reply.message().await?;
-
-    let interaction =
-        serenity::collector::ComponentInteractionCollector::new(ctx.serenity_context())
-            .message_id(msg.id)
-            .author_id(ctx.author().id)
-            .timeout(std::time::Duration::from_secs(30))
-            .await;
-
-    let Some(press) = interaction else {
-        let _ = reply
-            .edit(ctx, poise::CreateReply::default().components(Vec::new()))
-            .await;
-        return Ok(false);
-    };
-
-    let _ = press
-        .create_response(ctx.http(), CreateInteractionResponse::Acknowledge)
-        .await;
-
-    let _ = reply
-        .edit(ctx, poise::CreateReply::default().components(Vec::new()))
-        .await;
-
-    Ok(press.data.custom_id == confirm_id)
 }
 
 #[cfg(test)]

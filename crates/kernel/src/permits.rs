@@ -15,6 +15,9 @@ use lumi_db::entities::{permit, permit_assignment};
 
 use crate::Result;
 
+/// Root permit node for server-management surfaces.
+pub const ADMIN_NODE: &str = "admin.*";
+
 #[derive(Clone, Debug)]
 pub struct PermitRow {
     pub id: i32,
@@ -133,7 +136,7 @@ pub fn required_node(command: &str) -> Option<&'static str> {
         "mute" | "unmute" | "timeout" => Some("mod.mute"),
         "quarantine" => Some("mod.quarantine"),
         "purge" => Some("mod.purge"),
-        "lumi" | "repo" | "download" => Some("admin.*"),
+        "lumi" | "repo" | "download" => Some(ADMIN_NODE),
         _ => None,
     }
 }

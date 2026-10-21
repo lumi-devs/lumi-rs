@@ -1,10 +1,9 @@
 use serenity::all::{Colour, UserId};
 
 use lumi_db::entities::{enums::CaseAction, mod_note, moderation_case};
-use lumi_ui::{Card, CardOptions, CardReply};
+use lumi_ui::{Card, CardOptions, CardReply, cut_text};
 
 use super::actions::{AppliedCase, BulkOutcome};
-use crate::text::cut;
 
 /// Accent colour per action. Colours are plain `0xRRGGBB` values: an extra
 /// leading byte silently turns the intended hue into another one.
@@ -176,7 +175,7 @@ pub fn punishment_card(outcome: &BulkOutcome, reason: Option<&str>) -> CardReply
             .failures
             .iter()
             .take(10)
-            .map(|(target, error)| format!("<@{}>: {}", target.get(), cut(error, 160)))
+            .map(|(target, error)| format!("<@{}>: {}", target.get(), cut_text(error, 160)))
             .collect::<Vec<_>>()
             .join("\n");
         lines.push(format!("**Failed:**\n{failures}"));

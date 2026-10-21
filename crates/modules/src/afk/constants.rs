@@ -23,7 +23,7 @@ pub const REMOVAL_COOLDOWN_MS: u64 = 2_000;
 pub const NICK_COOLDOWN_MS: u64 = 1_000;
 
 /// Default lifetime of the welcome-back message, in seconds.
-pub const DEFAULT_WELCOME_TTL_SECS: u64 = 20;
+pub const DEFAULT_WELCOME_TTL_SECS: u32 = 20;
 /// Lifetime of an "is AFK" notice.
 pub const NOTICE_TTL: Duration = Duration::from_secs(600);
 
@@ -31,15 +31,9 @@ pub const NOTICE_TTL: Duration = Duration::from_secs(600);
 pub const GUILD_MAP_TTL: Duration = Duration::from_secs(600);
 /// How long "nobody is AFK" stays cached before the next check.
 pub const GUILD_MAP_EMPTY_TTL: Duration = Duration::from_secs(60);
-/// How long the three AFK config values stay cached.
-pub const CONFIG_CACHE_TTL: Duration = Duration::from_secs(60);
 
 pub fn guild_map_key(guild_id: u64) -> String {
     format!("lumi:afk:guild:{guild_id}")
-}
-
-pub fn config_key(guild_id: u64) -> String {
-    format!("lumi:afk:cfg:{guild_id}")
 }
 
 pub fn mentions_key(guild_id: u64, user_id: u64) -> String {

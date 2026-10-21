@@ -1,10 +1,9 @@
 use poise::serenity_prelude as serenity;
 use serenity::all::{
-    ButtonStyle, ChannelId, ChannelType, ComponentInteraction, ComponentInteractionDataKind,
-    CreateAllowedMentions, CreateButton, CreateInputText, CreateInteractionResponse,
-    CreateInteractionResponseMessage, CreateLabel, CreateModal, CreateModalComponent, EditChannel,
-    GuildId, InputTextStyle, MessageFlags, ModalInteraction, PermissionOverwrite,
-    PermissionOverwriteType, Permissions, RoleId, UserId,
+    ChannelId, ChannelType, ComponentInteraction, ComponentInteractionDataKind, CreateInputText,
+    CreateInteractionResponse, CreateLabel, CreateModal, CreateModalComponent, EditChannel, GuildId,
+    InputTextStyle, ModalInteraction, PermissionOverwrite, PermissionOverwriteType, Permissions,
+    RoleId, UserId,
 };
 
 use lumi_kernel::Services;
@@ -14,14 +13,11 @@ use lumi_ui::{Card, CardOptions, CardReply};
 
 use crate::shared::{require_guild, truncate_chars};
 
-use super::store;
-use super::views::{self, GeneratorView};
+use super::views::{self, GeneratorView, back_button, error_card};
+use super::{MAX_CHANNEL_NAME, store};
 
 /// Discord's hard limit for voice channel user limits.
 const MAX_USER_LIMIT: i32 = 99;
-/// Discord's hard limit for channel names.
-const MAX_CHANNEL_NAME: usize = 100;
-
 /// TempVC entry point. `,tempvc` (prefix) shows the panel directly.
 #[poise::command(
     slash_command,
@@ -140,10 +136,6 @@ fn may_manage(
     is_admin(ctx, guild_id, user) || services.cfg.is_owner(user.get())
 }
 
-fn error_card(message: &str) -> CardReply {
-    Card::error("TempVC Error", message).into_reply()
-}
-
 /// Members currently connected to a voice channel, from the cache.
 fn channel_members(ctx: &serenity::Context, guild_id: GuildId, channel: ChannelId) -> Vec<UserId> {
     ctx.cache
@@ -168,18 +160,14 @@ fn channel_limit(ctx: &serenity::Context, guild_id: u64, channel_id: u64) -> i32
 async fn respond(
     ctx: &serenity::Context,
     interaction: &ComponentInteraction,
-    card: CardReply,
+    mut card: CardReply,
     update: bool,
 ) -> Result<(), Error> {
-    let mut message = CreateInteractionResponseMessage::new()
-        .components(card.components)
-        .allowed_mentions(CreateAllowedMentions::new())
-        .flags(MessageFlags::IS_COMPONENTS_V2);
     let response = if update {
-        CreateInteractionResponse::UpdateMessage(message)
+        card.update()
     } else {
-        message = message.flags(MessageFlags::EPHEMERAL);
-        CreateInteractionResponse::Message(message)
+        card.ephemeral = true;
+        CreateInteractionResponse::Message(card.interaction_message())
     };
     interaction.create_response(&ctx.http, response).await?;
     Ok(())
@@ -190,14 +178,14 @@ async fn respond(
 async fn respond_modal(
     ctx: &serenity::Context,
     modal: &ModalInteraction,
-    card: CardReply,
+    mut card: CardReply,
 ) -> Result<(), Error> {
-    let message = CreateInteractionResponseMessage::new()
-        .components(card.components)
-        .allowed_mentions(CreateAllowedMentions::new())
-        .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL);
+    card.ephemeral = true;
     modal
-        .create_response(&ctx.http, CreateInteractionResponse::Message(message))
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Message(card.interaction_message()),
+        )
         .await?;
     Ok(())
 }
@@ -280,7 +268,7 @@ async fn refresh_panel(
     let reply = store::get_record(&services.db, guild_id, channel_id)
         .await?
         .map_or_else(
-            || views::error_card("This voice channel is no longer active."),
+            || error_card("This voice channel is no longer active."),
             |record| {
                 views::panel_card(
                     record.channel_id.get(),
@@ -501,12 +489,6 @@ async fn panel_action(
             Ok(())
         }
     }
-}
-
-fn back_button(channel_id: u64) -> serenity::all::CreateButton<'static> {
-    CreateButton::new(views::back_id(channel_id))
-        .label("\u{2190} Back to Panel")
-        .style(ButtonStyle::Secondary)
 }
 
 fn with_back(card: Card, channel_id: u64) -> CardReply {

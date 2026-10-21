@@ -217,7 +217,7 @@ fn role_select_multi(
     )
 }
 
-fn back_button(channel_id: u64) -> serenity::all::CreateButton<'static> {
+pub(super) fn back_button(channel_id: u64) -> serenity::all::CreateButton<'static> {
     serenity::all::CreateButton::new(back_id(channel_id))
         .label("\u{2190} Back to Panel")
         .style(serenity::all::ButtonStyle::Secondary)
@@ -371,29 +371,6 @@ pub fn admin_limit_modal_id(channel_id: u64) -> String {
     format!("{PREFIX}:admin:limitm:{channel_id}")
 }
 
-pub fn generator_setup_card(channel_id: u64, name: &str, limit: i32) -> CardReply {
-    let mut lines = Vec::new();
-    lines.push(format!("**Generator Channel:** <#{channel_id}>"));
-    lines.push(format!("**Template Name:** `{name}`"));
-    if limit > 0 {
-        lines.push(format!("**User Limit:** `{limit}`"));
-    } else {
-        lines.push("**User Limit:** `Unlimited`".to_string());
-    }
-
-    Card::lines("Temporary VC Generator Configured", lines)
-        .kind(CardKind::Success)
-        .into_reply()
-}
-
-pub fn generator_deleted_card(channel_id: u64) -> CardReply {
-    Card::success(
-        "Temporary VC Generator Removed",
-        format!("Successfully removed generator configuration for <#{channel_id}>."),
-    )
-    .into_reply()
-}
-
 pub fn error_card(msg: &str) -> CardReply {
-    Card::error("Temporary VC Error", msg).into_reply()
+    Card::error("TempVC Error", msg).into_reply()
 }

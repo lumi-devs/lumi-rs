@@ -14,13 +14,13 @@ use lumi_kernel::module_state;
 
 /// Build one config field with the shared empty `subfields` representation.
 #[must_use]
-pub fn field(
+fn field(
     key: &str,
     label: &str,
     description: &str,
     kind: ConfigFieldKind,
     default: Value,
-    group: &str,
+    group: Option<&str>,
 ) -> ConfigField {
     ConfigField {
         key: key.to_string(),
@@ -29,7 +29,7 @@ pub fn field(
         kind,
         default,
         subfields: Vec::new(),
-        group: Some(group.to_string()),
+        group: group.map(str::to_string),
     }
 }
 
@@ -39,7 +39,7 @@ pub fn bool_field(
     label: &str,
     description: &str,
     default: bool,
-    group: &str,
+    group: Option<&str>,
 ) -> ConfigField {
     field(
         key,
@@ -57,7 +57,7 @@ pub fn int_field(
     label: &str,
     description: &str,
     default: i64,
-    group: &str,
+    group: Option<&str>,
 ) -> ConfigField {
     field(
         key,
@@ -75,7 +75,7 @@ pub fn string_field(
     label: &str,
     description: &str,
     default: &str,
-    group: &str,
+    group: Option<&str>,
 ) -> ConfigField {
     field(
         key,
@@ -88,7 +88,12 @@ pub fn string_field(
 }
 
 #[must_use]
-pub fn string_array_field(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
+pub fn string_array_field(
+    key: &str,
+    label: &str,
+    description: &str,
+    group: Option<&str>,
+) -> ConfigField {
     field(
         key,
         label,
@@ -100,7 +105,12 @@ pub fn string_array_field(key: &str, label: &str, description: &str, group: &str
 }
 
 #[must_use]
-pub fn channel_field(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
+pub fn channel_field(
+    key: &str,
+    label: &str,
+    description: &str,
+    group: Option<&str>,
+) -> ConfigField {
     field(
         key,
         label,
@@ -112,7 +122,12 @@ pub fn channel_field(key: &str, label: &str, description: &str, group: &str) -> 
 }
 
 #[must_use]
-pub fn role_field(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
+pub fn role_field(
+    key: &str,
+    label: &str,
+    description: &str,
+    group: Option<&str>,
+) -> ConfigField {
     field(
         key,
         label,
@@ -124,7 +139,12 @@ pub fn role_field(key: &str, label: &str, description: &str, group: &str) -> Con
 }
 
 #[must_use]
-pub fn role_array_field(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
+pub fn role_array_field(
+    key: &str,
+    label: &str,
+    description: &str,
+    group: Option<&str>,
+) -> ConfigField {
     field(
         key,
         label,
@@ -142,7 +162,7 @@ pub fn enum_field(
     description: &str,
     options: &[&str],
     default: &str,
-    group: &str,
+    group: Option<&str>,
 ) -> ConfigField {
     field(
         key,

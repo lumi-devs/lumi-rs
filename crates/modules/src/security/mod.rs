@@ -7,6 +7,7 @@ pub mod events;
 pub mod store;
 
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
+use lumi_kernel::security::{DEFAULT_WINDOW_SECS, DestructiveActionKind};
 
 use crate::config;
 
@@ -14,7 +15,7 @@ use crate::config;
 pub struct SecurityModule;
 
 fn number(key: &str, label: &str, description: &str, default: i64, group: &str) -> ConfigField {
-    config::int_field(key, label, description, default, group)
+    config::int_field(key, label, description, default, Some(group))
 }
 
 fn response(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
@@ -24,7 +25,7 @@ fn response(key: &str, label: &str, description: &str, group: &str) -> ConfigFie
         description,
         &["log", "quarantine", "ban"],
         "quarantine",
-        group,
+        Some(group),
     )
 }
 
@@ -53,32 +54,32 @@ impl Module for SecurityModule {
                 "Anti-Nuke",
                 "Watch the audit log for mass destructive actions.",
                 false,
-                anti,
+                Some(anti),
             ),
             number(
                 "window_seconds",
                 "Detection Window",
                 "Sliding window in seconds for counting actions.",
-                60,
+                DEFAULT_WINDOW_SECS.cast_signed(),
                 anti,
             ),
             config::string_array_field(
                 "trusted_role_ids",
                 "Trusted Roles",
                 "Role IDs exempt from anti-nuke.",
-                anti,
+                Some(anti),
             ),
             config::channel_field(
                 "log_channel_id",
                 "Security Log Channel",
                 "Channel for anti-nuke alerts.",
-                anti,
+                Some(anti),
             ),
             number(
                 "max_bans",
                 "Max Bans",
                 "Bans allowed per executor within the window.",
-                5,
+                i64::from(DestructiveActionKind::Ban.default_limit()),
                 limits,
             ),
             response(
@@ -91,7 +92,7 @@ impl Module for SecurityModule {
                 "max_kicks",
                 "Max Kicks",
                 "Kicks allowed per executor within the window.",
-                5,
+                i64::from(DestructiveActionKind::Kick.default_limit()),
                 limits,
             ),
             response(
@@ -104,7 +105,7 @@ impl Module for SecurityModule {
                 "max_channel_deletes",
                 "Max Channel Deletes",
                 "Channel deletions allowed per executor within the window.",
-                3,
+                i64::from(DestructiveActionKind::ChannelDelete.default_limit()),
                 limits,
             ),
             response(
@@ -117,7 +118,7 @@ impl Module for SecurityModule {
                 "max_role_deletes",
                 "Max Role Deletes",
                 "Role deletions allowed per executor within the window.",
-                3,
+                i64::from(DestructiveActionKind::RoleDelete.default_limit()),
                 limits,
             ),
             response(
@@ -130,7 +131,7 @@ impl Module for SecurityModule {
                 "max_webhook_creates",
                 "Max Webhook Creates",
                 "Webhook creations allowed per executor within the window.",
-                3,
+                i64::from(DestructiveActionKind::WebhookCreate.default_limit()),
                 limits,
             ),
             response(
@@ -143,21 +144,21 @@ impl Module for SecurityModule {
                 "max_vanity_changes",
                 "Max Vanity URL Changes",
                 "Vanity invite code changes allowed per executor within the window.",
-                1,
+                i64::from(DestructiveActionKind::VanityChange.default_limit()),
                 limits,
             ),
             number(
                 "max_permission_grants",
                 "Max Dangerous Permission Grants",
                 "Times @everyone can be granted a dangerous permission before the response fires.",
-                1,
+                i64::from(DestructiveActionKind::DangerousPermissionGrant.default_limit()),
                 limits,
             ),
             number(
                 "max_quarantine_bypass",
                 "Max Quarantine Bypass Attempts",
                 "Times a quarantined member's roles can be changed before the response fires.",
-                1,
+                i64::from(DestructiveActionKind::QuarantineBypass.default_limit()),
                 limits,
             ),
             config::bool_field(
@@ -165,7 +166,7 @@ impl Module for SecurityModule {
                 "Lock Mod Commands During Panic",
                 "While panic mode is active, only managers may run permission-gated commands.",
                 true,
-                panic,
+                Some(panic),
             ),
         ]
     }

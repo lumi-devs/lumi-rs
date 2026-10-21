@@ -1,7 +1,6 @@
 use serenity::all::{
     CreateActionRow, CreateContainer, CreateContainerComponent, CreateMediaGallery, CreateSection,
-    CreateSectionAccessory, CreateSectionComponent, CreateSeparator, CreateTextDisplay,
-    CreateThumbnail, CreateUnfurledMediaItem, SeparatorSpacingSize,
+    CreateSeparator, CreateTextDisplay, SeparatorSpacingSize,
 };
 
 use crate::panels::{MAX_ACTION_ROWS, clamp_action_row};
@@ -86,16 +85,4 @@ impl Container {
 
 pub fn text_display(content: impl Into<String>) -> CreateTextDisplay<'static> {
     CreateTextDisplay::new(content.into())
-}
-
-pub fn section_with_thumbnail(
-    components: Vec<CreateSectionComponent<'static>>,
-    url: impl Into<String>,
-) -> CreateSection<'static> {
-    CreateSection::new(
-        components,
-        CreateSectionAccessory::Thumbnail(CreateThumbnail::new(CreateUnfurledMediaItem::new(
-            url.into(),
-        ))),
-    )
 }

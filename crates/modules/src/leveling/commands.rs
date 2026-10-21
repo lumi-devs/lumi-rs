@@ -2,9 +2,9 @@ use poise::serenity_prelude as serenity;
 use serenity::all::{GuildId, UserId};
 
 use lumi_kernel::bot::{Command, Context, Error};
-use lumi_ui::Card;
+use lumi_ui::{Card, cut_text};
 
-use crate::shared::{ellipsize, require_guild};
+use crate::shared::require_guild;
 
 use super::store::{self, XpKind};
 use super::{images, views};
@@ -141,7 +141,7 @@ pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
             .unwrap_or_else(|| format!("User {}", entry.user_id.get()));
         rows.push(images::LeaderboardRow {
             rank: idx + 1,
-            username: ellipsize(&name, 22),
+            username: cut_text(&name, 22),
             level: entry.level,
             xp: entry.total_xp,
             progress: entry.total_xp as f64 / top_xp as f64,

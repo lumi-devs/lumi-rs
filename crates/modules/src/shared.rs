@@ -8,129 +8,6 @@ use serenity::all::GuildId;
 
 use lumi_kernel::Cache;
 use lumi_kernel::bot::{Context, Error};
-use lumi_kernel::module::{ConfigField, ConfigFieldKind};
-use serde_json::{Value, json};
-
-/// One dashboard config field. `group` is the dashboard section label.
-pub fn config_field(
-    key: &str,
-    label: &str,
-    description: &str,
-    kind: ConfigFieldKind,
-    default: Value,
-    group: Option<&str>,
-) -> ConfigField {
-    ConfigField {
-        key: key.to_string(),
-        label: label.to_string(),
-        description: description.to_string(),
-        kind,
-        default,
-        subfields: Vec::new(),
-        group: group.map(str::to_string),
-    }
-}
-
-pub fn string_field(
-    key: &str,
-    label: &str,
-    description: &str,
-    default: &str,
-    group: Option<&str>,
-) -> ConfigField {
-    config_field(
-        key,
-        label,
-        description,
-        ConfigFieldKind::String,
-        json!(default),
-        group,
-    )
-}
-
-pub fn int_field(
-    key: &str,
-    label: &str,
-    description: &str,
-    default: i64,
-    group: Option<&str>,
-) -> ConfigField {
-    config_field(
-        key,
-        label,
-        description,
-        ConfigFieldKind::Integer,
-        json!(default),
-        group,
-    )
-}
-
-pub fn bool_field(
-    key: &str,
-    label: &str,
-    description: &str,
-    default: bool,
-    group: Option<&str>,
-) -> ConfigField {
-    config_field(
-        key,
-        label,
-        description,
-        ConfigFieldKind::Boolean,
-        json!(default),
-        group,
-    )
-}
-
-pub fn channel_field(
-    key: &str,
-    label: &str,
-    description: &str,
-    group: Option<&str>,
-) -> ConfigField {
-    config_field(
-        key,
-        label,
-        description,
-        ConfigFieldKind::Channel,
-        Value::Null,
-        group,
-    )
-}
-
-pub fn string_array_field(
-    key: &str,
-    label: &str,
-    description: &str,
-    group: Option<&str>,
-) -> ConfigField {
-    config_field(
-        key,
-        label,
-        description,
-        ConfigFieldKind::StringArray,
-        json!([]),
-        group,
-    )
-}
-
-pub fn enum_field(
-    key: &str,
-    label: &str,
-    description: &str,
-    options: &[&str],
-    default: &str,
-    group: Option<&str>,
-) -> ConfigField {
-    config_field(
-        key,
-        label,
-        description,
-        ConfigFieldKind::Enum(options.iter().map(|o| (*o).to_string()).collect()),
-        json!(default),
-        group,
-    )
-}
 
 /// Guild id for a guild-only command, as a typed error instead of a panic.
 pub fn require_guild(ctx: Context<'_>) -> Result<GuildId, Error> {
@@ -189,18 +66,9 @@ pub fn group_digits(n: i64) -> String {
     if n < 0 { format!("-{out}") } else { out }
 }
 
+/// Truncate to `max` chars without an ellipsis (names, identifiers, log text).
 pub fn truncate_chars(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
-}
-
-/// Cut to at most `max` characters, appending `…` when the text was shortened.
-pub fn ellipsize(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
-    out.push('\u{2026}');
-    out
 }
 
 /// Clamped page math for a fixed page size: `(page, total_pages, offset)`.
@@ -213,7 +81,7 @@ pub fn page_bounds(total_items: u64, per_page: u64, requested: usize) -> (usize,
 
 #[cfg(test)]
 mod tests {
-    use super::{ellipsize, format_seconds, group_digits, page_bounds, truncate_chars};
+    use super::{format_seconds, group_digits, page_bounds, truncate_chars};
 
     #[test]
     fn groups_thousands() {
@@ -236,8 +104,6 @@ mod tests {
     #[test]
     fn truncates_on_char_boundaries() {
         assert_eq!(truncate_chars("héllo", 3), "hél");
-        assert_eq!(ellipsize("héllo", 4), "hél\u{2026}");
-        assert_eq!(ellipsize("ok", 10), "ok");
     }
 
     #[test]

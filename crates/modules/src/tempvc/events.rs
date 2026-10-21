@@ -7,9 +7,8 @@ use lumi_ui::Card;
 
 use crate::shared::truncate_chars;
 
-use super::{store, views};
+use super::{MAX_CHANNEL_NAME, store, views};
 
-const MAX_CHANNEL_NAME: usize = 100;
 /// Per-user delay between generator joins; a faster attempt is refused.
 const CREATE_COOLDOWN_MS: u64 = 30_000;
 

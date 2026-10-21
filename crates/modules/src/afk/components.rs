@@ -3,8 +3,8 @@
 use chrono::Utc;
 use poise::serenity_prelude as serenity;
 use serenity::all::{
-    ChannelId, ComponentInteraction, CreateAllowedMentions, CreateInteractionResponse,
-    CreateInteractionResponseMessage, GenericChannelId, MessageFlags, MessageId,
+    ChannelId, ComponentInteraction, CreateInteractionResponse, GenericChannelId, MessageFlags,
+    MessageId,
 };
 
 use lumi_kernel::Services;
@@ -51,7 +51,7 @@ pub async fn handle_component(
         .take(PAGE_SIZE)
         .map(|mention| render_mention(ctx, guild_id.get(), mention))
         .collect();
-    let card = mentions_card(
+    let mut card = mentions_card(
         &items,
         page,
         total_pages,
@@ -62,20 +62,11 @@ pub async fn handle_component(
         .message
         .flags
         .is_some_and(|flags| flags.contains(MessageFlags::EPHEMERAL));
+    card.ephemeral = true;
     let response = if ephemeral_source {
-        CreateInteractionResponse::UpdateMessage(
-            CreateInteractionResponseMessage::new()
-                .components(card.components)
-                .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
-                .allowed_mentions(CreateAllowedMentions::new()),
-        )
+        card.update()
     } else {
-        CreateInteractionResponse::Message(
-            CreateInteractionResponseMessage::new()
-                .components(card.components)
-                .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
-                .allowed_mentions(CreateAllowedMentions::new()),
-        )
+        CreateInteractionResponse::Message(card.interaction_message())
     };
     component.create_response(&ctx.http, response).await?;
     Ok(())

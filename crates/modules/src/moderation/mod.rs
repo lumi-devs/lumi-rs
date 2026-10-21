@@ -37,19 +37,19 @@ impl Module for ModerationModule {
                 "DM on Punish",
                 "Notify users directly via DM when they receive a moderation action.",
                 true,
-                "general",
+                Some("general"),
             ),
             config::channel_field(
                 "mod_log_channel",
                 "Moderation Log Channel",
                 "Channel where moderation action logs and audit records are posted.",
-                "general",
+                Some("general"),
             ),
             config::role_field(
                 "quarantine_role_id",
                 "Quarantine Role",
                 "Role applied by /quarantine and anti-nuke enforcement.",
-                "general",
+                Some("general"),
             ),
         ]
     }

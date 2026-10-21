@@ -165,7 +165,6 @@ impl Claims {
 #[derive(Debug, Serialize, Deserialize)]
 enum Invalidation {
     Keys(Vec<String>),
-    Prefix(String),
 }
 
 pub struct Cache {
@@ -226,16 +225,6 @@ impl Cache {
         let mut conn = self.redis.clone();
         let ttl: i64 = conn.pttl(key).await?;
         Ok(ttl.max(0))
-    }
-
-    /// Round-trip time of a Redis command, in milliseconds. Uses `PING` so the
-    /// health dashboard's polling does not inflate `keyspace_misses` (a `GET`
-    /// on a missing key counts as a miss and would drag the hit ratio to 0%).
-    pub async fn probe_read_ms(&self) -> Result<f64> {
-        let mut conn = self.redis.clone();
-        let started = std::time::Instant::now();
-        let _: String = redis::cmd("PING").query_async(&mut conn).await?;
-        Ok(started.elapsed().as_secs_f64() * 1000.0)
     }
 
     /// Share of Redis key lookups that hit, in percent. `None` until the server
@@ -376,40 +365,6 @@ impl Cache {
             .await
     }
 
-    pub async fn invalidate_prefix(&self, prefix: &str) -> Result<()> {
-        let local_keys: Vec<String> = self
-            .local
-            .iter()
-            .map(|(key, _)| key.to_string())
-            .filter(|key| key.starts_with(prefix))
-            .collect();
-        for key in local_keys {
-            self.local.invalidate(&key).await;
-        }
-
-        let mut conn = self.redis.clone();
-        let mut cursor = 0_u64;
-        loop {
-            let (next, batch): (u64, Vec<String>) = redis::cmd("SCAN")
-                .arg(cursor)
-                .arg("MATCH")
-                .arg(format!("{prefix}*"))
-                .arg("COUNT")
-                .arg(100)
-                .query_async(&mut conn)
-                .await?;
-            if !batch.is_empty() {
-                let _: i64 = conn.del(batch.as_slice()).await?;
-            }
-            cursor = next;
-            if cursor == 0 {
-                break;
-            }
-        }
-        self.publish(&Invalidation::Prefix(prefix.to_string()))
-            .await
-    }
-
     async fn publish(&self, msg: &Invalidation) -> Result<()> {
         let payload = serde_json::to_string(msg)?;
         let mut conn = self.redis.clone();
@@ -443,17 +398,6 @@ impl Cache {
             let payload: String = msg.get_payload()?;
             match serde_json::from_str::<Invalidation>(&payload) {
                 Ok(Invalidation::Keys(keys)) => {
-                    for key in keys {
-                        self.local.invalidate(&key).await;
-                    }
-                }
-                Ok(Invalidation::Prefix(prefix)) => {
-                    let keys: Vec<String> = self
-                        .local
-                        .iter()
-                        .map(|(key, _)| key.to_string())
-                        .filter(|key| key.starts_with(&prefix))
-                        .collect();
                     for key in keys {
                         self.local.invalidate(&key).await;
                     }

@@ -29,11 +29,6 @@ static PROMETHEUS: LazyLock<Option<PrometheusHandle>> =
         }
     });
 
-/// Install the global Prometheus recorder. Idempotent.
-pub fn init_metrics() {
-    LazyLock::force(&PROMETHEUS);
-}
-
 fn render_metrics() -> String {
     PROMETHEUS
         .as_ref()

@@ -7,7 +7,7 @@ use lumi_ui::{Card, CardKind};
 
 use crate::moderation::channels as permissions;
 
-use super::{guild_id, send_card};
+use super::{require_guild, send_card};
 
 /// Lock or unlock one channel for @everyone.
 #[poise::command(
@@ -45,7 +45,7 @@ pub async fn lock_enable(
     #[description = "Channel to lock (defaults to this one)"] channel: Option<GenericChannelId>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     let channel_id = ChannelId::new(channel.unwrap_or_else(|| ctx.channel_id()).get());
 
     permissions::set_channel_locked(
@@ -85,7 +85,7 @@ pub async fn lock_disable(
     #[description = "Channel to unlock (defaults to this one)"] channel: Option<GenericChannelId>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     let channel_id = ChannelId::new(channel.unwrap_or_else(|| ctx.channel_id()).get());
 
     permissions::set_channel_locked(
@@ -144,7 +144,7 @@ pub async fn lockdown(ctx: Context<'_>) -> Result<(), Error> {
 )]
 pub async fn lockdown_enable(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     let changes = permissions::set_guild_locked(ctx.http(), guild, true, "Server lockdown").await;
 
     if changes.all_failed() {
@@ -190,7 +190,7 @@ pub async fn lockdown_enable(ctx: Context<'_>) -> Result<(), Error> {
 )]
 pub async fn lockdown_disable(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild = guild_id(ctx)?;
+    let guild = require_guild(ctx)?;
     let changes =
         permissions::set_guild_locked(ctx.http(), guild, false, "Server lockdown lifted").await;
 

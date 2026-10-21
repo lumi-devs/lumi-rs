@@ -10,7 +10,7 @@ use lumi_ui::panels::{
 };
 use lumi_ui::{Card, CardKind, CardOptions, CardReply, format_page_footer};
 
-use super::{GuildCtx, HubId, HubOutcome, HubView, cid, tab_row};
+use super::{GuildCtx, HubId, HubOutcome, HubView, cid, selected_value, tab_row};
 
 const PERMS_PER_PAGE: usize = 4;
 const PERMIT_ORDER_PER_PAGE: usize = 3;
@@ -468,14 +468,14 @@ pub async fn dispatch(
             ))
         }
         "permexplainuser" => {
-            let subject = first_value(data).and_then(|v| v.parse::<u64>().ok());
+            let subject = selected_value(data).and_then(|v| v.parse::<u64>().ok());
             Ok(HubOutcome::Update(
                 explain_picker_card(services, guild, subject, 0).await?,
             ))
         }
         "permexplainnode" => {
             let subject = id.get(1).and_then(|s| s.parse::<u64>().ok());
-            match (subject, first_value(data)) {
+            match (subject, selected_value(data)) {
                 (Some(subject), Some(node)) => Ok(HubOutcome::Update(
                     explain_card(services, guild, &node, subject).await?,
                 )),
@@ -493,7 +493,7 @@ pub async fn dispatch(
             }
             Some("pick") => {
                 let kind = parse_kind(&id.tail(2));
-                let permit = match first_value(data).and_then(|v| v.parse::<i32>().ok()) {
+                let permit = match selected_value(data).and_then(|v| v.parse::<i32>().ok()) {
                     Some(permit_id) => {
                         lumi_db::get_permit(&services.db, guild.id, permit_id).await?
                     }
@@ -516,7 +516,7 @@ pub async fn dispatch(
                     _ => PermitTargetType::User,
                 };
                 if let (Some(permit_id), Some(target_val)) =
-                    (id.tail(2).parse::<i32>().ok(), first_value(data))
+                    (id.tail(2).parse::<i32>().ok(), selected_value(data))
                 {
                     if let Ok(target_snowflake) = target_val.parse::<lumi_db::ids::SnowflakeId>() {
                         lumi_db::assign_permit(
@@ -596,17 +596,4 @@ fn parse_target(payload: &str) -> Option<(i32, PermitTargetType, String)> {
 
 fn parse_page(token: Option<&str>) -> usize {
     token.and_then(|t| t.parse().ok()).unwrap_or(0)
-}
-
-fn first_value(data: &serenity::ComponentInteractionData) -> Option<String> {
-    match &data.kind {
-        ComponentInteractionDataKind::StringSelect { values } => values.first().cloned(),
-        ComponentInteractionDataKind::UserSelect { values } => {
-            values.first().map(|v| v.get().to_string())
-        }
-        ComponentInteractionDataKind::RoleSelect { values } => {
-            values.first().map(|v| v.get().to_string())
-        }
-        _ => None,
-    }
 }

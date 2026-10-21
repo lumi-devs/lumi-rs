@@ -5,11 +5,10 @@ use serenity::all::UserId;
 use lumi_kernel::bot::{Context, Error};
 use lumi_ui::{Card, CardKind};
 
-use crate::confirm;
 use crate::moderation::store;
 use crate::moderation::views::{action_from_str, case_card, notes_list_card};
 
-use super::{guild_id, send_card};
+use super::{require_guild, send_card};
 
 /// View, modify, or delete moderation cases.
 #[poise::command(
@@ -71,7 +70,7 @@ pub async fn cases_view(
     #[description = "Filter by action (warn, kick, ban, etc.)"] action: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = guild_id(ctx)?.get();
+    let guild_id = require_guild(ctx)?.get();
 
     if let Some(number) = number {
         return show_case(ctx, guild_id, number).await;
@@ -196,7 +195,7 @@ pub async fn cases_modify(
     #[description = "New reason"] reason: String,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = guild_id(ctx)?.get();
+    let guild_id = require_guild(ctx)?.get();
     update_reason(ctx, guild_id, number, &reason).await
 }
 
@@ -213,12 +212,12 @@ pub async fn cases_delete(
     #[description = "Case number to delete"] number: i32,
 ) -> Result<(), Error> {
     let body = format!("Are you sure you want to permanently delete Case `#{number}`?");
-    if !confirm::confirm(
+    if !lumi_ui::confirm_poise(
         ctx,
-        "moderation",
         "⚠️ Confirm Case Deletion",
         &body,
         "Delete Case",
+        std::time::Duration::from_secs(30),
     )
     .await?
     {
@@ -233,7 +232,7 @@ pub async fn cases_delete(
     }
 
     ctx.defer().await?;
-    let guild_id = guild_id(ctx)?.get();
+    let guild_id = require_guild(ctx)?.get();
     if store::delete_case(&ctx.data().db, guild_id, number)
         .await?
         .is_some()
@@ -274,7 +273,7 @@ pub async fn case(
     #[description = "Case number to lookup"] number: i32,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    show_case(ctx, guild_id(ctx)?.get(), number).await
+    show_case(ctx, require_guild(ctx)?.get(), number).await
 }
 
 /// Update the reason of an existing moderation case.
@@ -290,7 +289,7 @@ pub async fn reason(
     #[description = "New reason"] reason: String,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    update_reason(ctx, guild_id(ctx)?.get(), number, &reason).await
+    update_reason(ctx, require_guild(ctx)?.get(), number, &reason).await
 }
 
 /// View or add moderator notes for a member.
@@ -306,7 +305,7 @@ pub async fn note(
     #[description = "Note text to append (leave empty to view notes)"] text: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-    let guild_id = guild_id(ctx)?.get();
+    let guild_id = require_guild(ctx)?.get();
 
     if let Some(content) = text {
         store::add_note(

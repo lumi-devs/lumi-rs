@@ -1,6 +1,7 @@
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
-use crate::shared::{int_field, string_field};
+use self::config::EconomyConfig;
+use crate::config::{int_field, string_field};
 
 pub mod commands;
 pub mod config;
@@ -31,103 +32,104 @@ impl Module for EconomyModule {
     }
 
     fn config_schema(&self) -> Vec<ConfigField> {
+        let defaults = EconomyConfig::default();
         vec![
             string_field(
                 "currency_name",
                 "Currency Name",
                 "What the currency is called (shown after amounts).",
-                "credits",
+                &defaults.currency_name,
                 None,
             ),
             string_field(
                 "currency_emoji",
                 "Currency Emoji",
                 "Emoji shown before amounts.",
-                "🪙",
+                &defaults.currency_emoji,
                 None,
             ),
             string_field(
                 "bank_name",
                 "Bank Label",
                 "What the bank balance is called.",
-                "Bank",
+                &defaults.bank_name,
                 None,
             ),
             int_field(
                 "starting_wallet",
                 "Starting Wallet",
                 "Wallet balance for new accounts.",
-                100,
+                defaults.starting_wallet,
                 None,
             ),
             int_field(
                 "starting_bank",
                 "Starting Bank",
                 "Bank balance for new accounts.",
-                0,
+                defaults.starting_bank,
                 None,
             ),
             int_field(
                 "max_balance",
                 "Maximum Balance",
                 "Cap applied to both wallet and bank.",
-                1_000_000,
+                defaults.max_balance,
                 None,
             ),
             int_field(
                 "payday_amount",
                 "Payday Amount",
                 "Currency granted by /payday.",
-                120,
+                defaults.payday_amount,
                 None,
             ),
             int_field(
                 "payday_cooldown_seconds",
                 "Payday Cooldown (seconds)",
                 "Wait between /payday claims.",
-                300,
+                defaults.payday_cooldown_seconds,
                 None,
             ),
             int_field(
                 "transfer_tax_percent",
                 "Transfer Tax (%)",
                 "Percent withheld from /pay transfers.",
-                0,
+                defaults.transfer_tax_percent,
                 None,
             ),
             int_field(
                 "slot_min_bid",
                 "Slots Minimum Bid",
                 "Smallest allowed /slots bet.",
-                5,
+                defaults.slot_min_bid,
                 None,
             ),
             int_field(
                 "slot_max_bid",
                 "Slots Maximum Bid",
                 "Largest allowed /slots bet.",
-                100,
+                defaults.slot_max_bid,
                 None,
             ),
             int_field(
                 "slot_cooldown_seconds",
                 "Slots Cooldown (seconds)",
                 "Wait between /slots spins.",
-                5,
+                defaults.slot_cooldown_seconds,
                 None,
             ),
             int_field(
                 "slot_payout_triple",
                 "Slots Triple Payout (x)",
                 "Multiplier for three matching symbols.",
-                5,
+                defaults.slot_payout_triple,
                 None,
             ),
             int_field(
                 "slot_payout_pair",
                 "Slots Pair Payout (x)",
                 "Multiplier for two matching symbols.",
-                2,
+                defaults.slot_payout_pair,
                 None,
             ),
         ]

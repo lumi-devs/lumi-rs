@@ -12,9 +12,9 @@ mod mentions;
 pub use components::{PREFIX, handle_component};
 pub use listeners::on_message;
 
-use serde_json::json;
+use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
-use lumi_kernel::module::{ConfigField, ConfigFieldKind, Module, ModuleMeta};
+use crate::config::{bool_field, int_field};
 
 #[derive(Debug)]
 pub struct AfkModule;
@@ -41,34 +41,27 @@ impl Module for AfkModule {
 
     fn config_schema(&self) -> Vec<ConfigField> {
         vec![
-            ConfigField {
-                key: "nick_prefix_enabled".to_string(),
-                label: "Nickname Prefix".to_string(),
-                description: "Prepend [AFK] to nickname while AFK.".to_string(),
-                kind: ConfigFieldKind::Boolean,
-                default: json!(true),
-                subfields: Vec::new(),
-                group: None,
-            },
-            ConfigField {
-                key: "welcome_back_enabled".to_string(),
-                label: "Welcome Back Card".to_string(),
-                description: "Post a card when an AFK member returns.".to_string(),
-                kind: ConfigFieldKind::Boolean,
-                default: json!(true),
-                subfields: Vec::new(),
-                group: None,
-            },
-            ConfigField {
-                key: "welcome_ttl_seconds".to_string(),
-                label: "Welcome Card Lifetime".to_string(),
-                description: "Seconds before the welcome card and its mention list are removed."
-                    .to_string(),
-                kind: ConfigFieldKind::Integer,
-                default: json!(20),
-                subfields: Vec::new(),
-                group: None,
-            },
+            bool_field(
+                "nick_prefix_enabled",
+                "Nickname Prefix",
+                "Prepend [AFK] to nickname while AFK.",
+                true,
+                None,
+            ),
+            bool_field(
+                "welcome_back_enabled",
+                "Welcome Back Card",
+                "Post a card when an AFK member returns.",
+                true,
+                None,
+            ),
+            int_field(
+                "welcome_ttl_seconds",
+                "Welcome Card Lifetime",
+                "Seconds before the welcome card and its mention list are removed.",
+                i64::from(constants::DEFAULT_WELCOME_TTL_SECS),
+                None,
+            ),
         ]
     }
 }

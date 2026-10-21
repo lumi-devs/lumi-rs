@@ -10,6 +10,9 @@ pub use events::on_voice_state_update;
 
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
+/// Discord's hard limit for channel names.
+pub(super) const MAX_CHANNEL_NAME: usize = 100;
+
 #[derive(Debug)]
 pub struct TempVcModule;
 

@@ -14,7 +14,6 @@ use moka::future::Cache as MokaCache;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use serde::{Deserialize, Serialize};
 
-use lumi_db::entities::enums::CaseAction;
 use lumi_db::entities::panic_state;
 
 use crate::{LumiError, Result};
@@ -379,47 +378,7 @@ impl SecurityManager {
             response,
         })
     }
-
-    pub async fn apply_quarantine(
-        &self,
-        guild_id: &str,
-        target_user_id: &str,
-        moderator_id: &str,
-        reason: &str,
-    ) -> Result<lumi_db::entities::moderation_case::Model> {
-        let guild_id_u64: u64 = guild_id
-            .parse()
-            .map_err(|_| LumiError::Invalid(format!("guild id '{guild_id}' is not numeric")))?;
-        let case_num = lumi_db::next_counter(&self.db, guild_id_u64, "cases").await?;
-        let case_number = i32::try_from(case_num)
-            .map_err(|_| LumiError::Other(format!("case counter overflow for guild {guild_id}")))?;
-
-        let target_snowflake: lumi_db::ids::UserId = target_user_id.parse().map_err(|_| {
-            LumiError::Invalid(format!("target user id '{target_user_id}' is not numeric"))
-        })?;
-        let mod_snowflake: lumi_db::ids::UserId = moderator_id.parse().map_err(|_| {
-            LumiError::Invalid(format!("moderator id '{moderator_id}' is not numeric"))
-        })?;
-
-        let row = lumi_db::entities::moderation_case::ActiveModel {
-            guild_id: Set(lumi_db::ids::GuildId::from(guild_id_u64)),
-            case_number: Set(case_number),
-            user_id: Set(target_snowflake),
-            moderator_id: Set(mod_snowflake),
-            action: Set(CaseAction::Quarantine),
-            custom_action: Set(None),
-            reason: Set(Some(reason.to_string())),
-            duration: Set(None),
-            expires_at: Set(None),
-            active: Set(true),
-            created_at: Set(Utc::now().fixed_offset()),
-            ..Default::default()
-        };
-
-        Ok(row.insert(&self.db).await?)
-    }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

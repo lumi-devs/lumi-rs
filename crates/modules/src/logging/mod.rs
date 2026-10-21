@@ -6,7 +6,7 @@ pub mod views;
 
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
-use crate::shared::{bool_field, channel_field, string_array_field};
+use crate::config::{bool_field, channel_field, string_array_field};
 
 #[derive(Debug)]
 pub struct LoggingModule;
