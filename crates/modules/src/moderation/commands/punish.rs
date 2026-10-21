@@ -8,7 +8,6 @@ use lumi_db::entities::enums::CaseAction;
 use lumi_kernel::bot::{Context, Error};
 use lumi_ui::{Card, CardKind};
 
-use crate::confirm;
 use crate::moderation::actions::{self, BulkOutcome};
 use crate::moderation::store::{self, CreateCaseParams, ModConfig};
 use crate::moderation::views::{action_color, action_success_card, human_seconds, punishment_card};
@@ -236,7 +235,15 @@ pub async fn kick(
         "Are you sure you want to kick the following member(s)?\n\n{display}\n\n**Reason**: {}",
         reason.as_deref().unwrap_or("No reason provided")
     );
-    if !confirm::confirm(ctx, "moderation", "⚠️ Confirm Kick", &body, "Confirm Kick").await? {
+    if !lumi_ui::confirm_poise(
+        ctx,
+        "⚠️ Confirm Kick",
+        &body,
+        "Confirm Kick",
+        Duration::from_secs(30),
+    )
+    .await?
+    {
         return send_card(
             ctx,
             Card::lines(
@@ -312,7 +319,15 @@ pub async fn ban(
         "Are you sure you want to ban the following user(s)?\n\n{display}\n\n**Delete Messages**: {days} day(s)\n**Reason**: {}",
         reason.as_deref().unwrap_or("No reason provided")
     );
-    if !confirm::confirm(ctx, "moderation", "⚠️ Confirm Ban", &body, "Confirm Ban").await? {
+    if !lumi_ui::confirm_poise(
+        ctx,
+        "⚠️ Confirm Ban",
+        &body,
+        "Confirm Ban",
+        Duration::from_secs(30),
+    )
+    .await?
+    {
         return send_card(
             ctx,
             Card::lines(

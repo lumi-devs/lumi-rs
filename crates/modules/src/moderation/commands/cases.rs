@@ -5,7 +5,6 @@ use serenity::all::UserId;
 use lumi_kernel::bot::{Context, Error};
 use lumi_ui::{Card, CardKind};
 
-use crate::confirm;
 use crate::moderation::store;
 use crate::moderation::views::{action_from_str, case_card, notes_list_card};
 
@@ -213,12 +212,12 @@ pub async fn cases_delete(
     #[description = "Case number to delete"] number: i32,
 ) -> Result<(), Error> {
     let body = format!("Are you sure you want to permanently delete Case `#{number}`?");
-    if !confirm::confirm(
+    if !lumi_ui::confirm_poise(
         ctx,
-        "moderation",
         "⚠️ Confirm Case Deletion",
         &body,
         "Delete Case",
+        std::time::Duration::from_secs(30),
     )
     .await?
     {

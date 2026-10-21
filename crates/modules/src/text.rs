@@ -4,12 +4,7 @@
 /// shortened.
 #[must_use]
 pub fn cut(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
+    crate::shared::ellipsize(text, max)
 }
 
 #[cfg(test)]

@@ -142,7 +142,7 @@ impl serenity::EventHandler for Events {
                                 %error,
                                 guild_id = ?guild_id,
                                 user_id,
-                                custom_id,
+                                %custom_id,
                                 "component interaction failed"
                             );
                         }
@@ -158,7 +158,7 @@ impl serenity::EventHandler for Events {
                                 %error,
                                 guild_id = ?guild_id,
                                 user_id,
-                                custom_id,
+                                %custom_id,
                                 "modal interaction failed"
                             );
                         }

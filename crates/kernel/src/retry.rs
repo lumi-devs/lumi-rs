@@ -22,7 +22,7 @@ where
 {
     tokio::time::timeout(limit, future)
         .await
-        .map_err(|_| LumiError::Timeout(what.to_string()))
+        .map_err(|_| LumiError::Timeout(what.to_string()))?
 }
 
 /// Retry `op` at most `attempts` times in total, backing off exponentially from

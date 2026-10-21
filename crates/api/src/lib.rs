@@ -15,8 +15,8 @@ use serde_json::{Value, json};
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 
+use lumi_kernel::Result;
 use lumi_kernel::services::Services;
-use lumi_kernel::{Config, Result};
 
 mod interactions;
 
@@ -59,15 +59,30 @@ pub struct ActionResponse {
     pub error: Option<String>,
 }
 
-/// Serve the RPC surface on `addr`. `token` is the expected bearer token;
-/// `None` leaves `/action` unauthenticated (loopback/dev only).
-pub async fn serve(
+/// Serve the RPC surface on `addr`. The bearer token comes from
+/// `RPC_TOKEN`; when unset, `/action` is unauthenticated (loopback/dev only).
+pub async fn serve(addr: SocketAddr, services: Arc<Services>) -> Result<()> {
+    serve_with_shutdown(addr, services, shutdown_signal()).await
+}
+
+/// Serve the RPC surface on `addr` with graceful shutdown support.
+pub async fn serve_with_shutdown<F>(
     addr: SocketAddr,
-    token: Option<String>,
-    config: &Config,
     services: Arc<Services>,
-) -> Result<()> {
-    let state = RpcState { token, services };
+    shutdown: F,
+) -> Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    init_metrics();
+    let token = services.cfg.rpc_token.clone();
+    if token.is_none() {
+        tracing::warn!("RPC_TOKEN is unset; /action accepts unauthenticated requests");
+    }
+    let state = RpcState {
+        token,
+        services: Arc::clone(&services),
+    };
 
     let governor_conf = GovernorConfigBuilder::default()
         .per_second(5)
@@ -75,7 +90,7 @@ pub async fn serve(
         .finish()
         .unwrap_or_default();
 
-    let interactions_router = interactions::router(config);
+    let interactions_router = interactions::router(&services.cfg);
 
     let api_routes = Router::new()
         .route("/action", post(action))
@@ -94,7 +109,7 @@ pub async fn serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(shutdown)
     .await?;
     Ok(())
 }

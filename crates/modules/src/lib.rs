@@ -1,6 +1,5 @@
 pub mod afk;
 pub mod config;
-pub mod confirm;
 pub mod economy;
 pub mod filter;
 pub mod leveling;
