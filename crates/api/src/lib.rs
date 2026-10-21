@@ -131,14 +131,27 @@ async fn action(
                 error: None,
             }),
         ),
-        "cache.clear" => (
-            StatusCode::OK,
-            Json(ActionResponse {
-                success: true,
-                data: Some(json!({ "message": "cache invalidation triggered" })),
-                error: None,
-            }),
-        ),
+        "cache.clear" => {
+            state.services.cache.clear_local();
+            match state.services.cache.publish_clear().await {
+                Ok(()) => (
+                    StatusCode::OK,
+                    Json(ActionResponse {
+                        success: true,
+                        data: Some(json!({ "message": "cache cleared and invalidation signal published" })),
+                        error: None,
+                    }),
+                ),
+                Err(err) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ActionResponse {
+                        success: false,
+                        data: None,
+                        error: Some(err.to_string()),
+                    }),
+                ),
+            }
+        }
         "modules.list" => {
             let modules: Vec<_> = state
                 .services

@@ -39,13 +39,17 @@ fn env_text(name: &str, default: &str) -> String {
 
 fn options(url: &str) -> ConnectOptions {
     let mut options = ConnectOptions::new(url.to_owned());
+    let min_connections = env_number("DATABASE_MIN_CONNECTIONS", 2);
+    let max_connections = env_number("DATABASE_MAX_CONNECTIONS", 20).max(min_connections);
+    let acquire_timeout_ms = if let Ok(secs) = std::env::var("DATABASE_ACQUIRE_TIMEOUT_SECS") {
+        secs.trim().parse::<u64>().unwrap_or(5).saturating_mul(1_000)
+    } else {
+        env_number("DATABASE_ACQUIRE_TIMEOUT_MS", 5_000)
+    };
     options
-        .max_connections(env_number("DATABASE_MAX_CONNECTIONS", 12))
-        .min_connections(env_number("DATABASE_MIN_CONNECTIONS", 2))
-        .acquire_timeout(Duration::from_millis(env_number(
-            "DATABASE_ACQUIRE_TIMEOUT_MS",
-            3_000,
-        )))
+        .max_connections(max_connections)
+        .min_connections(min_connections)
+        .acquire_timeout(Duration::from_millis(acquire_timeout_ms))
         .idle_timeout(Duration::from_secs(env_number(
             "DATABASE_IDLE_TIMEOUT_SECS",
             300,

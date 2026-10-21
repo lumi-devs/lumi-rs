@@ -1,4 +1,8 @@
+use std::sync::OnceLock;
+use std::time::Duration;
+
 use chrono::Utc;
+use moka::future::Cache as MokaCache;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
     sea_query::OnConflict,
@@ -6,6 +10,30 @@ use sea_orm::{
 
 use lumi_db::entities::{temp_vc_generator, temp_vc_record};
 use lumi_kernel::Result;
+
+const CACHE_CAPACITY: u64 = 10_000;
+const CACHE_TTL: Duration = Duration::from_secs(300);
+
+fn generator_cache() -> &'static MokaCache<(u64, u64), Option<temp_vc_generator::Model>> {
+    static CACHE: OnceLock<MokaCache<(u64, u64), Option<temp_vc_generator::Model>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| {
+        MokaCache::builder()
+            .max_capacity(CACHE_CAPACITY)
+            .time_to_live(CACHE_TTL)
+            .build()
+    })
+}
+
+fn record_cache() -> &'static MokaCache<(u64, u64), Option<temp_vc_record::Model>> {
+    static CACHE: OnceLock<MokaCache<(u64, u64), Option<temp_vc_record::Model>>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        MokaCache::builder()
+            .max_capacity(CACHE_CAPACITY)
+            .time_to_live(CACHE_TTL)
+            .build()
+    })
+}
 
 pub async fn create_generator(
     db: &DatabaseConnection,
@@ -35,6 +63,7 @@ pub async fn create_generator(
         )
         .exec(db)
         .await?;
+    generator_cache().invalidate(&(guild_id, channel_id)).await;
     Ok(())
 }
 
@@ -43,22 +72,34 @@ pub async fn get_generator(
     guild_id: u64,
     channel_id: u64,
 ) -> Result<Option<temp_vc_generator::Model>> {
-    Ok(temp_vc_generator::Entity::find()
+    let key = (guild_id, channel_id);
+    if let Some(cached) = generator_cache().get(&key).await {
+        return Ok(cached);
+    }
+    let generator = temp_vc_generator::Entity::find()
         .filter(temp_vc_generator::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .filter(temp_vc_generator::Column::ChannelId.eq(lumi_db::ids::ChannelId::from(channel_id)))
         .one(db)
-        .await?)
+        .await?;
+    generator_cache().insert(key, generator.clone()).await;
+    Ok(generator)
 }
 
 pub async fn list_generators(
     db: &DatabaseConnection,
     guild_id: u64,
 ) -> Result<Vec<temp_vc_generator::Model>> {
-    Ok(temp_vc_generator::Entity::find()
+    let rows = temp_vc_generator::Entity::find()
         .filter(temp_vc_generator::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .order_by_asc(temp_vc_generator::Column::Name)
         .all(db)
-        .await?)
+        .await?;
+    for row in &rows {
+        generator_cache()
+            .insert((guild_id, row.channel_id.get()), Some(row.clone()))
+            .await;
+    }
+    Ok(rows)
 }
 
 pub async fn update_generator(
@@ -79,6 +120,7 @@ pub async fn update_generator(
         active.limit = Set(limit);
     }
     active.update(db).await?;
+    generator_cache().invalidate(&(guild_id, channel_id)).await;
     Ok(true)
 }
 
@@ -92,6 +134,7 @@ pub async fn delete_generator(
         .filter(temp_vc_generator::Column::ChannelId.eq(lumi_db::ids::ChannelId::from(channel_id)))
         .exec(db)
         .await?;
+    generator_cache().insert((guild_id, channel_id), None).await;
     Ok(result.rows_affected > 0)
 }
 
@@ -131,6 +174,7 @@ pub async fn create_record(
         )
         .exec(db)
         .await?;
+    record_cache().invalidate(&(guild_id, channel_id)).await;
     Ok(())
 }
 
@@ -139,11 +183,17 @@ pub async fn get_record(
     guild_id: u64,
     channel_id: u64,
 ) -> Result<Option<temp_vc_record::Model>> {
-    Ok(temp_vc_record::Entity::find()
+    let key = (guild_id, channel_id);
+    if let Some(cached) = record_cache().get(&key).await {
+        return Ok(cached);
+    }
+    let record = temp_vc_record::Entity::find()
         .filter(temp_vc_record::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .filter(temp_vc_record::Column::ChannelId.eq(lumi_db::ids::ChannelId::from(channel_id)))
         .one(db)
-        .await?)
+        .await?;
+    record_cache().insert(key, record.clone()).await;
+    Ok(record)
 }
 
 pub async fn get_active_channel(
@@ -171,6 +221,7 @@ async fn update_record(
     let mut active: temp_vc_record::ActiveModel = row.into();
     apply(&mut active);
     active.update(db).await?;
+    record_cache().invalidate(&(guild_id, channel_id)).await;
     Ok(true)
 }
 
@@ -220,5 +271,6 @@ pub async fn delete_record(
         .filter(temp_vc_record::Column::ChannelId.eq(lumi_db::ids::ChannelId::from(channel_id)))
         .exec(db)
         .await?;
+    record_cache().insert((guild_id, channel_id), None).await;
     Ok(result.rows_affected > 0)
 }

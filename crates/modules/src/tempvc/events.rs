@@ -54,10 +54,10 @@ pub async fn on_voice_state_update(
     if let Some(old_state) = old {
         if let Some(old_ch_id) = old_state.channel_id {
             if old_state.channel_id != new.channel_id
+                && channel_is_empty(ctx, guild_id, old_ch_id)
                 && store::get_record(&services.db, gid, old_ch_id.get())
                     .await?
                     .is_some()
-                && channel_is_empty(ctx, guild_id, old_ch_id)
             {
                 info!(
                     guild_id = gid,

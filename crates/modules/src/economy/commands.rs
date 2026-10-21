@@ -27,7 +27,7 @@ pub async fn balance(
     let guild_id = require_guild(ctx)?.get();
     let target_id = user.unwrap_or_else(|| ctx.author().id);
 
-    let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
+    let cfg = EconomyConfig::load(&ctx.data().cache, &ctx.data().db, guild_id).await?;
     let bal = store::get_balance(&ctx.data().db, guild_id, target_id.get(), &cfg).await?;
     let target = target_id.to_user(ctx.http()).await?;
 
@@ -50,7 +50,7 @@ pub async fn daily(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?.get();
     let user_id = ctx.author().id.get();
 
-    let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
+    let cfg = EconomyConfig::load(&ctx.data().cache, &ctx.data().db, guild_id).await?;
     let card = match store::claim_daily(&ctx.data().db, guild_id, user_id, &cfg).await? {
         DailyOutcome::Claimed { amount, wallet } => Card::new(
             "✨ Daily Reward Claimed",
@@ -112,7 +112,7 @@ pub async fn pay(
         return Ok(());
     }
 
-    let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
+    let cfg = EconomyConfig::load(&ctx.data().cache, &ctx.data().db, guild_id).await?;
     let result = store::transfer(
         &ctx.data().db,
         guild_id,
@@ -192,7 +192,7 @@ pub async fn deposit_cmd(
         return Ok(());
     }
 
-    let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
+    let cfg = EconomyConfig::load(&ctx.data().cache, &ctx.data().db, guild_id).await?;
     match store::deposit(&ctx.data().db, guild_id, user_id, amount, &cfg).await? {
         Some((wallet, bank)) => {
             let card = Card::new(
@@ -241,7 +241,7 @@ pub async fn withdraw_cmd(
         return Ok(());
     }
 
-    let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
+    let cfg = EconomyConfig::load(&ctx.data().cache, &ctx.data().db, guild_id).await?;
     match store::withdraw(&ctx.data().db, guild_id, user_id, amount, &cfg).await? {
         Some((wallet, bank)) => {
             let card = Card::new(
@@ -313,7 +313,7 @@ async fn admin_adjust(
 
     let reason = reason.unwrap_or_else(|| "no reason given".to_string());
 
-    let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
+    let cfg = EconomyConfig::load(&ctx.data().cache, &ctx.data().db, guild_id).await?;
     let balance = match op {
         AdminOp::Set => {
             store::admin_set_balance(&ctx.data().db, guild_id, target_id, vault, amount, &cfg)
@@ -420,7 +420,7 @@ pub async fn slots(
     let guild_id = require_guild(ctx)?.get();
     let user_id = ctx.author().id.get();
 
-    let cfg = EconomyConfig::load(&ctx.data().db, guild_id).await?;
+    let cfg = EconomyConfig::load(&ctx.data().cache, &ctx.data().db, guild_id).await?;
 
     if bid < cfg.slot_min_bid || bid > cfg.slot_max_bid {
         let card = Card::new(
@@ -514,7 +514,7 @@ pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
         .map_or_else(|| "this server".to_string(), |g| g.name.to_string());
     let caller_id = ctx.author().id.get();
 
-    let reply = leaderboard_reply(ctx.data().reader(), guild_id, &guild_name, 0, caller_id).await?;
+    let reply = leaderboard_reply(&ctx.data().cache, ctx.data().reader(), guild_id, &guild_name, 0, caller_id).await?;
     ctx.send(reply.reply()).await?;
     Ok(())
 }
@@ -542,6 +542,7 @@ pub async fn handle_component(
     let caller_id = interaction.user.id.get();
 
     let reply = leaderboard_reply(
+        &services.cache,
         services.reader(),
         guild_id.get(),
         &guild_name,
@@ -564,6 +565,7 @@ pub async fn handle_component(
 }
 
 async fn leaderboard_reply(
+    cache: &lumi_kernel::Cache,
     db: &sea_orm::DatabaseConnection,
     guild_id: u64,
     guild_name: &str,
@@ -585,7 +587,7 @@ async fn leaderboard_reply(
 
     let (page, total_pages, offset) = page_bounds(total, LEADERBOARD_PER_PAGE, page);
 
-    let cfg = EconomyConfig::load(db, guild_id).await?;
+    let cfg = EconomyConfig::load(cache, db, guild_id).await?;
     let entries = store::get_leaderboard(db, guild_id, LEADERBOARD_PER_PAGE, offset).await?;
 
     let mut lines = Vec::new();

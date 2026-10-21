@@ -1,5 +1,4 @@
-use lumi_kernel::Result;
-use lumi_kernel::module_state;
+use lumi_kernel::{Cache, Result, module_state};
 use sea_orm::DatabaseConnection;
 use serde_json::{Map, Value};
 
@@ -45,74 +44,85 @@ impl Default for EconomyConfig {
 }
 
 impl EconomyConfig {
-    /// Load the whole module config in one query, then apply values in memory.
-    pub async fn load(db: &DatabaseConnection, guild_id: u64) -> Result<Self> {
+    /// Load module config through the two-tier cache, falling back to the database.
+    pub async fn load(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> Result<Self> {
+        let values = module_state::config_cached(cache, db, guild_id, "economy").await;
+        Ok(Self::from_map(&values))
+    }
+
+    /// Load the module config directly from the database without checking cache.
+    pub async fn load_db(db: &DatabaseConnection, guild_id: u64) -> Result<Self> {
         let values = module_state::get_config(db, guild_id, "economy").await;
+        Ok(Self::from_map(&values))
+    }
+
+    /// Construct an EconomyConfig from a module configuration key-value map.
+    pub fn from_map(values: &Map<String, Value>) -> Self {
         let mut cfg = Self::default();
 
-        if let Some(v) = string_value(&values, "currency_name") {
+        if let Some(v) = string_value(values, "currency_name") {
             cfg.currency_name = v;
         }
-        if let Some(v) = string_value(&values, "currency_emoji") {
+        if let Some(v) = string_value(values, "currency_emoji") {
             cfg.currency_emoji = v;
         }
-        if let Some(v) = string_value(&values, "bank_name") {
+        if let Some(v) = string_value(values, "bank_name") {
             cfg.bank_name = v;
         }
         set_i64(
-            &values,
+            values,
             "starting_wallet",
             &mut cfg.starting_wallet,
             0,
             i64::MAX,
         );
         set_i64(
-            &values,
+            values,
             "starting_bank",
             &mut cfg.starting_bank,
             0,
             i64::MAX,
         );
-        set_i64(&values, "max_balance", &mut cfg.max_balance, 1, i64::MAX);
+        set_i64(values, "max_balance", &mut cfg.max_balance, 1, i64::MAX);
         set_i64(
-            &values,
+            values,
             "payday_amount",
             &mut cfg.payday_amount,
             0,
             i64::MAX,
         );
         set_i64(
-            &values,
+            values,
             "payday_cooldown_seconds",
             &mut cfg.payday_cooldown_seconds,
             0,
             86_400,
         );
         set_i64(
-            &values,
+            values,
             "transfer_tax_percent",
             &mut cfg.transfer_tax_percent,
             0,
             100,
         );
-        set_i64(&values, "slot_min_bid", &mut cfg.slot_min_bid, 1, i64::MAX);
-        set_i64(&values, "slot_max_bid", &mut cfg.slot_max_bid, 1, i64::MAX);
+        set_i64(values, "slot_min_bid", &mut cfg.slot_min_bid, 1, i64::MAX);
+        set_i64(values, "slot_max_bid", &mut cfg.slot_max_bid, 1, i64::MAX);
         set_i64(
-            &values,
+            values,
             "slot_cooldown_seconds",
             &mut cfg.slot_cooldown_seconds,
             0,
             86_400,
         );
         set_i64(
-            &values,
+            values,
             "slot_payout_triple",
             &mut cfg.slot_payout_triple,
             1,
             1000,
         );
         set_i64(
-            &values,
+            values,
             "slot_payout_pair",
             &mut cfg.slot_payout_pair,
             1,
@@ -121,7 +131,7 @@ impl EconomyConfig {
         cfg.slot_max_bid = cfg.slot_max_bid.max(cfg.slot_min_bid);
         cfg.starting_wallet = cfg.starting_wallet.min(cfg.max_balance);
         cfg.starting_bank = cfg.starting_bank.min(cfg.max_balance);
-        Ok(cfg)
+        cfg
     }
 
     pub fn format_amount(&self, amount: i64) -> String {

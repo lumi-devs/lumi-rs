@@ -18,7 +18,21 @@ use crate::Result;
 
 pub const INVALIDATE_CHANNEL: &str = "lumi:invalidate";
 
-const LOCAL_CAPACITY: u64 = 10_000;
+pub const DEFAULT_LOCAL_CAPACITY: u64 = 20_000;
+pub const MIN_LOCAL_CAPACITY: u64 = 1_000;
+pub const MAX_LOCAL_CAPACITY: u64 = 500_000;
+
+pub const LOCAL_CAPACITY: u64 = DEFAULT_LOCAL_CAPACITY;
+
+#[must_use]
+pub fn local_capacity() -> u64 {
+    std::env::var("CACHE_LOCAL_CAPACITY")
+        .ok()
+        .and_then(|val| val.trim().parse::<u64>().ok())
+        .map_or(DEFAULT_LOCAL_CAPACITY, |cap| {
+            cap.clamp(MIN_LOCAL_CAPACITY, MAX_LOCAL_CAPACITY)
+        })
+}
 
 /// Reconnect backoff bounds for the invalidation listener.
 const BACKOFF_MIN: Duration = Duration::from_secs(1);
@@ -152,11 +166,12 @@ impl Claims {
         if until.get(key).is_some_and(|deadline| *deadline > now) {
             return false;
         }
-        if until.len() >= LOCAL_CAPACITY as usize {
+        let cap = local_capacity() as usize;
+        if until.len() >= cap {
             until.retain(|_, deadline| *deadline > now);
             // Cooldowns are best-effort: dropping a live slot only costs an
             // extra database check, so this map never grows past its bound.
-            while until.len() >= LOCAL_CAPACITY as usize {
+            while until.len() >= cap {
                 let Some(expired_key) = until.keys().next().cloned() else {
                     break;
                 };
@@ -180,6 +195,7 @@ impl Claims {
 enum Invalidation {
     Keys(Vec<String>),
     Prefix(String),
+    All,
 }
 
 pub struct Cache {
@@ -211,8 +227,9 @@ impl Cache {
             .set_connection_timeout(CONNECT_TIMEOUT)
             .set_response_timeout(CONNECT_TIMEOUT);
         let redis = client.get_connection_manager_with_config(config).await?;
+        let capacity = local_capacity();
         Ok(Self {
-            local: MokaCache::builder().max_capacity(LOCAL_CAPACITY).build(),
+            local: MokaCache::builder().max_capacity(capacity).build(),
             claims: Claims::default(),
             client,
             redis,
@@ -339,14 +356,22 @@ impl Cache {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<(Value, Duration)>>,
     {
-        if let Some(v) = self.get_json_ttl(key).await? {
-            return Ok(v);
+        match self.get_json_ttl(key).await {
+            Ok(Some(v)) => return Ok(v),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, key, "redis read failed; falling back to singleflight fetch");
+            }
         }
 
         self.singleflight
             .get_or_fetch(key, || async {
                 let (value, ttl) = fetcher().await?;
-                self.set_json_ttl(key, &value, ttl).await?;
+                if let Err(error) = self.set_json_ttl(key, &value, ttl).await {
+                    tracing::warn!(%error, key, "failed to cache value in redis after fetch");
+                    let entry = ttl_entry(&value, ttl, now_ms());
+                    self.local.insert(key.to_string(), Arc::new(entry)).await;
+                }
                 Ok(value)
             })
             .await
@@ -362,6 +387,16 @@ impl Cache {
     /// the next call can retry instead of waiting out the TTL.
     pub fn release_local(&self, key: &str) {
         self.claims.release(key);
+    }
+
+    /// Clear all entries in the local in-process cache.
+    pub fn clear_local(&self) {
+        self.local.invalidate_all();
+    }
+
+    /// Publish an invalidation signal so all processes clear their local caches.
+    pub async fn publish_clear(&self) -> Result<()> {
+        self.publish(&Invalidation::All).await
     }
 
     pub async fn invalidate(&self, key: &str) -> Result<()> {
@@ -453,6 +488,9 @@ impl Cache {
                     for key in keys {
                         self.local.invalidate(&key).await;
                     }
+                }
+                Ok(Invalidation::All) => {
+                    self.clear_local();
                 }
                 Err(err) => tracing::warn!(error = %err, "bad invalidation payload"),
             }
@@ -598,5 +636,18 @@ mod tests {
             final_attempts, 1,
             "fetcher should run exactly once even on error"
         );
+    }
+
+    #[test]
+    fn local_capacity_defaults() {
+        assert_eq!(super::local_capacity(), super::DEFAULT_LOCAL_CAPACITY);
+    }
+
+    #[test]
+    fn invalidation_all_roundtrips() {
+        let inv = super::Invalidation::All;
+        let res = serde_json::to_string(&inv)
+            .and_then(|raw| serde_json::from_str::<super::Invalidation>(&raw));
+        assert!(matches!(res, Ok(super::Invalidation::All)));
     }
 }

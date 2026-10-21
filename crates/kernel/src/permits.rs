@@ -166,6 +166,7 @@ struct PermitIndex {
 
 #[derive(Debug)]
 pub struct PermitResolver {
+    db: Option<DatabaseConnection>,
     guilds: DashMap<String, Arc<PermitIndex>>,
 }
 
@@ -260,9 +261,44 @@ fn slot(guild_id: &str, id: u64) -> (String, i64) {
 }
 
 impl PermitResolver {
+    /// Construct a resolver configured for lazy per-guild loading.
     pub async fn load(db: &DatabaseConnection) -> Result<Self> {
+        Ok(Self {
+            db: Some(db.clone()),
+            guilds: DashMap::new(),
+        })
+    }
+
+    /// Load every permit and assignment across all guilds at once.
+    pub async fn load_all(db: &DatabaseConnection) -> Result<Self> {
         let (permits, assignments) = load_parts(db).await?;
-        Ok(Self::new(permits, assignments))
+        let mut resolver = Self::new(permits, assignments);
+        resolver.db = Some(db.clone());
+        Ok(resolver)
+    }
+
+    /// Ensure one guild's permits are loaded in cache, reading from the database on miss.
+    pub async fn ensure_guild(&self, db: &DatabaseConnection, guild_id: u64) -> Result<()> {
+        let key = guild_id.to_string();
+        if self.guilds.contains_key(&key) {
+            return Ok(());
+        }
+        let (permits, assignments) = load_guild_parts(db, guild_id).await?;
+        self.guilds.insert(key, Arc::new(build_index(permits, assignments)));
+        Ok(())
+    }
+
+    /// Ensure one guild's permits are loaded using the database handle configured on the resolver.
+    pub async fn ensure_guild_loaded(&self, guild_id: u64) -> Result<()> {
+        let key = guild_id.to_string();
+        if self.guilds.contains_key(&key) {
+            return Ok(());
+        }
+        if let Some(ref db) = self.db {
+            let (permits, assignments) = load_guild_parts(db, guild_id).await?;
+            self.guilds.insert(key, Arc::new(build_index(permits, assignments)));
+        }
+        Ok(())
     }
 
     /// Replace one guild's index after a permit/assignment write.
@@ -296,7 +332,10 @@ impl PermitResolver {
         for (guild_id, (permits, assignments)) in by_guild {
             guilds.insert(guild_id, Arc::new(build_index(permits, assignments)));
         }
-        Self { guilds }
+        Self {
+            db: None,
+            guilds,
+        }
     }
 
     /// Decide access for one node; the returned rows stop at the deciding tier.

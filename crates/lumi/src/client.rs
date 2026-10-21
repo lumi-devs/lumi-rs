@@ -58,6 +58,15 @@ fn command_check(ctx: Context<'_>) -> poise::BoxFuture<'_, Result<bool, Error>> 
         let is_quarantined =
             lumi_modules::security::store::panic_locks_commands(&ctx.data(), guild_id.get()).await;
 
+        if let Err(error) = ctx
+            .data()
+            .permits
+            .ensure_guild(&ctx.data().db, guild_id.get())
+            .await
+        {
+            tracing::warn!(%error, guild_id = guild_id.get(), "failed to load permits for guild");
+        }
+
         let check = lumi_kernel::permits::CheckContext {
             guild_id: guild_id.get().to_string(),
             user_id: author_id.get(),

@@ -317,6 +317,12 @@ pub async fn caller_may_manage(
             .map_or_else(Vec::new, |m| m.roles.iter().map(|r| r.get()).collect());
         (false, manager, roles)
     };
+
+    let _ = services
+        .permits
+        .ensure_guild(&services.db, guild_id.get())
+        .await;
+
     let check = CheckContext {
         guild_id: guild_id.get().to_string(),
         user_id: component.user.id.get(),
@@ -370,6 +376,12 @@ async fn caller_may_manage_modal(
             .map_or_else(Vec::new, |m| m.roles.iter().map(|r| r.get()).collect());
         (false, manager, roles)
     };
+
+    let _ = services
+        .permits
+        .ensure_guild(&services.db, guild_id.get())
+        .await;
+
     let check = CheckContext {
         guild_id: guild_id.get().to_string(),
         user_id: modal.user.id.get(),
