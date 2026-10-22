@@ -4,6 +4,7 @@ pub mod downloader_module;
 pub mod downloader_repo;
 pub mod economy_account;
 pub mod economy_transaction;
+/// Database enums.
 pub mod enums;
 pub mod global;
 pub mod global_module_state;

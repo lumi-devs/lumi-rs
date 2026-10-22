@@ -38,7 +38,7 @@ pub async fn on_message(
     let map = data::guild_map(&services.cache, &services.db, gid).await?;
     if let Some(entry) = map.get(&author) {
         let on_grace = (Utc::now().fixed_offset() - entry.since).num_milliseconds()
-            < REMOVAL_COOLDOWN_MS as i64;
+            < i64::try_from(REMOVAL_COOLDOWN_MS).unwrap_or(i64::MAX);
         if !on_grace && !is_command_message(ctx, services, message).await {
             clear_afk(ctx, services, message, entry.since).await?;
         }
@@ -59,10 +59,11 @@ async fn is_command_message(
     let Some(guild_id) = message.guild_id else {
         return false;
     };
-    if let Ok(prefix) = prefix::get(&services.cache, &services.db, guild_id.get()).await {
-        if !prefix.is_empty() && message.content.starts_with(&prefix) {
-            return true;
-        }
+    if let Ok(prefix) = prefix::get(&services.cache, &services.db, guild_id.get()).await
+        && !prefix.is_empty()
+        && message.content.starts_with(&prefix)
+    {
+        return true;
     }
     let mention = format!("<@{}>", ctx.cache.current_user().id.get());
     message.content.starts_with(&mention)
@@ -85,7 +86,7 @@ async fn clear_afk(
     data::clear(&services.cache, &services.db, gid, author).await?;
     strip_nick_prefix(ctx, services, message, author).await;
 
-    if !config::welcome_enabled(&services.cache, &services.db, gid).await? {
+    if !config::welcome_enabled(&services.cache, &services.db, gid).await {
         mentions::clear(&services.cache, gid, author).await?;
         return Ok(());
     }
@@ -102,17 +103,17 @@ async fn clear_afk(
     let known = mentions::list(&services.cache, gid, author).await?;
     let card = welcome_back_card(
         &duration,
-        known.len() as u64,
+        u64::try_from(known.len()).unwrap_or(u64::MAX),
         Some(format!("afk:mentions:{author}:0")),
     );
-    let ttl = config::welcome_ttl_secs(&services.cache, &services.db, gid).await?;
+    let ttl = config::welcome_ttl_secs(&services.cache, &services.db, gid).await;
 
     match channel_id
         .send_message(&ctx.http, card.message().reference_message(message))
         .await
     {
         Ok(sent) => {
-            let http = ctx.http.clone();
+            let http = Arc::clone(&ctx.http);
             let cache = Arc::clone(&services.cache);
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(ttl)).await;
@@ -246,7 +247,7 @@ async fn notify_mentioned(
         .await
     {
         Ok(sent) => {
-            let http = ctx.http.clone();
+            let http = Arc::clone(&ctx.http);
             tokio::spawn(async move {
                 tokio::time::sleep(NOTICE_TTL).await;
                 if let Err(error) = sent.delete(&http, Some("AFK notice expired")).await {

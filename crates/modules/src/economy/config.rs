@@ -4,21 +4,36 @@ use serde_json::{Map, Value};
 
 use crate::shared::group_digits;
 
+/// Economy configuration settings.
 #[derive(Clone, Debug)]
 pub struct EconomyConfig {
+    /// Currency display name.
     pub currency_name: String,
+    /// Currency emoji representation.
     pub currency_emoji: String,
+    /// Bank display name.
     pub bank_name: String,
+    /// Initial wallet balance.
     pub starting_wallet: i64,
+    /// Initial bank balance.
     pub starting_bank: i64,
+    /// Maximum allowed balance.
     pub max_balance: i64,
+    /// Payday reward amount.
     pub payday_amount: i64,
+    /// Payday cooldown period in seconds.
     pub payday_cooldown_seconds: i64,
+    /// Transfer transaction tax percentage.
     pub transfer_tax_percent: i64,
+    /// Minimum slot machine bid.
     pub slot_min_bid: i64,
+    /// Maximum slot machine bid.
     pub slot_max_bid: i64,
+    /// Slot machine cooldown in seconds.
     pub slot_cooldown_seconds: i64,
+    /// Triple match slot multiplier.
     pub slot_payout_triple: i64,
+    /// Pair match slot multiplier.
     pub slot_payout_pair: i64,
 }
 
@@ -56,7 +71,8 @@ impl EconomyConfig {
         Ok(Self::from_map(&values))
     }
 
-    /// Construct an EconomyConfig from a module configuration key-value map.
+    /// Construct an `EconomyConfig` from a module configuration key-value map.
+    #[must_use]
     pub fn from_map(values: &Map<String, Value>) -> Self {
         let mut cfg = Self::default();
 
@@ -76,21 +92,9 @@ impl EconomyConfig {
             0,
             i64::MAX,
         );
-        set_i64(
-            values,
-            "starting_bank",
-            &mut cfg.starting_bank,
-            0,
-            i64::MAX,
-        );
+        set_i64(values, "starting_bank", &mut cfg.starting_bank, 0, i64::MAX);
         set_i64(values, "max_balance", &mut cfg.max_balance, 1, i64::MAX);
-        set_i64(
-            values,
-            "payday_amount",
-            &mut cfg.payday_amount,
-            0,
-            i64::MAX,
-        );
+        set_i64(values, "payday_amount", &mut cfg.payday_amount, 0, i64::MAX);
         set_i64(
             values,
             "payday_cooldown_seconds",
@@ -134,6 +138,8 @@ impl EconomyConfig {
         cfg
     }
 
+    /// Format an amount with currency emoji and name.
+    #[must_use]
     pub fn format_amount(&self, amount: i64) -> String {
         format!(
             "{} {} {}",
@@ -144,6 +150,7 @@ impl EconomyConfig {
     }
 
     /// Tax (in whole units) withheld from a transfer of `amount`.
+    #[must_use]
     pub fn transfer_tax(&self, amount: i64) -> i64 {
         if self.transfer_tax_percent <= 0 || amount <= 0 {
             return 0;
@@ -153,7 +160,8 @@ impl EconomyConfig {
     }
 
     /// Milliseconds for a cooldown, never negative.
-    pub fn cooldown_ms(&self, seconds: i64) -> u64 {
+    #[must_use]
+    pub fn cooldown_ms(seconds: i64) -> u64 {
         u64::try_from(seconds.max(0).saturating_mul(1000)).unwrap_or(u64::MAX)
     }
 }
@@ -205,8 +213,7 @@ mod tests {
 
     #[test]
     fn cooldown_ms_is_non_negative() {
-        let cfg = EconomyConfig::default();
-        assert_eq!(cfg.cooldown_ms(-1), 0);
-        assert_eq!(cfg.cooldown_ms(3), 3_000);
+        assert_eq!(EconomyConfig::cooldown_ms(-1), 0);
+        assert_eq!(EconomyConfig::cooldown_ms(3), 3_000);
     }
 }

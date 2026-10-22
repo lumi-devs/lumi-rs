@@ -1,7 +1,4 @@
 //! Shared process wiring: module registry, service construction and supervision.
-//!
-//! Every entry point (gateway, API, worker) builds its [`Services`] here so the
-//! module set and the poise user-data invariant live in exactly one place.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,8 +8,7 @@ use anyhow::Result;
 use lumi_kernel::bot::Data;
 use lumi_kernel::{Config, ModuleRegistry, Services};
 
-/// Postgres may still be starting when this process is; retry the initial
-/// connect instead of crashing the whole tier on a cold-start race.
+/// Connect to the database with retries.
 async fn connect_db(url: &str) -> Result<lumi_db::DatabaseConnection> {
     let url = url.to_owned();
     lumi_kernel::retry_transient(3, Duration::from_millis(250), || {
@@ -28,9 +24,6 @@ async fn connect_db(url: &str) -> Result<lumi_db::DatabaseConnection> {
 }
 
 /// Every feature module the host knows about, in display order.
-///
-/// Registration lives here so the gateway, API, worker and scheduler all see
-/// exactly the same module set.
 #[must_use]
 pub fn registry() -> ModuleRegistry {
     let mut registry = ModuleRegistry::new();
@@ -46,8 +39,7 @@ pub fn registry() -> ModuleRegistry {
     registry
 }
 
-/// How often the always-on backend latency probes run. Metrics scrapes are
-/// independent of the dashboard, so these must not depend on `/ping` traffic.
+/// How often the always-on backend latency probes run.
 const BACKEND_PROBE_INTERVAL: Duration = Duration::from_secs(15);
 
 fn spawn_backend_probe(services: &Data) {
@@ -60,8 +52,7 @@ fn spawn_backend_probe(services: &Data) {
 
             let started = std::time::Instant::now();
             if services.db.ping().await.is_ok() {
-                metrics::gauge!("lumi.db.latency_ms")
-                    .set(started.elapsed().as_secs_f64() * 1000.0);
+                metrics::gauge!("lumi.db.latency_ms").set(started.elapsed().as_secs_f64() * 1000.0);
             } else {
                 metrics::counter!("lumi.db.probe_failed").increment(1);
             }
@@ -82,6 +73,7 @@ pub const ADDONS_AUTOUPDATE_JOB: &str = "addons.autoupdate";
 pub const WORKER_TICK: Duration = Duration::from_secs(60);
 const AUTO_UPDATE_LOCK: &str = "lumi:job:addons.autoupdate";
 
+/// Parse a process role from its command-line name.
 pub fn role_from_arg(arg: &str) -> Result<lumi_kernel::Role> {
     match arg.to_ascii_lowercase().as_str() {
         "all" => Ok(lumi_kernel::Role::All),
@@ -97,6 +89,7 @@ pub fn role_from_arg(arg: &str) -> Result<lumi_kernel::Role> {
     }
 }
 
+/// Run one background job by name.
 pub async fn run_job(services: &Services, job: lumi_kernel::Job) -> lumi_kernel::Result<()> {
     match job.name.as_str() {
         ADDONS_AUTOUPDATE_JOB => auto_update_addons(services).await,
@@ -139,13 +132,16 @@ async fn auto_update_addons(services: &Services) -> lumi_kernel::Result<()> {
 pub async fn services(cfg: Config) -> Result<Data> {
     let db = connect_db(&cfg.database_url).await?;
     lumi_db::migrate(&db).await?;
-    let db_read = match &cfg.database_read_url {
-        Some(url) if !url.trim().is_empty() => connect_db(url).await?,
-        _ => db.clone(),
+    let db_read = if let Some(url) = &cfg.database_read_url
+        && !url.trim().is_empty()
+    {
+        connect_db(url).await?
+    } else {
+        db.clone()
     };
 
     let cache = Arc::new(lumi_kernel::Cache::connect(&cfg.redis_url).await?);
-    let permits = Arc::new(lumi_kernel::PermitResolver::load(&db).await?);
+    let permits = Arc::new(lumi_kernel::PermitResolver::load(&db));
     let security = Arc::new(lumi_kernel::SecurityManager::new(db.clone()));
     let downloader = Arc::new(lumi_kernel::Downloader::new(
         db.clone(),
@@ -163,7 +159,6 @@ pub async fn services(cfg: Config) -> Result<Data> {
         downloader,
     });
 
-    // One subscriber per process; every process tier wants cache coherence.
     tokio::spawn(async move { cache.spawn_invalidation().await });
 
     spawn_backend_probe(&services);
@@ -172,11 +167,6 @@ pub async fn services(cfg: Config) -> Result<Data> {
 }
 
 /// Wrap user data for [`serenity::ClientBuilder::data`].
-///
-/// Poise's user-data type `U` is [`Data`] (`Arc<Services>`), and `builder.data`
-/// takes `Arc<U>`, so the client must be handed `Arc<Arc<Services>>`. Routing
-/// every call through this typed helper keeps `Context::data::<Data>()` and the
-/// `Arc<Arc<Services>>` downcast from silently drifting apart.
 #[must_use]
 pub fn client_data(data: Data) -> Arc<Data> {
     Arc::new(data)
@@ -220,9 +210,6 @@ mod tests {
 
     #[test]
     fn client_data_keeps_poise_user_data_shape() {
-        // Compile-time proof: `client_data` only accepts `Data` and yields
-        // `Arc<Data>`, the exact type `ClientBuilder::data` and the
-        // `Context::data::<Data>()` downcast require.
         let _: fn(Data) -> Arc<Data> = client_data;
     }
 

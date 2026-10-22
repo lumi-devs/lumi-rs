@@ -1,5 +1,4 @@
 //! Action rows, selects, pagination and the central row clamp.
-//! Ported from lumi's `src/lib/ui/Panels.ts`.
 
 use serenity::all::{
     ButtonStyle, ChannelType, CreateActionRow, CreateButton, CreateSection, CreateSectionAccessory,
@@ -17,6 +16,7 @@ pub fn component_emoji(name: &str) -> Option<ReactionType> {
     ReactionType::try_from(name).ok()
 }
 
+/// Create an action row containing buttons.
 pub fn action_row_of(buttons: Vec<CreateButton<'static>>) -> CreateActionRow<'static> {
     CreateActionRow::buttons(buttons)
 }
@@ -40,7 +40,6 @@ pub fn clamp_action_row(row: CreateActionRow<'static>) -> CreateActionRow<'stati
 
 /// Clamp rows to Discord's limits, mirroring TS `buildSafeActionRows`: at most
 /// [`MAX_ACTION_ROWS`] rows, and at most [`MAX_ROW_COMPONENTS`] buttons in each.
-#[must_use]
 pub fn clamp_action_rows(rows: Vec<CreateActionRow<'static>>) -> Vec<CreateActionRow<'static>> {
     if rows.len() > MAX_ACTION_ROWS {
         tracing::warn!(
@@ -68,6 +67,7 @@ pub fn setting_row(
     )
 }
 
+/// Create a string select menu action row.
 pub fn string_select(
     custom_id: impl Into<String>,
     placeholder: impl Into<String>,
@@ -128,6 +128,7 @@ pub fn channel_select_of_types(
     )
 }
 
+/// Create a user select menu action row.
 pub fn user_select(
     custom_id: impl Into<String>,
     placeholder: impl Into<String>,
@@ -143,6 +144,7 @@ pub fn user_select(
     )
 }
 
+/// Create a single-role select menu action row.
 pub fn role_select(
     custom_id: impl Into<String>,
     placeholder: impl Into<String>,
@@ -195,6 +197,7 @@ pub fn role_select_multi(
     )
 }
 
+/// Create an action row containing a back button.
 pub fn back_button(custom_id: impl Into<String>) -> CreateActionRow<'static> {
     action_row_of(vec![
         CreateButton::new(custom_id.into())

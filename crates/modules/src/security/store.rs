@@ -17,8 +17,11 @@ const MODULE: &str = "security";
 /// (trusted roles exempt from enforcement and where alerts are posted).
 #[derive(Clone, Debug)]
 pub struct AntiNukeSettings {
+    /// Anti-nuke rate limit and action configuration.
     pub config: AntiNukeConfig,
+    /// Roles trusted and exempt from anti-nuke triggers.
     pub trusted_roles: Vec<u64>,
+    /// Channel where anti-nuke alerts are delivered.
     pub log_channel: Option<u64>,
 }
 

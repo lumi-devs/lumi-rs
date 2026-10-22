@@ -14,7 +14,7 @@ use super::store::{self, CreateCaseParams, ModConfig};
 use super::views::{action_color, action_emoji, action_label, case_card};
 
 /// Discord caps communication timeouts at 28 days.
-pub const MAX_TIMEOUT: Duration = Duration::from_secs(28 * 86_400);
+pub const MAX_TIMEOUT: Duration = Duration::from_hours(672);
 
 /// One target a punishment was successfully applied to. `case_number` is
 /// `None` when the Discord action worked but the case row could not be written.
@@ -33,16 +33,9 @@ pub struct BulkOutcome {
     pub failures: Vec<(UserId, String)>,
 }
 
-impl BulkOutcome {
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.applied.is_empty()
-    }
-}
-
 /// Record a case, logging instead of failing the Discord action that already
 /// happened. A missing case never hides the punishment from the moderator.
-pub(crate) async fn record_case(
+pub async fn record_case(
     db: &sea_orm::DatabaseConnection,
     guild_id: u64,
     target: UserId,
@@ -70,7 +63,7 @@ pub(crate) async fn record_case(
                 %error,
                 guild_id,
                 user_id = target.get(),
-                action = action_label(&action),
+                action = action_label(action),
                 "moderation action applied but case could not be recorded"
             );
             None
@@ -161,7 +154,7 @@ pub async fn clear_timeout(
     Ok(())
 }
 
-fn notifies_target(action: CaseAction) -> bool {
+const fn notifies_target(action: CaseAction) -> bool {
     matches!(
         action,
         CaseAction::Warn
@@ -176,7 +169,7 @@ fn notifies_target(action: CaseAction) -> bool {
 /// DM the target (when enabled and appropriate) and post the case to the
 /// configured mod-log channel. Delivery problems are logged, never surfaced as
 /// command failures: the punishment itself already succeeded.
-pub(crate) async fn notify(
+pub async fn notify(
     http: &Http,
     config: &ModConfig,
     target: UserId,
@@ -185,7 +178,7 @@ pub(crate) async fn notify(
     reason: Option<&str>,
 ) {
     if config.dm_on_action && notifies_target(action) {
-        let mut lines = vec![format!("**Action:** {}", action_label(&action))];
+        let mut lines = vec![format!("**Action:** {}", action_label(action))];
         if let Some(reason) = reason {
             lines.push(format!("**Reason:** {reason}"));
         }
@@ -195,11 +188,8 @@ pub(crate) async fn notify(
                 super::views::human_seconds(duration)
             ));
         }
-        let card = Card::lines(
-            format!("{} Moderation Action", action_emoji(&action)),
-            lines,
-        )
-        .accent(Some(action_color(&action)));
+        let card = Card::lines(format!("{} Moderation Action", action_emoji(action)), lines)
+            .accent(Some(action_color(action)));
         if let Err(error) = target.dm(http, card.into_reply().message()).await {
             tracing::debug!(%error, user_id = target.get(), "could not DM moderated member");
         }

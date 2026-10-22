@@ -1,10 +1,9 @@
-//! Permit model and resolver, ported from lumi's `api/permissions/PermitResolver.ts`.
+//! Permit model and resolver.
 //!
-//! Resolution order is fixed and mirrors the TS: owner bypass, then manager
-//! (Administrator/ManageGuild) bypass, then `enforced` on the user target, then
-//! `custom` buckets in chain order (user, channel, roles high→low). Deny wins
-//! inside a bucket, and the first tier that returns a verdict decides; a tier
-//! with no matching node passes to the next.
+//! Resolution order is fixed: owner bypass, then manager (Administrator/ManageGuild)
+//! bypass, then `enforced` on the user target, then `custom` buckets in chain order
+//! (user, channel, roles high→low). Deny wins inside a bucket, and the first tier
+//! that returns a verdict decides; a tier with no matching node passes to the next.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,15 +16,24 @@ use lumi_db::entities::{permit, permit_assignment};
 
 use crate::Result;
 
+/// Permit definition row.
 #[derive(Clone, Debug)]
 pub struct PermitRow {
+    /// Database identifier.
     pub id: i32,
+    /// Guild snowflake ID.
     pub guild_id: String,
+    /// Permit name.
     pub name: String,
+    /// Permit kind.
     pub kind: PermitKind,
+    /// Permit polarity.
     pub polarity: PermitPolarity,
+    /// Target permission nodes.
     pub nodes: Vec<String>,
+    /// Whether this is a builtin permit.
     pub builtin: bool,
+    /// Sort position.
     pub position: i32,
 }
 
@@ -44,14 +52,20 @@ impl PermitRow {
     }
 }
 
+/// Assignment linking a permit to a target.
 #[derive(Clone, Debug)]
 pub struct PermitAssignment {
+    /// Associated permit ID.
     pub permit_id: i32,
+    /// Guild snowflake ID.
     pub guild_id: String,
+    /// Target type.
     pub target_type: PermitTargetType,
+    /// Target snowflake ID.
     pub target_id: i64,
 }
 
+/// Scope of a permission node pattern.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeScope {
     /// `*` — matches any node.
@@ -63,6 +77,7 @@ pub enum NodeScope {
 }
 
 impl NodeScope {
+    /// Classify a permission node pattern.
     pub fn of(pattern: &str) -> Self {
         if pattern == "*" {
             Self::Wildcard
@@ -74,6 +89,7 @@ impl NodeScope {
     }
 }
 
+/// Check if a node string matches a pattern.
 pub fn node_matches(pattern: &str, node: &str) -> bool {
     if pattern.is_empty() || node.is_empty() {
         return false;
@@ -90,38 +106,57 @@ pub fn node_matches(pattern: &str, node: &str) -> bool {
     }
 }
 
+/// Resolution verdict for a permit evaluation tier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
+    /// Access granted.
     Allow,
+    /// Access denied.
     Deny,
+    /// No matching rule found; evaluate next tier.
     Pass,
 }
 
 /// One row of the tier trace, mirroring lumi's `PermitTierExplanation`.
 #[derive(Clone, Debug)]
 pub struct TierExplanation {
+    /// Name of evaluated tier.
     pub tier: String,
+    /// Verdict produced by tier.
     pub verdict: Verdict,
+    /// Optional detail.
     pub detail: Option<String>,
 }
 
+/// Final permission resolution decision and explanation trace.
 #[derive(Clone, Debug)]
 pub struct Decision {
+    /// Whether access is allowed.
     pub allowed: bool,
+    /// Evaluation trace rows.
     pub rows: Vec<TierExplanation>,
 }
 
+/// Context for evaluating permits on an invocation.
 #[derive(Clone, Debug)]
 pub struct CheckContext<'a> {
+    /// Guild snowflake ID.
     pub guild_id: String,
+    /// Invoker user ID.
     pub user_id: u64,
+    /// Invocation channel ID.
     pub channel_id: Option<u64>,
     /// Role ids ordered high→low (Discord position desc).
     pub role_ids: &'a [u64],
+    /// Whether invoker is bot owner.
     pub is_owner: bool,
+    /// Whether invoker is server owner.
     pub is_guild_owner: bool,
+    /// Whether invoker has Administrator or `ManageGuild`.
     pub is_manager: bool,
+    /// Whether invoker is quarantined.
     pub is_quarantined: bool,
+    /// Permission node being requested.
     pub node: &'a str,
 }
 
@@ -145,7 +180,6 @@ pub fn required_node(command: &str) -> Option<&'static str> {
 /// A `&'static str` placed in the command's poise `custom_data` wins, so a
 /// command (or subcommand) can declare its own node; otherwise the built-in
 /// [`required_node`] name map is used.
-#[must_use]
 pub fn command_node(command: &crate::bot::Command) -> Option<&'static str> {
     command
         .custom_data
@@ -159,11 +193,12 @@ pub fn command_node(command: &crate::bot::Command) -> Option<&'static str> {
 #[derive(Debug, Default)]
 struct PermitIndex {
     permits: HashMap<i32, PermitRow>,
-    by_user: HashMap<(String, i64), Vec<i32>>,
-    by_channel: HashMap<(String, i64), Vec<i32>>,
-    by_role: HashMap<(String, i64), Vec<i32>>,
+    by_user: HashMap<i64, Vec<i32>>,
+    by_channel: HashMap<i64, Vec<i32>>,
+    by_role: HashMap<i64, Vec<i32>>,
 }
 
+/// In-memory resolver evaluating guild permit hierarchies.
 #[derive(Debug)]
 pub struct PermitResolver {
     db: Option<DatabaseConnection>,
@@ -173,16 +208,15 @@ pub struct PermitResolver {
 fn build_index(permits: Vec<PermitRow>, assignments: Vec<PermitAssignment>) -> PermitIndex {
     let permit_map = permits.into_iter().map(|p| (p.id, p)).collect();
 
-    let mut by_user: HashMap<(String, i64), Vec<i32>> = HashMap::new();
-    let mut by_channel: HashMap<(String, i64), Vec<i32>> = HashMap::new();
-    let mut by_role: HashMap<(String, i64), Vec<i32>> = HashMap::new();
+    let mut by_user: HashMap<i64, Vec<i32>> = HashMap::new();
+    let mut by_channel: HashMap<i64, Vec<i32>> = HashMap::new();
+    let mut by_role: HashMap<i64, Vec<i32>> = HashMap::new();
 
     for a in assignments {
-        let key = (a.guild_id, a.target_id);
         match a.target_type {
-            PermitTargetType::User => by_user.entry(key).or_default().push(a.permit_id),
-            PermitTargetType::Channel => by_channel.entry(key).or_default().push(a.permit_id),
-            PermitTargetType::Role => by_role.entry(key).or_default().push(a.permit_id),
+            PermitTargetType::User => by_user.entry(a.target_id).or_default().push(a.permit_id),
+            PermitTargetType::Channel => by_channel.entry(a.target_id).or_default().push(a.permit_id),
+            PermitTargetType::Role => by_role.entry(a.target_id).or_default().push(a.permit_id),
         }
     }
 
@@ -255,18 +289,19 @@ fn tier_row(tier: &str, verdict: Verdict, detail: Option<String>) -> TierExplana
     }
 }
 
-/// Bucket key: guild + numeric target id.
-fn slot(guild_id: &str, id: u64) -> (String, i64) {
-    (guild_id.to_string(), i64::try_from(id).unwrap_or(i64::MAX))
+/// Bucket key: numeric target id.
+fn target_id(id: u64) -> i64 {
+    i64::try_from(id).unwrap_or(i64::MAX)
 }
 
 impl PermitResolver {
     /// Construct a resolver configured for lazy per-guild loading.
-    pub async fn load(db: &DatabaseConnection) -> Result<Self> {
-        Ok(Self {
+    #[must_use]
+    pub fn load(db: &DatabaseConnection) -> Self {
+        Self {
             db: Some(db.clone()),
             guilds: DashMap::new(),
-        })
+        }
     }
 
     /// Load every permit and assignment across all guilds at once.
@@ -284,7 +319,9 @@ impl PermitResolver {
             return Ok(());
         }
         let (permits, assignments) = load_guild_parts(db, guild_id).await?;
-        self.guilds.insert(key, Arc::new(build_index(permits, assignments)));
+        self.guilds
+            .entry(key)
+            .or_insert_with(|| Arc::new(build_index(permits, assignments)));
         Ok(())
     }
 
@@ -296,7 +333,9 @@ impl PermitResolver {
         }
         if let Some(ref db) = self.db {
             let (permits, assignments) = load_guild_parts(db, guild_id).await?;
-            self.guilds.insert(key, Arc::new(build_index(permits, assignments)));
+            self.guilds
+                .entry(key)
+                .or_insert_with(|| Arc::new(build_index(permits, assignments)));
         }
         Ok(())
     }
@@ -311,6 +350,7 @@ impl PermitResolver {
         Ok(())
     }
 
+    /// Create a new resolver seeded with permit rows and assignments.
     pub fn new(permits: Vec<PermitRow>, assignments: Vec<PermitAssignment>) -> Self {
         let mut by_guild: HashMap<String, (Vec<PermitRow>, Vec<PermitAssignment>)> = HashMap::new();
         for permit in permits {
@@ -332,10 +372,7 @@ impl PermitResolver {
         for (guild_id, (permits, assignments)) in by_guild {
             guilds.insert(guild_id, Arc::new(build_index(permits, assignments)));
         }
-        Self {
-            db: None,
-            guilds,
-        }
+        Self { db: None, guilds }
     }
 
     /// Decide access for one node; the returned rows stop at the deciding tier.
@@ -391,13 +428,13 @@ impl PermitIndex {
 
         let mut decided = false;
         let mut allowed = false;
-        let user = slot(&ctx.guild_id, ctx.user_id);
+        let user = target_id(ctx.user_id);
 
         consider(
             &mut rows,
             &mut decided,
             &mut allowed,
-            self.evaluate_bucket("enforced:user", self.by_user.get(&user), ctx.node, true),
+            self.evaluate_bucket("enforced:user", self.by_user.get(&user).map(Vec::as_slice), ctx.node, true),
         );
         if decided || ctx.is_quarantined {
             if ctx.is_quarantined && !decided {
@@ -414,21 +451,21 @@ impl PermitIndex {
             &mut rows,
             &mut decided,
             &mut allowed,
-            self.evaluate_bucket("custom:user", self.by_user.get(&user), ctx.node, false),
+            self.evaluate_bucket("custom:user", self.by_user.get(&user).map(Vec::as_slice), ctx.node, false),
         );
         if decided {
             return rows;
         }
 
         if let Some(channel_id) = ctx.channel_id {
-            let channel = slot(&ctx.guild_id, channel_id);
+            let channel = target_id(channel_id);
             consider(
                 &mut rows,
                 &mut decided,
                 &mut allowed,
                 self.evaluate_bucket(
                     "custom:channel",
-                    self.by_channel.get(&channel),
+                    self.by_channel.get(&channel).map(Vec::as_slice),
                     ctx.node,
                     false,
                 ),
@@ -439,14 +476,14 @@ impl PermitIndex {
         }
 
         for &role_id in ctx.role_ids {
-            let role = slot(&ctx.guild_id, role_id);
+            let role = target_id(role_id);
             consider(
                 &mut rows,
                 &mut decided,
                 &mut allowed,
                 self.evaluate_bucket(
                     &format!("custom:role:{role_id}"),
-                    self.by_role.get(&role),
+                    self.by_role.get(&role).map(Vec::as_slice),
                     ctx.node,
                     false,
                 ),
@@ -463,7 +500,7 @@ impl PermitIndex {
     fn evaluate_bucket(
         &self,
         tier: &str,
-        permit_ids: Option<&Vec<i32>>,
+        permit_ids: Option<&[i32]>,
         node: &str,
         enforced_only: bool,
     ) -> TierExplanation {
@@ -502,23 +539,30 @@ impl PermitIndex {
             }
         }
 
-        if let Some(pattern) = deny {
-            tier_row(tier, Verdict::Deny, Some(format!("deny {pattern}")))
-        } else if let Some(pattern) = grant {
-            tier_row(tier, Verdict::Allow, Some(format!("grant {pattern}")))
-        } else {
-            tier_row(tier, Verdict::Pass, None)
+        match (deny, grant) {
+            (Some(pattern), _) => tier_row(tier, Verdict::Deny, Some(format!("deny {pattern}"))),
+            (None, Some(pattern)) => {
+                tier_row(tier, Verdict::Allow, Some(format!("grant {pattern}")))
+            }
+            (None, None) => tier_row(tier, Verdict::Pass, None),
         }
     }
 }
 
+/// Subject context for permit explanation.
 #[derive(Clone, Debug)]
 pub struct ExplainSubject {
+    /// Discord user snowflake.
     pub user_id: u64,
+    /// Channel snowflake if channel-scoped.
     pub channel_id: Option<u64>,
+    /// Discord role snowflakes.
     pub role_ids: Vec<u64>,
+    /// Whether user is a bot owner.
     pub is_owner: bool,
+    /// Whether user is the guild owner.
     pub is_guild_owner: bool,
+    /// Whether user has manager permissions.
     pub is_manager: bool,
 }
 
@@ -638,8 +682,10 @@ mod tests {
 
     #[test]
     fn command_node_reads_custom_data_then_name() {
-        let mut command = crate::bot::Command::default();
-        command.name = "ban".into();
+        let mut command = crate::bot::Command {
+            name: "ban".into(),
+            ..Default::default()
+        };
         assert_eq!(command_node(&command), Some("mod.ban"));
 
         command.custom_data = Box::new("custom.node");
@@ -672,10 +718,7 @@ mod tests {
             PermitPolarity::Grant,
             &["mod.ban"],
         )];
-        let resolver = PermitResolver::new(
-            permits,
-            vec![assignment(1, PermitTargetType::User, 7)],
-        );
+        let resolver = PermitResolver::new(permits, vec![assignment(1, PermitTargetType::User, 7)]);
         assert!(resolver.resolve(&ctx(&[], "mod.ban")).allowed);
 
         let mut other_guild = ctx(&[], "mod.ban");

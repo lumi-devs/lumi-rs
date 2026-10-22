@@ -1,17 +1,17 @@
 use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use poise::serenity_prelude as serenity;
 
-pub mod dispatcher;
-pub use dispatcher::{DispatchedEvent, EventDispatcher};
+pub(crate) mod dispatcher;
+pub(crate) use dispatcher::{DispatchedEvent, EventDispatcher};
 
 /// Guild command hashes are a sync shortcut, not durable state; expire them so
 /// Redis does not accumulate one permanent key per guild.
-const COMMAND_HASH_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const COMMAND_HASH_TTL: Duration = Duration::from_hours(720);
 
 static DISPATCHER: OnceLock<EventDispatcher> = OnceLock::new();
 
@@ -19,7 +19,7 @@ fn get_or_init_dispatcher(
     ctx: &serenity::Context,
     services: &lumi_kernel::bot::Data,
 ) -> &'static EventDispatcher {
-    DISPATCHER.get_or_init(|| EventDispatcher::new(ctx.clone(), Arc::clone(services)))
+    DISPATCHER.get_or_init(|| EventDispatcher::new(ctx, services))
 }
 
 /// Global commands were stale once we moved to guild-only sync; clearing them
@@ -33,8 +33,8 @@ fn command_set_hash(services: &lumi_kernel::Services) -> Option<u64> {
     *COMMAND_SET_HASH.get_or_init(|| {
         let commands = crate::commands::all_from_registry(&services.registry);
         let builders = poise::builtins::create_application_commands(&commands);
-        let serialized = match serde_json::to_string(&builders) {
-            Ok(serialized) => serialized,
+        let serialized = match serde_json::to_vec(&builders) {
+            Ok(bytes) => bytes,
             Err(error) => {
                 tracing::warn!(
                     %error,
@@ -44,11 +44,12 @@ fn command_set_hash(services: &lumi_kernel::Services) -> Option<u64> {
             }
         };
         let mut hasher = DefaultHasher::new();
-        serialized.hash(&mut hasher);
+        hasher.write(&serialized);
         Some(hasher.finish())
     })
 }
 
+/// Serenity event handler.
 #[derive(Debug)]
 pub struct Events;
 
@@ -64,7 +65,7 @@ impl serenity::EventHandler for Events {
                 let owns_shard_zero = services
                     .cfg
                     .shard_range
-                    .map_or(true, |range| range.start == 0);
+                    .is_none_or(|range| range.start == 0);
                 if owns_shard_zero && !GLOBAL_COMMANDS_CLEARED.swap(true, Ordering::AcqRel) {
                     // PUT with an empty list deletes the global commands.
                     if let Err(error) = ctx
@@ -131,7 +132,7 @@ impl serenity::EventHandler for Events {
                 };
                 match interaction {
                     serenity::Interaction::Component(component) => {
-                        let guild_id = component.guild_id.map(|g| g.get());
+                        let guild_id = component.guild_id.map(serenity::all::GuildId::get);
                         let user_id = component.user.id.get();
                         let custom_id = &component.data.custom_id;
                         if let Err(error) =
@@ -148,7 +149,7 @@ impl serenity::EventHandler for Events {
                         }
                     }
                     serenity::Interaction::Modal(modal) => {
-                        let guild_id = modal.guild_id.map(|g| g.get());
+                        let guild_id = modal.guild_id.map(serenity::all::GuildId::get);
                         let user_id = modal.user.id.get();
                         let custom_id = &modal.data.custom_id;
                         if let Err(error) =
@@ -223,7 +224,6 @@ impl serenity::EventHandler for Events {
             serenity::FullEvent::GuildMemberRemoval {
                 guild_id,
                 user,
-                member_data_if_available,
                 ..
             } => {
                 let services = ctx.data::<lumi_kernel::bot::Data>();
@@ -231,9 +231,6 @@ impl serenity::EventHandler for Events {
                 dispatcher.dispatch(DispatchedEvent::MemberRemoval {
                     guild_id: *guild_id,
                     user: user.clone(),
-                    member_data_if_available: member_data_if_available
-                        .as_ref()
-                        .map(|m| Box::new(m.clone())),
                 });
             }
             serenity::FullEvent::GuildMemberUpdate {
@@ -356,10 +353,10 @@ impl serenity::EventHandler for Events {
                 let guild_id = new
                     .guild_id
                     .or_else(|| old.as_ref().and_then(|o| o.guild_id))
-                    .map(|g| g.get());
+                    .map(serenity::all::GuildId::get);
                 let user_id = new.user_id.get();
                 if let Err(error) =
-                    lumi_modules::tempvc::on_voice_state_update(ctx, services.as_ref(), old, new)
+                    lumi_modules::tempvc::on_voice_state_update(ctx, services.as_ref(), old.as_ref(), new)
                         .await
                 {
                     tracing::warn!(
@@ -370,7 +367,7 @@ impl serenity::EventHandler for Events {
                     );
                 }
                 if let Err(error) =
-                    lumi_modules::leveling::on_voice_state_update(ctx, services.as_ref(), old, new)
+                    lumi_modules::leveling::on_voice_state_update(ctx, services.as_ref(), old.as_ref(), new)
                         .await
                 {
                     tracing::warn!(

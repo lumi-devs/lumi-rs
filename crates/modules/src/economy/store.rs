@@ -14,32 +14,25 @@ const MAX_ATTEMPTS: usize = 3;
 const INITIAL_BACKOFF_MS: u64 = 25;
 
 fn is_conflict_db_err(err: &sea_orm::DbErr) -> bool {
-    use std::ops::Deref;
-    match err {
-        sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(e))
-        | sea_orm::DbErr::Query(sea_orm::RuntimeErr::SqlxError(e))
-        | sea_orm::DbErr::Conn(sea_orm::RuntimeErr::SqlxError(e)) => {
-            if let sea_orm::SqlxError::Database(db_err) = e.deref() {
-                if let Some(code) = db_err.code() {
-                    if code.as_ref() == "40001" || code.as_ref() == "40P01" {
-                        return true;
-                    }
-                }
-            }
-        }
-        _ => {}
+    if let sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(e))
+    | sea_orm::DbErr::Query(sea_orm::RuntimeErr::SqlxError(e))
+    | sea_orm::DbErr::Conn(sea_orm::RuntimeErr::SqlxError(e)) = err
+        && let sea_orm::SqlxError::Database(db_err) = &**e
+        && let Some(code) = db_err.code()
+        && (code.as_ref() == "40001" || code.as_ref() == "40P01")
+    {
+        return true;
     }
     let msg = err.to_string();
     msg.contains("40001") || msg.contains("40P01")
 }
 
 fn is_conflict_error(err: &LumiError) -> bool {
-    match err {
-        LumiError::Db(db_err) => is_conflict_db_err(db_err),
-        _ => {
-            let msg = err.to_string();
-            msg.contains("40001") || msg.contains("40P01")
-        }
+    if let LumiError::Db(db_err) = err {
+        is_conflict_db_err(db_err)
+    } else {
+        let msg = err.to_string();
+        msg.contains("40001") || msg.contains("40P01")
     }
 }
 
@@ -83,6 +76,7 @@ pub enum Vault {
 }
 
 impl Vault {
+    #[must_use]
     pub fn parse(value: Option<&str>) -> Option<Self> {
         match value {
             None | Some("wallet") => Some(Self::Wallet),
@@ -91,6 +85,7 @@ impl Vault {
         }
     }
 
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Wallet => "wallet",
@@ -114,7 +109,7 @@ pub struct AccountBalance {
     pub net_worth: i64,
 }
 
-fn balance(acc: &economy_account::Model) -> AccountBalance {
+const fn balance(acc: &economy_account::Model) -> AccountBalance {
     AccountBalance {
         wallet: acc.wallet,
         bank: acc.bank,
@@ -339,7 +334,9 @@ pub async fn admin_set_balance(
     amount: i64,
     cfg: &EconomyConfig,
 ) -> Result<AccountBalance> {
-    run_with_retry!(admin_set_balance_inner(db, guild_id, user_id, vault, amount, cfg))
+    run_with_retry!(admin_set_balance_inner(
+        db, guild_id, user_id, vault, amount, cfg
+    ))
 }
 
 async fn admin_set_balance_inner(
@@ -395,7 +392,9 @@ pub async fn admin_adjust_balance(
     delta: i64,
     cfg: &EconomyConfig,
 ) -> Result<AccountBalance> {
-    run_with_retry!(admin_adjust_balance_inner(db, guild_id, user_id, vault, delta, cfg))
+    run_with_retry!(admin_adjust_balance_inner(
+        db, guild_id, user_id, vault, delta, cfg
+    ))
 }
 
 async fn admin_adjust_balance_inner(
@@ -547,11 +546,10 @@ async fn play_slots_inner(
     })
 }
 
-/// Symbols from UUIDv4 bytes (already a dependency); unbiased enough for reels
+/// Symbols from `UUIDv4` bytes (already a dependency); unbiased enough for reels
 /// and avoids the process-wide hasher used previously.
 fn spin_symbols() -> [String; 3] {
-    let bytes = uuid::Uuid::new_v4();
-    let bytes = bytes.as_bytes();
+    let bytes = *uuid::Uuid::new_v4().as_bytes();
     std::array::from_fn(|i| SLOT_SYMBOLS[usize::from(bytes[i]) % SLOT_SYMBOLS.len()].to_string())
 }
 
@@ -566,7 +564,14 @@ pub async fn transfer(
     if sender_id == recipient_id {
         return Ok(None);
     }
-    run_with_retry!(transfer_inner(db, guild_id, sender_id, recipient_id, amount, cfg))
+    run_with_retry!(transfer_inner(
+        db,
+        guild_id,
+        sender_id,
+        recipient_id,
+        amount,
+        cfg
+    ))
 }
 
 async fn transfer_inner(
@@ -754,16 +759,16 @@ mod tests {
 
     #[test]
     fn detects_conflict_errors() {
-        let err_40001 = sea_orm::DbErr::Custom("could not serialize access: 40001".into());
-        let err_40p01 = sea_orm::DbErr::Custom("deadlock detected: 40P01".into());
+        let serialize_err = sea_orm::DbErr::Custom("could not serialize access: 40001".into());
+        let deadlock_err = sea_orm::DbErr::Custom("deadlock detected: 40P01".into());
         let err_other = sea_orm::DbErr::Custom("other error".into());
 
-        assert!(is_conflict_db_err(&err_40001));
-        assert!(is_conflict_db_err(&err_40p01));
+        assert!(is_conflict_db_err(&serialize_err));
+        assert!(is_conflict_db_err(&deadlock_err));
         assert!(!is_conflict_db_err(&err_other));
 
-        assert!(is_conflict_error(&LumiError::Db(err_40001)));
-        assert!(is_conflict_error(&LumiError::Db(err_40p01)));
+        assert!(is_conflict_error(&LumiError::Db(serialize_err)));
+        assert!(is_conflict_error(&LumiError::Db(deadlock_err)));
         assert!(!is_conflict_error(&LumiError::Db(err_other)));
     }
 }

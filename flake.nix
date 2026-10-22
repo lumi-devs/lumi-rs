@@ -53,7 +53,7 @@
             echo "========================================="
             echo "  Lumi (Rust) dev shell"
             echo "  rustc $(rustc --version | cut -d' ' -f2) · cargo $(cargo --version | cut -d' ' -f2)"
-            echo "  linker: mold $(mold --version 2>/dev/null | head -1)"
+            echo "  linker: $(mold --version 2>/dev/null | head -1)"
             echo "  psql $(psql --version | cut -d' ' -f3) · redis $(redis-server --version | awk '{print $3}' | cut -d= -f2)"
             echo "========================================="
           '';

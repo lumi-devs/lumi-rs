@@ -93,21 +93,8 @@ pub async fn rank(
         }
         Err(err) => {
             tracing::warn!(%err, "failed to render rank card PNG, falling back to text view");
-            ctx.send(
-                views::rank_card(
-                    &username,
-                    avatar_url,
-                    acc.level,
-                    rank,
-                    acc.xp,
-                    next_xp,
-                    acc.total_xp,
-                    acc.message_count,
-                    acc.voice_minutes,
-                )
-                .reply(),
-            )
-            .await?;
+            ctx.send(views::rank_card(&username, avatar_url, rank, next_xp, &acc).reply())
+                .await?;
         }
     }
 
@@ -144,7 +131,7 @@ pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
             username: ellipsize(&name, 22),
             level: entry.level,
             xp: entry.total_xp,
-            progress: entry.total_xp as f64 / top_xp as f64,
+            progress: images::percent(entry.total_xp, top_xp),
         });
     }
 
@@ -283,6 +270,7 @@ pub async fn level_set(
     Ok(())
 }
 
+#[must_use]
 pub fn commands() -> Vec<Command> {
     vec![rank(), leaderboard(), level()]
 }

@@ -23,10 +23,9 @@ fn is_forbidden_ip(ip: IpAddr) -> bool {
                 // Link-local fe80::/10
                 || (ipv6.segments()[0] & 0xffc0) == 0xfe80
                 // IPv4-mapped IPv6 (::ffff:0:0/96)
-                || match ipv6.to_ipv4_mapped() {
-                    Some(v4) => is_forbidden_ip(IpAddr::V4(v4)),
-                    None => false,
-                }
+                || ipv6
+                    .to_ipv4_mapped()
+                    .is_some_and(|v4| is_forbidden_ip(IpAddr::V4(v4)))
         }
     }
 }
@@ -34,10 +33,9 @@ fn is_forbidden_ip(ip: IpAddr) -> bool {
 fn parse_host_port(url_str: &str) -> Option<(&str, u16)> {
     let (rest, default_port) = if let Some(stripped) = url_str.strip_prefix("https://") {
         (stripped, 443)
-    } else if let Some(stripped) = url_str.strip_prefix("http://") {
-        (stripped, 80)
     } else {
-        return None;
+        let stripped = url_str.strip_prefix("http://")?;
+        (stripped, 80)
     };
     let authority = rest.split(['/', '?', '#']).next()?;
     // Last '@' wins because userinfo may itself contain one.
@@ -46,11 +44,10 @@ fn parse_host_port(url_str: &str) -> Option<(&str, u16)> {
         let end_bracket = host_port.find(']')?;
         let host = &host_port[1..end_bracket];
         let remaining = &host_port[end_bracket + 1..];
-        let port = if let Some(p_str) = remaining.strip_prefix(':') {
-            p_str.parse::<u16>().ok()?
-        } else {
-            default_port
-        };
+        let port = remaining
+            .strip_prefix(':')
+            .map_or(Ok(default_port), str::parse::<u16>)
+            .ok()?;
         Some((host, port))
     } else if let Some((host, p_str)) = host_port.split_once(':') {
         let port = p_str.parse::<u16>().ok()?;
@@ -68,10 +65,11 @@ async fn validate_clone_url(raw: &str) -> Result<(), &'static str> {
     if host.is_empty() {
         return Err("URL contains an empty host");
     }
-    if host.eq_ignore_ascii_case("localhost")
-        || host.ends_with(".local")
-        || host.ends_with(".internal")
-        || host.ends_with(".localhost")
+    let host_lower = host.to_ascii_lowercase();
+    if host_lower == "localhost"
+        || host_lower.strip_suffix(".local").is_some()
+        || host_lower.strip_suffix(".internal").is_some()
+        || host_lower.strip_suffix(".localhost").is_some()
     {
         return Err("Local and internal hosts are forbidden (SSRF protection)");
     }
@@ -109,11 +107,12 @@ async fn autocomplete_repo<'a>(
     partial: &'a str,
 ) -> serenity::CreateAutocompleteResponse<'a> {
     let downloader = &ctx.data().downloader;
+    let partial_lower = partial.to_lowercase();
     let choices: Vec<serenity::AutocompleteChoice> = match downloader.list_repos().await {
         Ok(repos) => repos
             .into_iter()
             .map(|r| r.name)
-            .filter(|name| name.to_lowercase().starts_with(&partial.to_lowercase()))
+            .filter(|name| name.to_lowercase().starts_with(&partial_lower))
             .map(|name| serenity::AutocompleteChoice::new(name.clone(), name))
             .collect(),
         Err(err) => {
@@ -380,6 +379,7 @@ pub async fn download_list(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+#[must_use]
 pub fn commands() -> Vec<Command> {
     vec![repo(), download()]
 }
@@ -414,14 +414,14 @@ mod tests {
     fn blocks_forbidden_ips() {
         use std::net::{Ipv4Addr, Ipv6Addr};
 
-        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
         assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
         assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
         assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
         assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(
             169, 254, 169, 254
         ))));
-        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0))));
+        assert!(is_forbidden_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
 
         assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
         assert!(is_forbidden_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
@@ -435,7 +435,7 @@ mod tests {
             0xfd12, 0x3456, 0x789a, 0, 0, 0, 0, 1
         ))));
         assert!(is_forbidden_ip(IpAddr::V6(
-            Ipv4Addr::new(127, 0, 0, 1).to_ipv6_mapped()
+            Ipv4Addr::LOCALHOST.to_ipv6_mapped()
         )));
         assert!(is_forbidden_ip(IpAddr::V6(
             Ipv4Addr::new(192, 168, 1, 1).to_ipv6_mapped()

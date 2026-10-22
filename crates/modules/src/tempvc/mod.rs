@@ -1,11 +1,11 @@
 //! Dynamic Temporary Voice Channels module.
 
-pub mod commands;
-pub mod events;
-pub mod store;
-pub mod views;
+mod commands;
+mod events;
+pub(crate) mod store;
+mod views;
 
-pub use commands::{commands, handle_component, handle_modal};
+pub use commands::{handle_component, handle_modal};
 pub use events::on_voice_state_update;
 
 /// True when a REST error means the target channel is already gone.
@@ -19,6 +19,7 @@ pub(crate) fn channel_missing(error: &poise::serenity_prelude::Error) -> bool {
 
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
+/// Temporary voice channels module.
 #[derive(Debug)]
 pub struct TempVcModule;
 

@@ -19,18 +19,31 @@ pub enum HeatAction {
     Quarantine,
 }
 
+/// Convert a config threshold to `f64` without a lossy cast.
+fn to_f64(value: i64) -> f64 {
+    f64::from(i32::try_from(value).unwrap_or_else(|_| {
+        if value.is_negative() {
+            i32::MIN
+        } else {
+            i32::MAX
+        }
+    }))
+}
+
+#[must_use]
 pub fn heat_action(heat: f64, rules: &FilterRules) -> HeatAction {
-    if rules.heat_quarantine > 0 && heat >= rules.heat_quarantine as f64 {
+    if rules.heat_quarantine > 0 && heat >= to_f64(rules.heat_quarantine) {
         HeatAction::Quarantine
-    } else if rules.heat_timeout > 0 && heat >= rules.heat_timeout as f64 {
+    } else if rules.heat_timeout > 0 && heat >= to_f64(rules.heat_timeout) {
         HeatAction::Timeout
-    } else if rules.heat_warn > 0 && heat >= rules.heat_warn as f64 {
+    } else if rules.heat_warn > 0 && heat >= to_f64(rules.heat_warn) {
         HeatAction::Warn
     } else {
         HeatAction::None
     }
 }
 
+#[must_use]
 pub fn is_zalgo(content: &str) -> bool {
     if content.is_empty() {
         return false;
@@ -39,13 +52,15 @@ pub fn is_zalgo(content: &str) -> bool {
         .chars()
         .filter(|&c| unicode_normalization::char::is_combining_mark(c))
         .count();
-    (marks as f64 / content.chars().count() as f64) > 0.5
+    marks.saturating_mul(2) > content.chars().count()
 }
 
+#[must_use]
 pub fn count_emoji(content: &str) -> u64 {
     static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    let custom = crate::regex::cached(&RE, CUSTOM_EMOJI_PATTERN)
-        .map_or(0, |re| re.find_iter(content).count() as u64);
+    let custom = crate::regex::cached(&RE, CUSTOM_EMOJI_PATTERN).map_or(0, |re| {
+        u64::try_from(re.find_iter(content).count()).unwrap_or(u64::MAX)
+    });
     let unicode = content
         .chars()
         .filter(|&c| {
@@ -59,10 +74,11 @@ pub fn count_emoji(content: &str) -> u64 {
                 | '\u{1FA70}'..='\u{1FAFF}'
             )
         })
-        .count() as u64;
-    custom + unicode
+        .count();
+    custom + u64::try_from(unicode).unwrap_or(u64::MAX)
 }
 
+#[must_use]
 pub fn contains_link(content: &str) -> bool {
     static RE: OnceLock<Option<Regex>> = OnceLock::new();
     crate::regex::cached(&RE, URL_PATTERN).is_some_and(|re| re.is_match(content))
@@ -71,30 +87,26 @@ pub fn contains_link(content: &str) -> bool {
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
-pub async fn add_heat(
+#[must_use]
+pub fn add_heat(
     _services: &Services,
     guild_id: u64,
     user_id: u64,
     points: f64,
     decay_per_minute: f64,
-) -> Result<f64, redis::RedisError> {
-    Ok(super::state::add_heat(
-        guild_id,
-        user_id,
-        points,
-        decay_per_minute,
-    ))
+) -> f64 {
+    super::state::add_heat(guild_id, user_id, points, decay_per_minute)
 }
 
-pub async fn clear_heat(_services: &Services, guild_id: u64, user_id: u64) {
+pub fn clear_heat(_services: &Services, guild_id: u64, user_id: u64) {
     super::state::reset_heat(guild_id, user_id);
 }
 
-pub async fn claim_escalation(
+#[must_use]
+pub fn claim_escalation(
     services: &Services,
     guild_id: u64,
     user_id: u64,
@@ -103,20 +115,17 @@ pub async fn claim_escalation(
     let key = format!("filter:escalation:{guild_id}:{user_id}:{action}");
     services
         .cache
-        .claim_local(&key, std::time::Duration::from_secs(30))
+        .claim_local(&key, Duration::from_secs(30))
 }
 
-pub async fn record_mentions(
+#[must_use]
+pub fn record_mentions(
     _services: &Services,
     guild_id: u64,
     count: u64,
     window_seconds: u64,
-) -> Result<u64, redis::RedisError> {
-    Ok(super::state::record_mentions(
-        guild_id,
-        count,
-        window_seconds,
-    ))
+) -> u64 {
+    super::state::record_mentions(guild_id, count, window_seconds)
 }
 
 pub async fn activate_auto_lockdown(
@@ -158,26 +167,18 @@ pub async fn check_mention_flood(
         return;
     };
 
-    let total = match record_mentions(
+    let total = record_mentions(
         services,
         guild_id.get(),
         mention_count,
-        rules.lockdown_window_seconds.max(1) as u64,
-    )
-    .await
-    {
-        Ok(t) => t,
-        Err(err) => {
-            tracing::warn!(%err, "filter: failed to record mentions");
-            return;
-        }
-    };
+        u64::try_from(rules.lockdown_window_seconds.max(1)).unwrap_or(1),
+    );
 
-    if total < rules.lockdown_mention_threshold as u64 {
+    if total < u64::try_from(rules.lockdown_mention_threshold).unwrap_or(u64::MAX) {
         return;
     }
 
-    let duration_minutes = rules.lockdown_duration_minutes.max(1) as u64;
+    let duration_minutes = u64::try_from(rules.lockdown_duration_minutes.max(1)).unwrap_or(1);
     if !activate_auto_lockdown(services, guild_id.get(), duration_minutes).await {
         return;
     }
@@ -198,10 +199,12 @@ pub async fn check_mention_flood(
 
     if let Some(log_channel) = rules.log_channel {
         let card =
-            Card::lines("🚨 Auto-Lockdown Triggered", vec![detail.clone()]).kind(CardKind::Error);
-        let _ = GenericChannelId::new(log_channel)
-            .send_message(&ctx.http, card.into_reply().message())
-            .await;
+            Card::lines("🚨 Auto-Lockdown Triggered", vec![detail]).kind(CardKind::Error);
+        drop(
+            GenericChannelId::new(log_channel)
+                .send_message(&ctx.http, card.into_reply().message())
+                .await,
+        );
     }
 
     let http = Arc::clone(&ctx.http);
@@ -217,7 +220,11 @@ pub async fn check_mention_flood(
         .await;
         let mut conn = cache.redis();
         let key = format!("lumi:filter:{guild_id}:autolockdown");
-        if let Err(error) = redis::cmd("DEL").arg(&key).query_async::<()>(&mut conn).await {
+        if let Err(error) = redis::cmd("DEL")
+            .arg(&key)
+            .query_async::<()>(&mut conn)
+            .await
+        {
             tracing::warn!(
                 %error,
                 guild_id = guild_id.get(),
@@ -247,51 +254,19 @@ pub async fn check_heat(
         return;
     };
 
-    let mut points = rules.heat_per_message as f64;
-    if rules.heat_per_mention > 0 && mention_count > 0 {
-        let mentions = i64::try_from(mention_count).unwrap_or(i64::MAX);
-        points += rules.heat_per_mention.saturating_mul(mentions) as f64;
-    }
-    if was_filter_hit && rules.heat_per_filter_hit > 0 {
-        points += rules.heat_per_filter_hit as f64;
-    }
-    if rules.heat_per_attachment > 0 && !message.attachments.is_empty() {
-        let count = i64::try_from(message.attachments.len()).unwrap_or(i64::MAX);
-        points += rules.heat_per_attachment.saturating_mul(count) as f64;
-    }
-    if rules.heat_per_emoji > 0 {
-        let emojis = count_emoji(&message.content);
-        if emojis > 0 {
-            let emoji_count = i64::try_from(emojis).unwrap_or(i64::MAX);
-            points += rules.heat_per_emoji.saturating_mul(emoji_count) as f64;
-        }
-    }
-    if rules.heat_per_link > 0 && contains_link(&message.content) {
-        points += rules.heat_per_link as f64;
-    }
-    if rules.heat_per_zalgo > 0 && is_zalgo(&message.content) {
-        points += rules.heat_per_zalgo as f64;
-    }
+    let points = heat_points(message, mention_count, was_filter_hit, rules);
 
     if points <= 0.0 {
         return;
     }
 
-    let heat = match add_heat(
+    let heat = add_heat(
         services,
         guild_id.get(),
         user_id.get(),
         points,
-        rules.heat_decay_per_minute as f64,
-    )
-    .await
-    {
-        Ok(h) => h,
-        Err(err) => {
-            tracing::warn!(%err, "filter: failed to add heat");
-            return;
-        }
-    };
+        to_f64(rules.heat_decay_per_minute),
+    );
 
     let action = heat_action(heat, rules);
     if action == HeatAction::None {
@@ -305,124 +280,190 @@ pub async fn check_heat(
         HeatAction::None => return,
     };
 
-    if !claim_escalation(services, guild_id.get(), user_id.get(), action_str).await {
+    if !claim_escalation(services, guild_id.get(), user_id.get(), action_str) {
         return;
     }
 
     match action {
-        HeatAction::Warn => {
-            let reason = format!(
-                "Slow down: your messages are triggering spam thresholds ({heat:.1} heat)."
-            );
-            let card =
-                Card::lines("⚠️ Activity Warning", vec![reason.clone()]).kind(CardKind::Warning);
-            let _ = message
-                .channel_id
-                .send_message(&ctx.http, card.into_reply().message())
-                .await;
-            if let Some(log_channel) = rules.log_channel {
-                let log_card = Card::lines(
-                    "⚠️ Heat Warning Issued",
-                    vec![
-                        format!("**Target**: <@{}>", user_id.get()),
-                        format!("**Channel**: <#{}>", message.channel_id.get()),
-                        format!("**Heat Level**: {heat:.1}"),
-                    ],
-                )
-                .kind(CardKind::Warning);
-                let _ = GenericChannelId::new(log_channel)
-                    .send_message(&ctx.http, log_card.into_reply().message())
-                    .await;
-            }
+        HeatAction::Warn => warn_heat(ctx, message, user_id, heat, rules).await,
+        HeatAction::Timeout => timeout_heat(ctx, user_id, guild_id, heat, rules).await,
+        HeatAction::Quarantine => {
+            quarantine_heat(ctx, services, user_id, guild_id, heat, rules).await;
         }
-        HeatAction::Timeout => {
-            let duration_mins = rules.heat_timeout_minutes.max(1);
-            let until = Timestamp::from_unix_timestamp(
-                Timestamp::now()
-                    .unix_timestamp()
-                    .saturating_add(duration_mins.saturating_mul(60)),
-            );
-            if let Ok(until) = until {
-                let reason = format!(
-                    "Heat escalation: exceeded {} heat ({heat:.1})",
-                    rules.heat_timeout
-                );
-                if let Err(err) = guild_id
+        HeatAction::None => {}
+    }
+}
+
+fn heat_points(
+    message: &Message,
+    mention_count: u64,
+    was_filter_hit: bool,
+    rules: &FilterRules,
+) -> f64 {
+    let mut points = to_f64(rules.heat_per_message);
+    if rules.heat_per_mention > 0 && mention_count > 0 {
+        let mentions = i64::try_from(mention_count).unwrap_or(i64::MAX);
+        points += to_f64(rules.heat_per_mention.saturating_mul(mentions));
+    }
+    if was_filter_hit && rules.heat_per_filter_hit > 0 {
+        points += to_f64(rules.heat_per_filter_hit);
+    }
+    if rules.heat_per_attachment > 0 && !message.attachments.is_empty() {
+        let count = i64::from(message.attachments.len());
+        points += to_f64(rules.heat_per_attachment.saturating_mul(count));
+    }
+    if rules.heat_per_emoji > 0 {
+        let emojis = count_emoji(&message.content);
+        if emojis > 0 {
+            let emoji_count = i64::try_from(emojis).unwrap_or(i64::MAX);
+            points += to_f64(rules.heat_per_emoji.saturating_mul(emoji_count));
+        }
+    }
+    if rules.heat_per_link > 0 && contains_link(&message.content) {
+        points += to_f64(rules.heat_per_link);
+    }
+    if rules.heat_per_zalgo > 0 && is_zalgo(&message.content) {
+        points += to_f64(rules.heat_per_zalgo);
+    }
+    points
+}
+
+async fn warn_heat(
+    ctx: &serenity::Context,
+    message: &Message,
+    user_id: UserId,
+    heat: f64,
+    rules: &FilterRules,
+) {
+    let reason =
+        format!("Slow down: your messages are triggering spam thresholds ({heat:.1} heat).");
+    let card = Card::lines("⚠️ Activity Warning", vec![reason]).kind(CardKind::Warning);
+    drop(
+        message
+            .channel_id
+            .send_message(&ctx.http, card.into_reply().message())
+            .await,
+    );
+    if let Some(log_channel) = rules.log_channel {
+        let log_card = Card::lines(
+            "⚠️ Heat Warning Issued",
+            vec![
+                format!("**Target**: <@{}>", user_id.get()),
+                format!("**Channel**: <#{}>", message.channel_id.get()),
+                format!("**Heat Level**: {heat:.1}"),
+            ],
+        )
+        .kind(CardKind::Warning);
+        drop(
+            GenericChannelId::new(log_channel)
+                .send_message(&ctx.http, log_card.into_reply().message())
+                .await,
+        );
+    }
+}
+
+async fn timeout_heat(
+    ctx: &serenity::Context,
+    user_id: UserId,
+    guild_id: serenity::GuildId,
+    heat: f64,
+    rules: &FilterRules,
+) {
+    let duration_mins = rules.heat_timeout_minutes.max(1);
+    let until = Timestamp::from_unix_timestamp(
+        Timestamp::now()
+            .unix_timestamp()
+            .saturating_add(duration_mins.saturating_mul(60)),
+    );
+    let Ok(until) = until else {
+        return;
+    };
+    let reason = format!(
+        "Heat escalation: exceeded {} heat ({heat:.1})",
+        rules.heat_timeout
+    );
+    if let Err(err) = guild_id
+        .edit_member(
+            &ctx.http,
+            user_id,
+            EditMember::new()
+                .disable_communication_until(until)
+                .audit_log_reason(&reason),
+        )
+        .await
+    {
+        tracing::warn!(%err, "filter: heat timeout failed");
+    } else if let Some(log_channel) = rules.log_channel {
+        let log_card = Card::lines(
+            "⏳ Heat Timeout Applied",
+            vec![
+                format!("**Target**: <@{}>", user_id.get()),
+                format!("**Duration**: {duration_mins} minute(s)"),
+                format!("**Heat Level**: {heat:.1}"),
+                format!("**Reason**: {reason}"),
+            ],
+        )
+        .kind(CardKind::Warning);
+        drop(
+            GenericChannelId::new(log_channel)
+                .send_message(&ctx.http, log_card.into_reply().message())
+                .await,
+        );
+    }
+}
+
+async fn quarantine_heat(
+    ctx: &serenity::Context,
+    services: &Services,
+    user_id: UserId,
+    guild_id: serenity::GuildId,
+    heat: f64,
+    rules: &FilterRules,
+) {
+    clear_heat(services, guild_id.get(), user_id.get());
+    let reason = format!(
+        "Heat escalation: exceeded {} heat ({heat:.1})",
+        rules.heat_quarantine
+    );
+    match crate::moderation::store::quarantine_role(&services.cache, &services.db, guild_id.get())
+        .await
+    {
+        Ok(Some(quarantine_role)) => {
+            drop(
+                guild_id
                     .edit_member(
                         &ctx.http,
                         user_id,
-                        EditMember::new()
-                            .disable_communication_until(until)
-                            .audit_log_reason(&reason),
+                        EditMember::new().roles(vec![serenity::all::RoleId::new(quarantine_role)]),
                     )
-                    .await
-                {
-                    tracing::warn!(%err, "filter: heat timeout failed");
-                } else if let Some(log_channel) = rules.log_channel {
-                    let log_card = Card::lines(
-                        "⏳ Heat Timeout Applied",
-                        vec![
-                            format!("**Target**: <@{}>", user_id.get()),
-                            format!("**Duration**: {duration_mins} minute(s)"),
-                            format!("**Heat Level**: {heat:.1}"),
-                            format!("**Reason**: {reason}"),
-                        ],
-                    )
-                    .kind(CardKind::Warning);
-                    let _ = GenericChannelId::new(log_channel)
-                        .send_message(&ctx.http, log_card.into_reply().message())
-                        .await;
-                }
-            }
-        }
-        HeatAction::Quarantine => {
-            clear_heat(services, guild_id.get(), user_id.get()).await;
-            let reason = format!(
-                "Heat escalation: exceeded {} heat ({heat:.1})",
-                rules.heat_quarantine
+                    .await,
             );
-            match crate::moderation::store::quarantine_role(
-                &services.cache,
-                &services.db,
-                guild_id.get(),
-            )
-            .await
-            {
-                Ok(Some(quarantine_role)) => {
-                    let _ = guild_id
-                        .edit_member(
-                            &ctx.http,
-                            user_id,
-                            EditMember::new().roles(vec![serenity::all::RoleId::new(quarantine_role)]),
-                        )
-                        .await;
-                    if let Some(log_channel) = rules.log_channel {
-                        let log_card = Card::lines(
-                            "☣️ Member Quarantined (Heat)",
-                            vec![
-                                format!("**Target**: <@{}>", user_id.get()),
-                                format!("**Heat Level**: {heat:.1}"),
-                                format!("**Reason**: {reason}"),
-                            ],
-                        )
-                        .kind(CardKind::Error);
-                        let _ = GenericChannelId::new(log_channel)
-                            .send_message(&ctx.http, log_card.into_reply().message())
-                            .await;
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        guild_id = guild_id.get(),
-                        user_id = user_id.get(),
-                        "filter: failed to look up quarantine role"
-                    );
-                }
+            if let Some(log_channel) = rules.log_channel {
+                let log_card = Card::lines(
+                    "☣️ Member Quarantined (Heat)",
+                    vec![
+                        format!("**Target**: <@{}>", user_id.get()),
+                        format!("**Heat Level**: {heat:.1}"),
+                        format!("**Reason**: {reason}"),
+                    ],
+                )
+                .kind(CardKind::Error);
+                drop(
+                    GenericChannelId::new(log_channel)
+                        .send_message(&ctx.http, log_card.into_reply().message())
+                        .await,
+                );
             }
         }
-        HeatAction::None => {}
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                guild_id = guild_id.get(),
+                user_id = user_id.get(),
+                "filter: failed to look up quarantine role"
+            );
+        }
     }
 }
 

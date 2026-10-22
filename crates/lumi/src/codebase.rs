@@ -1,5 +1,4 @@
-//! Source and dependency counts for `/about`, after lumi's `countCodeLines` and
-//! `countDeps`.
+//! Source and dependency counts for `/about`.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -22,7 +21,9 @@ fn workspace_root() -> Option<&'static Path> {
 /// What `/about` reports about the codebase itself.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CodebaseStats {
+    /// Total source code lines.
     pub lines: u64,
+    /// Total locked workspace dependencies.
     pub dependencies: u64,
 }
 
@@ -53,8 +54,9 @@ fn count_lines(dir: &Path) -> u64 {
                 total += count_lines(&path);
             }
         } else if path.extension().is_some_and(|ext| ext == "rs") {
-            total +=
-                std::fs::read_to_string(&path).map_or(0, |source| source.lines().count() as u64);
+            total += std::fs::read_to_string(&path).map_or(0, |source| {
+                u64::try_from(source.lines().count()).unwrap_or(u64::MAX)
+            });
         }
     }
     total
@@ -63,7 +65,8 @@ fn count_lines(dir: &Path) -> u64 {
 /// Every crate the build resolves, direct or transitive.
 fn count_lock_packages(lockfile: &Path) -> u64 {
     std::fs::read_to_string(lockfile).map_or(0, |lock| {
-        lock.lines().filter(|line| *line == "[[package]]").count() as u64
+        u64::try_from(lock.lines().filter(|line| *line == "[[package]]").count())
+            .unwrap_or(u64::MAX)
     })
 }
 

@@ -6,6 +6,7 @@ use lumi_kernel::{Cache, Result, module_state};
 
 const MODULE: &str = "logging";
 
+/// Whether `channel_id` is in the guild's ignored-channel list.
 pub async fn is_ignored_channel(
     cache: &Cache,
     db: &DatabaseConnection,

@@ -3,13 +3,16 @@
 //! The `/panic` command itself stays in the host binary (`commands::security`);
 //! this module owns the config schema, the anti-nuke store and the listeners.
 
+/// Gateway event listeners for security actions.
 pub mod events;
+/// Security configuration persistence and checks.
 pub mod store;
 
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
 use crate::config;
 
+/// Security and anti-nuke module.
 #[derive(Debug)]
 pub struct SecurityModule;
 
@@ -44,129 +47,144 @@ impl Module for SecurityModule {
     }
 
     fn config_schema(&self) -> Vec<ConfigField> {
-        let anti = "Anti-Nuke";
-        let limits = "Nuke Limits";
-        let panic = "Panic Mode";
-        vec![
-            config::bool_field(
-                "antinuke_enabled",
-                "Anti-Nuke",
-                "Watch the audit log for mass destructive actions.",
-                false,
-                anti,
-            ),
-            number(
-                "window_seconds",
-                "Detection Window",
-                "Sliding window in seconds for counting actions.",
-                60,
-                anti,
-            ),
-            config::string_array_field(
-                "trusted_role_ids",
-                "Trusted Roles",
-                "Role IDs exempt from anti-nuke.",
-                anti,
-            ),
-            config::channel_field(
-                "log_channel_id",
-                "Security Log Channel",
-                "Channel for anti-nuke alerts.",
-                anti,
-            ),
-            number(
-                "max_bans",
-                "Max Bans",
-                "Bans allowed per executor within the window.",
-                5,
-                limits,
-            ),
-            response(
-                "response_bans",
-                "Response - Bans",
-                "Action taken when the ban threshold trips.",
-                limits,
-            ),
-            number(
-                "max_kicks",
-                "Max Kicks",
-                "Kicks allowed per executor within the window.",
-                5,
-                limits,
-            ),
-            response(
-                "response_kicks",
-                "Response - Kicks",
-                "Action taken when the kick threshold trips.",
-                limits,
-            ),
-            number(
-                "max_channel_deletes",
-                "Max Channel Deletes",
-                "Channel deletions allowed per executor within the window.",
-                3,
-                limits,
-            ),
-            response(
-                "response_channel_deletes",
-                "Response - Channel Deletes",
-                "Action taken when the channel-delete threshold trips.",
-                limits,
-            ),
-            number(
-                "max_role_deletes",
-                "Max Role Deletes",
-                "Role deletions allowed per executor within the window.",
-                3,
-                limits,
-            ),
-            response(
-                "response_role_deletes",
-                "Response - Role Deletes",
-                "Action taken when the role-delete threshold trips.",
-                limits,
-            ),
-            number(
-                "max_webhook_creates",
-                "Max Webhook Creates",
-                "Webhook creations allowed per executor within the window.",
-                3,
-                limits,
-            ),
-            response(
-                "response_webhook_creates",
-                "Response - Webhook Creates",
-                "Action taken when the webhook-create threshold trips.",
-                limits,
-            ),
-            number(
-                "max_vanity_changes",
-                "Max Vanity URL Changes",
-                "Vanity invite code changes allowed per executor within the window.",
-                1,
-                limits,
-            ),
-            number(
-                "max_permission_grants",
-                "Max Dangerous Permission Grants",
-                "Times @everyone can be granted a dangerous permission before the response fires.",
-                1,
-                limits,
-            ),
-            number(
-                "max_quarantine_bypass",
-                "Max Quarantine Bypass Attempts",
-                "Times a quarantined member's roles can be changed before the response fires.",
-                1,
-                limits,
-            ),
-            config::bool_field(
-                "panic_lock_mod_commands",
-                "Lock Mod Commands During Panic",
-                "While panic mode is active, only managers may run permission-gated commands.",
-                true,
-                panic,
-            ),
-        ]
+        let mut fields = anti_schema();
+        fields.extend(limits_schema());
+        fields.extend(panic_schema());
+        fields
     }
+}
+
+fn anti_schema() -> Vec<ConfigField> {
+    let anti = "Anti-Nuke";
+    vec![
+        config::bool_field(
+            "antinuke_enabled",
+            "Anti-Nuke",
+            "Watch the audit log for mass destructive actions.",
+            false,
+            anti,
+        ),
+        number(
+            "window_seconds",
+            "Detection Window",
+            "Sliding window in seconds for counting actions.",
+            60,
+            anti,
+        ),
+        config::string_array_field(
+            "trusted_role_ids",
+            "Trusted Roles",
+            "Role IDs exempt from anti-nuke.",
+            anti,
+        ),
+        config::channel_field(
+            "log_channel_id",
+            "Security Log Channel",
+            "Channel for anti-nuke alerts.",
+            anti,
+        ),
+    ]
+}
+
+fn limits_schema() -> Vec<ConfigField> {
+    let limits = "Nuke Limits";
+    vec![
+        number(
+            "max_bans",
+            "Max Bans",
+            "Bans allowed per executor within the window.",
+            5,
+            limits,
+        ),
+        response(
+            "response_bans",
+            "Response - Bans",
+            "Action taken when the ban threshold trips.",
+            limits,
+        ),
+        number(
+            "max_kicks",
+            "Max Kicks",
+            "Kicks allowed per executor within the window.",
+            5,
+            limits,
+        ),
+        response(
+            "response_kicks",
+            "Response - Kicks",
+            "Action taken when the kick threshold trips.",
+            limits,
+        ),
+        number(
+            "max_channel_deletes",
+            "Max Channel Deletes",
+            "Channel deletions allowed per executor within the window.",
+            3,
+            limits,
+        ),
+        response(
+            "response_channel_deletes",
+            "Response - Channel Deletes",
+            "Action taken when the channel-delete threshold trips.",
+            limits,
+        ),
+        number(
+            "max_role_deletes",
+            "Max Role Deletes",
+            "Role deletions allowed per executor within the window.",
+            3,
+            limits,
+        ),
+        response(
+            "response_role_deletes",
+            "Response - Role Deletes",
+            "Action taken when the role-delete threshold trips.",
+            limits,
+        ),
+        number(
+            "max_webhook_creates",
+            "Max Webhook Creates",
+            "Webhook creations allowed per executor within the window.",
+            3,
+            limits,
+        ),
+        response(
+            "response_webhook_creates",
+            "Response - Webhook Creates",
+            "Action taken when the webhook-create threshold trips.",
+            limits,
+        ),
+        number(
+            "max_vanity_changes",
+            "Max Vanity URL Changes",
+            "Vanity invite code changes allowed per executor within the window.",
+            1,
+            limits,
+        ),
+        number(
+            "max_permission_grants",
+            "Max Dangerous Permission Grants",
+            "Times @everyone can be granted a dangerous permission before the response fires.",
+            1,
+            limits,
+        ),
+        number(
+            "max_quarantine_bypass",
+            "Max Quarantine Bypass Attempts",
+            "Times a quarantined member's roles can be changed before the response fires.",
+            1,
+            limits,
+        ),
+    ]
+}
+
+fn panic_schema() -> Vec<ConfigField> {
+    let panic = "Panic Mode";
+    vec![config::bool_field(
+        "panic_lock_mod_commands",
+        "Lock Mod Commands During Panic",
+        "While panic mode is active, only managers may run permission-gated commands.",
+        true,
+        panic,
+    )]
 }

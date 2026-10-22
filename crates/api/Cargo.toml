@@ -20,4 +20,6 @@ chrono         = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 ring           = "0.17"
 hex            = "0.4"
+
+[dev-dependencies]
 tower          = { version = "0.5", features = ["util"] }

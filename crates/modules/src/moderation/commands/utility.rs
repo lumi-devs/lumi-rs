@@ -121,9 +121,8 @@ pub async fn sanitize(
     let current = guild_member
         .nick
         .as_deref()
-        .unwrap_or(&guild_member.user.name)
-        .to_string();
-    let sanitized = strip_hoisting(&current);
+        .unwrap_or(&guild_member.user.name);
+    let sanitized = strip_hoisting(current);
 
     if sanitized == current {
         return send_card(

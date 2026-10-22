@@ -27,35 +27,45 @@ const MANAGE_OPTIONS: &[(&str, &str, &str)] = &[
     ("Delete Channel", "delete", "\u{1f5d1}\u{fe0f}"),
 ];
 
+#[must_use]
 pub fn path(channel_id: u64) -> String {
     channel_id.to_string()
 }
 
+#[must_use]
 pub fn menu_id(channel_id: u64) -> String {
     format!("{PREFIX}:menu:{}", path(channel_id))
 }
+#[must_use]
 pub fn claim_id(channel_id: u64) -> String {
     format!("{PREFIX}:claim:{}", path(channel_id))
 }
+#[must_use]
 pub fn back_id(channel_id: u64) -> String {
     format!("{PREFIX}:back:{}", path(channel_id))
 }
+#[must_use]
 pub fn pick_id(action: &str, channel_id: u64) -> String {
     format!("{PREFIX}:pick:{action}:{}", path(channel_id))
 }
+#[must_use]
 pub fn pick_role_id(action: &str, channel_id: u64) -> String {
     format!("{PREFIX}:pickrole:{action}:{}", path(channel_id))
 }
+#[must_use]
 pub fn delete_confirm_id(channel_id: u64) -> String {
     format!("{PREFIX}:delok:{}", path(channel_id))
 }
+#[must_use]
 pub fn rename_modal_id(channel_id: u64) -> String {
     format!("{PREFIX}:namem:{}", path(channel_id))
 }
+#[must_use]
 pub fn limit_modal_id(channel_id: u64) -> String {
     format!("{PREFIX}:limitm:{}", path(channel_id))
 }
 
+#[must_use]
 pub fn panel_card(
     channel_id: u64,
     owner_id: u64,
@@ -85,18 +95,20 @@ pub fn panel_card(
         options.push((label.to_string(), (*action).to_string(), Some(emoji)));
     }
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Temp VC".to_string(), "Channel".to_string()];
-    opts.status_badge = Some((status.0.to_string(), Some(status.1.to_string())));
-    opts.footer = Some(
-        "Only the channel owner (or staff) can use these controls \u{b7} claim it if the owner left."
-            .to_string(),
-    );
-    opts.separator_above_action_rows = true;
-    opts.action_rows = vec![
-        string_select_options(menu_id(channel_id), "Manage Channel\u{2026}", options),
-        action_row_of(vec![claim_button(channel_id)]),
-    ];
+    let opts = CardOptions {
+        breadcrumbs: vec!["Temp VC".to_string(), "Channel".to_string()],
+        status_badge: Some((status.0.to_string(), Some(status.1.to_string()))),
+        footer: Some(
+            "Only the channel owner (or staff) can use these controls \u{b7} claim it if the owner left."
+                .to_string(),
+        ),
+        separator_above_action_rows: true,
+        action_rows: vec![
+            string_select_options(menu_id(channel_id), "Manage Channel\u{2026}", options),
+            action_row_of(vec![claim_button(channel_id)]),
+        ],
+        ..CardOptions::default()
+    };
 
     Card::lines(
         "\u{1f399}\u{fe0f} Voice Channel Control Deck",
@@ -122,6 +134,7 @@ fn claim_button(channel_id: u64) -> serenity::all::CreateButton<'static> {
     button
 }
 
+#[must_use]
 pub fn picker_card(action: &str, channel_id: u64) -> CardReply {
     let (title, body) = match action {
         "trust" => (
@@ -151,10 +164,12 @@ pub fn picker_card(action: &str, channel_id: u64) -> CardReply {
         _ => ("TempVC", "Pick a member."),
     };
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Temp VC".to_string(), title.to_string()];
-    opts.separator_above_action_rows = true;
-    opts.footer = Some("Pick a member or role, then press \u{2190} Back to return.".to_string());
+    let mut opts = CardOptions {
+        breadcrumbs: vec!["Temp VC".to_string(), title.to_string()],
+        separator_above_action_rows: true,
+        footer: Some("Pick a member or role, then press \u{2190} Back to return.".to_string()),
+        ..CardOptions::default()
+    };
 
     let mut rows: Vec<CreateActionRow<'static>> = Vec::new();
     let member_placeholder = match action {
@@ -223,16 +238,19 @@ fn back_button(channel_id: u64) -> serenity::all::CreateButton<'static> {
         .style(serenity::all::ButtonStyle::Secondary)
 }
 
+#[must_use]
 pub fn delete_confirm_card(channel_id: u64) -> CardReply {
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Temp VC".to_string(), "Delete".to_string()];
-    opts.separator_above_action_rows = true;
-    opts.action_rows = vec![action_row_of(vec![
-        serenity::all::CreateButton::new(delete_confirm_id(channel_id))
-            .label("Confirm Delete")
-            .style(serenity::all::ButtonStyle::Danger),
-        back_button(channel_id),
-    ])];
+    let opts = CardOptions {
+        breadcrumbs: vec!["Temp VC".to_string(), "Delete".to_string()],
+        separator_above_action_rows: true,
+        action_rows: vec![action_row_of(vec![
+            serenity::all::CreateButton::new(delete_confirm_id(channel_id))
+                .label("Confirm Delete")
+                .style(serenity::all::ButtonStyle::Danger),
+            back_button(channel_id),
+        ])],
+        ..CardOptions::default()
+    };
     Card::new(
         "\u{1f5d1}\u{fe0f} Delete Channel?",
         "This permanently deletes your voice channel for everyone.",
@@ -243,6 +261,7 @@ pub fn delete_confirm_card(channel_id: u64) -> CardReply {
     .into_reply()
 }
 
+#[must_use]
 pub fn admin_card(generators: &[GeneratorView]) -> CardReply {
     let body = if generators.is_empty() {
         "-# *No generators yet. Pick a voice channel below to add one.*".to_string()
@@ -264,18 +283,6 @@ pub fn admin_card(generators: &[GeneratorView]) -> CardReply {
             .join("\n")
     };
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Temp VC".to_string(), "Generators".to_string()];
-    opts.footer = Some(if generators.is_empty() {
-        "Pick a voice channel below to add your first generator.".to_string()
-    } else {
-        format!(
-            "{} generators \u{b7} pick one below to edit it",
-            generators.len()
-        )
-    });
-    opts.separator_above_action_rows = true;
-
     let mut rows = vec![channel_select_of_types(
         admin_add_id(),
         "Add a generator channel\u{2026}",
@@ -293,7 +300,20 @@ pub fn admin_card(generators: &[GeneratorView]) -> CardReply {
             options,
         ));
     }
-    opts.action_rows = rows;
+    let opts = CardOptions {
+        breadcrumbs: vec!["Temp VC".to_string(), "Generators".to_string()],
+        footer: Some(if generators.is_empty() {
+            "Pick a voice channel below to add your first generator.".to_string()
+        } else {
+            format!(
+                "{} generators \u{b7} pick one below to edit it",
+                generators.len()
+            )
+        }),
+        separator_above_action_rows: true,
+        action_rows: rows,
+        ..CardOptions::default()
+    };
 
     Card::new("\u{1f50a} Temp VC Generators", body)
         .kind(CardKind::Info)
@@ -301,37 +321,40 @@ pub fn admin_card(generators: &[GeneratorView]) -> CardReply {
         .into_reply()
 }
 
+#[must_use]
 pub fn generator_card(generator: &GeneratorView) -> CardReply {
     let limit = if generator.limit > 0 {
         format!("{} users", generator.limit)
     } else {
         "unlimited".to_string()
     };
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec![
-        "Temp VC".to_string(),
-        "Generators".to_string(),
-        generator.channel_name.clone(),
-    ];
-    opts.footer = Some(
-        "Rename edits the template ({username}, {number}, {pos}) \u{b7} Set Limit caps users \u{b7} 0 = unlimited."
-            .to_string(),
-    );
-    opts.separator_above_action_rows = true;
-    opts.action_rows = vec![action_row_of(vec![
-        serenity::all::CreateButton::new(admin_rename_id(generator.channel_id))
-            .label("Rename")
-            .style(serenity::all::ButtonStyle::Secondary),
-        serenity::all::CreateButton::new(admin_limit_id(generator.channel_id))
-            .label("Set Limit")
-            .style(serenity::all::ButtonStyle::Secondary),
-        serenity::all::CreateButton::new(admin_remove_id(generator.channel_id))
-            .label("Remove")
-            .style(serenity::all::ButtonStyle::Danger),
-        serenity::all::CreateButton::new(admin_back_id())
-            .label("Back")
-            .style(serenity::all::ButtonStyle::Secondary),
-    ])];
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Temp VC".to_string(),
+            "Generators".to_string(),
+            generator.channel_name.clone(),
+        ],
+        footer: Some(
+            "Rename edits the template ({username}, {number}, {pos}) \u{b7} Set Limit caps users \u{b7} 0 = unlimited."
+                .to_string(),
+        ),
+        separator_above_action_rows: true,
+        action_rows: vec![action_row_of(vec![
+            serenity::all::CreateButton::new(admin_rename_id(generator.channel_id))
+                .label("Rename")
+                .style(serenity::all::ButtonStyle::Secondary),
+            serenity::all::CreateButton::new(admin_limit_id(generator.channel_id))
+                .label("Set Limit")
+                .style(serenity::all::ButtonStyle::Secondary),
+            serenity::all::CreateButton::new(admin_remove_id(generator.channel_id))
+                .label("Remove")
+                .style(serenity::all::ButtonStyle::Danger),
+            serenity::all::CreateButton::new(admin_back_id())
+                .label("Back")
+                .style(serenity::all::ButtonStyle::Secondary),
+        ])],
+        ..CardOptions::default()
+    };
 
     Card::lines(
         format!("\u{1f50a} {}", generator.channel_name),
@@ -346,54 +369,40 @@ pub fn generator_card(generator: &GeneratorView) -> CardReply {
     .into_reply()
 }
 
+#[must_use]
 pub fn admin_add_id() -> String {
     format!("{PREFIX}:admin:add")
 }
+#[must_use]
 pub fn admin_manage_id() -> String {
     format!("{PREFIX}:admin:manage")
 }
+#[must_use]
 pub fn admin_back_id() -> String {
     format!("{PREFIX}:admin:back")
 }
+#[must_use]
 pub fn admin_rename_id(channel_id: u64) -> String {
     format!("{PREFIX}:admin:name:{channel_id}")
 }
+#[must_use]
 pub fn admin_limit_id(channel_id: u64) -> String {
     format!("{PREFIX}:admin:limit:{channel_id}")
 }
+#[must_use]
 pub fn admin_remove_id(channel_id: u64) -> String {
     format!("{PREFIX}:admin:rm:{channel_id}")
 }
+#[must_use]
 pub fn admin_name_modal_id(channel_id: u64) -> String {
     format!("{PREFIX}:admin:namem:{channel_id}")
 }
+#[must_use]
 pub fn admin_limit_modal_id(channel_id: u64) -> String {
     format!("{PREFIX}:admin:limitm:{channel_id}")
 }
 
-pub fn generator_setup_card(channel_id: u64, name: &str, limit: i32) -> CardReply {
-    let mut lines = Vec::new();
-    lines.push(format!("**Generator Channel:** <#{channel_id}>"));
-    lines.push(format!("**Template Name:** `{name}`"));
-    if limit > 0 {
-        lines.push(format!("**User Limit:** `{limit}`"));
-    } else {
-        lines.push("**User Limit:** `Unlimited`".to_string());
-    }
-
-    Card::lines("Temporary VC Generator Configured", lines)
-        .kind(CardKind::Success)
-        .into_reply()
-}
-
-pub fn generator_deleted_card(channel_id: u64) -> CardReply {
-    Card::success(
-        "Temporary VC Generator Removed",
-        format!("Successfully removed generator configuration for <#{channel_id}>."),
-    )
-    .into_reply()
-}
-
+#[must_use]
 pub fn error_card(msg: &str) -> CardReply {
     Card::error("Temporary VC Error", msg).into_reply()
 }

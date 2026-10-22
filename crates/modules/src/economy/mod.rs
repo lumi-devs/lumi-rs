@@ -2,12 +2,14 @@ use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
 use crate::shared::{int_field, string_field};
 
-pub mod commands;
+mod commands;
+/// Economy configuration settings and loader.
 pub mod config;
-pub mod store;
+pub(crate) mod store;
 
 pub use commands::handle_component;
 
+/// Server currency and economy module.
 #[derive(Debug)]
 pub struct EconomyModule;
 

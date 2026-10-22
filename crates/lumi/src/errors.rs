@@ -13,9 +13,13 @@ use lumi_kernel::bot::{Data, Error};
 /// One deduplicated error key and its sightings.
 #[derive(Debug, Clone)]
 pub struct ErrorRecord {
+    /// Number of times seen.
     pub count: u64,
+    /// Instant when first observed.
     pub first_seen: Instant,
+    /// Instant when most recently observed.
     pub last_seen: Instant,
+    /// Formatted error traceback.
     pub traceback: String,
 }
 
@@ -123,12 +127,11 @@ pub async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
         "internal"
     };
 
-    let command = error
-        .ctx()
-        .map_or_else(String::new, |ctx| ctx.command().qualified_name.to_string());
-    let guild_id = error.ctx().and_then(|ctx| ctx.guild_id()).map(|id| id.get());
-    let channel_id = error.ctx().map(|ctx| ctx.channel_id().get());
-    let user_id = error.ctx().map(|ctx| ctx.author().id.get());
+    let ctx = error.ctx();
+    let command = ctx.map_or_else(String::new, |c| c.command().qualified_name.clone().into_owned());
+    let guild_id = ctx.and_then(poise::Context::guild_id).map(serenity::all::GuildId::get);
+    let channel_id = ctx.map(|c| c.channel_id().get());
+    let user_id = ctx.map(|c| c.author().id.get());
 
     metrics::counter!("lumi.command.failed", "command" => command.clone(), "class" => class)
         .increment(1);

@@ -3,42 +3,55 @@ use thiserror::Error;
 /// Whether retrying the failed operation could succeed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailureClass {
+    /// Retryable error.
     Retryable,
+    /// Permanent error.
     Permanent,
 }
 
 /// The single error type shared by the kernel and every crate built on it.
 #[derive(Debug, Error)]
 pub enum LumiError {
+    /// Configuration error.
     #[error("configuration error: {0}")]
     Config(String),
+    /// Invalid input error.
     #[error("invalid input: {0}")]
     Invalid(String),
+    /// Entity not found.
     #[error("not found: {0}")]
     NotFound(String),
+    /// Database error.
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
+    /// Cache error.
     #[error("cache error: {0}")]
     Cache(String),
+    /// Redis error.
     #[error("redis error: {0}")]
     Redis(#[from] redis::RedisError),
+    /// Serialization error.
     #[error("serialization error: {0}")]
     Json(#[from] serde_json::Error),
+    /// I/O error.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// Task join error.
     #[error("background task failed: {0}")]
     Task(#[from] tokio::task::JoinError),
+    /// Discord API error.
     #[error("discord error: {0}")]
     Discord(#[from] serenity::Error),
+    /// Timeout error.
     #[error("timed out: {0}")]
     Timeout(String),
+    /// Other unclassified error.
     #[error("other: {0}")]
     Other(String),
 }
 
 impl LumiError {
     /// Distinguish transient dependency failures from errors a retry cannot fix.
-    #[must_use]
     pub fn failure_class(&self) -> FailureClass {
         match self {
             Self::Db(err) => db_class(err),
@@ -62,13 +75,13 @@ impl LumiError {
         }
     }
 
-    #[must_use]
+    /// Whether this error is retryable.
     pub fn is_retryable(&self) -> bool {
         self.failure_class() == FailureClass::Retryable
     }
 }
 
-fn io_class(kind: std::io::ErrorKind) -> FailureClass {
+const fn io_class(kind: std::io::ErrorKind) -> FailureClass {
     use std::io::ErrorKind;
     if matches!(
         kind,
@@ -133,8 +146,10 @@ fn redis_class(err: &redis::RedisError) -> FailureClass {
 fn discord_class(err: &serenity::Error) -> FailureClass {
     use serenity::Error;
     match err {
-        Error::Io(_) | Error::Tungstenite(_) | Error::Gateway(_) => FailureClass::Retryable,
-        Error::Http(serenity::http::HttpError::Request(_)) => FailureClass::Retryable,
+        Error::Io(_)
+        | Error::Tungstenite(_)
+        | Error::Gateway(_)
+        | Error::Http(serenity::http::HttpError::Request(_)) => FailureClass::Retryable,
         Error::Http(serenity::http::HttpError::UnsuccessfulRequest(response)) => {
             let status = response.status_code.as_u16();
             if status == 429 || status == 408 || (500..600).contains(&status) {
@@ -147,6 +162,7 @@ fn discord_class(err: &serenity::Error) -> FailureClass {
     }
 }
 
+/// Operation result using [`LumiError`].
 pub type Result<T> = std::result::Result<T, LumiError>;
 
 #[cfg(test)]

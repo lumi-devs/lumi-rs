@@ -8,52 +8,79 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serenity::all::{Context, FullEvent};
 
-/// Static module metadata (mirrors lumi's `ModuleMeta` subset we render).
+/// Static module metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleMeta {
+    /// User-facing display name.
     pub display_name: String,
+    /// Emoji icon for the module.
     pub emoji: String,
+    /// Summary of module functionality.
     pub description: String,
+    /// Semantic version string.
     pub version: String,
 }
 
-/// One module config field (mirrors `ConfigSchema.ts`).
+/// One module config field.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigField {
+    /// Config key name.
     pub key: String,
+    /// Form field label.
     pub label: String,
+    /// Explanation of the setting.
     pub description: String,
+    /// Expected data type and UI widget.
     pub kind: ConfigFieldKind,
+    /// Default JSON value when unset.
     pub default: Value,
+    /// Subfields for nested object arrays.
     #[serde(default)]
-    pub subfields: Vec<ConfigField>,
+    pub subfields: Vec<Self>,
+    /// Group header for dashboard layout.
     #[serde(default)]
     pub group: Option<String>,
 }
 
+/// Data types supported in module config schemas.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "values", rename_all = "snake_case")]
 pub enum ConfigFieldKind {
+    /// Text input.
     String,
+    /// Numeric integer input.
     Integer,
+    /// Toggle boolean input.
     Boolean,
+    /// Discord channel select.
     Channel,
+    /// Discord role select.
     Role,
+    /// Multiple Discord role select.
     RoleArray,
+    /// Discord user select.
     User,
+    /// Time duration string.
     Duration,
+    /// List of structured objects.
     ObjectArray,
+    /// List of strings.
     StringArray,
+    /// Enumerated choice select.
     Enum(Vec<String>),
 }
 
 /// A feature module. Commands are owned and declared directly by the module.
 pub trait Module: Send + Sync + 'static {
+    /// Unique internal module identifier.
     fn name(&self) -> &'static str;
+    /// Metadata describing the module.
     fn metadata(&self) -> ModuleMeta;
+    /// Slash and prefix commands declared by this module.
     fn commands(&self) -> Vec<crate::bot::Command> {
         Vec::new()
     }
+    /// Schema of guild-configurable settings.
     fn config_schema(&self) -> Vec<ConfigField> {
         Vec::new()
     }
@@ -86,11 +113,12 @@ impl std::fmt::Debug for ModuleRegistry {
 }
 
 impl ModuleRegistry {
-    #[must_use]
+    /// Create an empty module registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Register a module implementation.
     pub fn register(&mut self, module: Box<dyn Module>) {
         let name = module.name();
         if let Some(existing) = self.modules.iter_mut().find(|m| m.name() == name) {
@@ -101,7 +129,7 @@ impl ModuleRegistry {
         self.modules.push(module);
     }
 
-    #[must_use]
+    /// Look up a module by name.
     pub fn get(&self, name: &str) -> Option<&dyn Module> {
         self.modules
             .iter()
@@ -109,6 +137,7 @@ impl ModuleRegistry {
             .map(|module| &**module)
     }
 
+    /// Iterate over registered modules.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Module> {
         self.modules.iter().map(|module| &**module)
     }
@@ -119,7 +148,6 @@ impl ModuleRegistry {
     }
 
     /// The module owning a component/modal `custom_id`, by registered prefix.
-    #[must_use]
     pub fn module_for_component(&self, custom_id: &str) -> Option<&dyn Module> {
         self.iter().find(|module| {
             module
@@ -135,14 +163,14 @@ impl ModuleRegistry {
         }
     }
 
-    #[must_use]
-    pub fn len(&self) -> usize {
+    /// Number of registered modules.
+    pub const fn len(&self) -> usize {
         self.modules.len()
     }
 
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.modules.is_empty()
+    /// Whether the registry is empty.
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::Utc;
 use sea_orm::{
@@ -17,7 +18,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::{LumiError, Result};
 
-const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const CHANGELOG_LIMIT: usize = 20;
 const DIFF_STAT_LIMIT: usize = 30;
 const SHORT_SHA: usize = 7;
@@ -271,6 +272,7 @@ fn diff_stat_blocking(repo: &gix::Repository, from: &str, to: &str) -> Result<St
     Ok(lines.join("\n"))
 }
 
+/// Addon repository and module downloader.
 #[derive(Clone, Debug)]
 pub struct Downloader {
     db: DatabaseConnection,
@@ -280,46 +282,69 @@ pub struct Downloader {
 /// Outcome of a remote-vs-local update check for one repository.
 #[derive(Clone, Debug)]
 pub struct RepoUpdateCheck {
+    /// Whether check completed successfully.
     pub ok: bool,
+    /// Status description.
     pub reason: String,
+    /// Whether an update is available.
     pub has_update: bool,
+    /// Optional changelog text.
     pub changelog: Option<String>,
 }
 
+/// Result of pulling an update for a repository.
 #[derive(Clone, Debug)]
 pub struct RepoUpdateResult {
+    /// Whether HEAD moved.
     pub changed: bool,
+    /// Previous commit SHA.
     pub old_sha: Option<String>,
+    /// New commit SHA.
     pub new_sha: String,
+    /// Optional diffstat summary.
     pub diff_stat: Option<String>,
 }
 
 /// An installed module joined with its source repository.
 #[derive(Clone, Debug)]
 pub struct InstalledModule {
+    /// Module name.
     pub module_name: String,
+    /// Module version.
     pub version: Option<String>,
+    /// Origin repository name.
     pub repo_name: String,
+    /// Timestamp when installed.
     pub installed_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
 /// One module manifest discovered inside a repository checkout.
 #[derive(Clone, Debug)]
 pub struct RepoModuleInfo {
+    /// Module name.
     pub name: String,
+    /// Module version.
     pub version: String,
+    /// Short summary.
     pub short: Option<String>,
+    /// Full description.
     pub description: Option<String>,
+    /// Module author.
     pub author: Option<String>,
+    /// Minimum required bot version.
     pub min_bot_version: Option<String>,
+    /// Whether module is hidden from listing.
     pub hidden: bool,
+    /// Data privacy statement.
     pub end_user_data_statement: Option<String>,
 }
 
 /// Auto-update settings, persisted in `global_config`.
 #[derive(Clone, Debug)]
 pub struct AutoUpdateConfig {
+    /// Whether automatic updates are enabled.
     pub enabled: bool,
+    /// Check interval in minutes.
     pub interval_minutes: u64,
 }
 
@@ -342,20 +367,22 @@ async fn remove_path(path: &Path) {
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => {
-            if let Err(err) = tokio::fs::remove_file(path).await {
-                if err.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(path = %path.display(), error = %err, "failed to remove path");
-                }
+            if let Err(err) = tokio::fs::remove_file(path).await
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(path = %path.display(), error = %err, "failed to remove path");
             }
         }
     }
 }
 
 impl Downloader {
-    pub fn new(db: DatabaseConnection, addons_dir: PathBuf) -> Self {
+    /// Create a new downloader instance.
+    pub const fn new(db: DatabaseConnection, addons_dir: PathBuf) -> Self {
         Self { db, addons_dir }
     }
 
+    /// Root directory storing installed addons and cloned repositories.
     pub fn addons_dir(&self) -> &Path {
         &self.addons_dir
     }
@@ -381,6 +408,7 @@ impl Downloader {
             .collect())
     }
 
+    /// Clone a repository and record it.
     pub async fn add_repo(
         &self,
         url: &str,
@@ -410,9 +438,9 @@ impl Downloader {
             )));
         }
 
-        let repos_dir = self.addons_dir.join("repos");
-        tokio::fs::create_dir_all(&repos_dir).await?;
-        let repo_dir = repos_dir.join(&repo_name);
+        let repos_root = self.addons_dir.join("repos");
+        tokio::fs::create_dir_all(&repos_root).await?;
+        let repo_dir = repos_root.join(&repo_name);
         remove_path(&repo_dir).await;
 
         let url_owned = url.to_string();
@@ -451,6 +479,7 @@ impl Downloader {
         Ok(inserted)
     }
 
+    /// Fast-forward a repository to its remote branch and store the new commit.
     pub async fn pull_repo(&self, name: &str) -> Result<String> {
         let repo = self.find_repo(name).await?;
         let repo_dir = self.repo_dir(name)?;
@@ -470,6 +499,7 @@ impl Downloader {
         Ok(new_commit)
     }
 
+    /// Every tracked repository, ordered by name.
     pub async fn list_repos(&self) -> Result<Vec<downloader_repo::Model>> {
         Ok(downloader_repo::Entity::find()
             .order_by_asc(downloader_repo::Column::Name)
@@ -477,6 +507,7 @@ impl Downloader {
             .await?)
     }
 
+    /// Delete a repository, its installed modules and its checkout.
     pub async fn remove_repo(&self, name: &str) -> Result<bool> {
         let Some(repo) = downloader_repo::Entity::find()
             .filter(downloader_repo::Column::Name.eq(name))
@@ -507,6 +538,7 @@ impl Downloader {
         Ok(true)
     }
 
+    /// Copy a module from a repository checkout into the addons directory.
     pub async fn install_module(
         &self,
         repo_name: &str,
@@ -539,7 +571,7 @@ impl Downloader {
             if is_dir {
                 let target_dir = addons_dir.join(&mod_name);
                 if target_dir.exists() {
-                    let _ = std::fs::remove_dir_all(&target_dir);
+                    drop(std::fs::remove_dir_all(&target_dir));
                 }
                 copy_dir_recursive(&source_dir, &target_dir).map_err(LumiError::Io)?;
             } else {
@@ -583,6 +615,7 @@ impl Downloader {
         Ok(model)
     }
 
+    /// Every installed module, ordered by name.
     pub async fn list_installed_modules(&self) -> Result<Vec<downloader_module::Model>> {
         Ok(downloader_module::Entity::find()
             .order_by_asc(downloader_module::Column::ModuleName)
@@ -590,12 +623,14 @@ impl Downloader {
             .await?)
     }
 
+    /// Look up one repository by id.
     pub async fn get_repo_by_id(&self, id: i32) -> Result<Option<downloader_repo::Model>> {
         Ok(downloader_repo::Entity::find_by_id(id)
             .one(&self.db)
             .await?)
     }
 
+    /// Look up one repository by name.
     pub async fn get_repo_by_name(&self, name: &str) -> Result<Option<downloader_repo::Model>> {
         Ok(downloader_repo::Entity::find()
             .filter(downloader_repo::Column::Name.eq(name))
@@ -638,7 +673,7 @@ impl Downloader {
         let checked = blocking("git update check", move || {
             let repo = open(&dir)?;
             // A failed fetch just compares against the refs we already have.
-            let _ = fetch_blocking(&repo);
+            drop(fetch_blocking(&repo));
             let local = head_sha_blocking(&repo)?;
             let target_ref = format!("refs/remotes/origin/{branch}");
             let remote = repo
@@ -654,22 +689,23 @@ impl Downloader {
         })
         .await?;
 
-        Ok(match checked {
-            Some(changelog) => RepoUpdateCheck {
-                ok: true,
-                reason: String::new(),
-                has_update: true,
-                changelog: (!changelog.is_empty()).then_some(changelog),
-            },
-            None => RepoUpdateCheck {
+        Ok(checked.map_or_else(
+            || RepoUpdateCheck {
                 ok: true,
                 reason: "up to date".to_string(),
                 has_update: false,
                 changelog: None,
             },
-        })
+            |changelog| RepoUpdateCheck {
+                ok: true,
+                reason: String::new(),
+                has_update: true,
+                changelog: (!changelog.is_empty()).then_some(changelog),
+            },
+        ))
     }
 
+    /// Pull a repository and describe what changed.
     pub async fn update_repo(&self, name: &str) -> Result<RepoUpdateResult> {
         let repo = self.find_repo(name).await?;
         let old_sha = repo.commit.clone();
@@ -713,10 +749,11 @@ impl Downloader {
             if !seen.insert(module.repo_id) {
                 continue;
             }
-            if let Ok(check) = self.check_repo_update(name).await {
-                if check.ok && check.has_update {
-                    pending.push(name.clone());
-                }
+            if let Ok(check) = self.check_repo_update(name).await
+                && check.ok
+                && check.has_update
+            {
+                pending.push(name.clone());
             }
         }
         Ok(pending)
@@ -747,6 +784,7 @@ impl Downloader {
         Ok(true)
     }
 
+    /// Write a module's global enabled flag.
     pub async fn toggle_module(&self, module_name: &str, enabled: bool) -> Result<()> {
         global_module_state::Entity::insert(global_module_state::ActiveModel {
             module_name: Set(module_name.to_string()),
@@ -768,6 +806,7 @@ impl Downloader {
         Ok(())
     }
 
+    /// Installed modules joined with their repository names.
     pub async fn get_installed_modules_detailed(&self) -> Result<Vec<InstalledModule>> {
         let modules = self.list_installed_modules().await?;
         let names = self.repo_names().await?;
@@ -785,6 +824,7 @@ impl Downloader {
             .collect())
     }
 
+    /// Manifests of every module inside a repository checkout.
     pub async fn get_modules_in_repo(&self, repo_name: &str) -> Result<Vec<RepoModuleInfo>> {
         let repo_dir = self.repo_dir(repo_name)?;
         if !repo_dir.is_dir() {
@@ -811,11 +851,11 @@ impl Downloader {
             out.push(RepoModuleInfo {
                 name: value
                     .get("name")
-                    .and_then(|x| x.as_str())
+                    .and_then(serde_json::Value::as_str)
                     .map_or_else(|| dir_name.clone(), ToString::to_string),
                 version: value
                     .get("version")
-                    .and_then(|x| x.as_str())
+                    .and_then(serde_json::Value::as_str)
                     .unwrap_or("1.0.0")
                     .to_string(),
                 short: text_field(&value, "short"),
@@ -833,6 +873,7 @@ impl Downloader {
         Ok(out)
     }
 
+    /// Read the auto-update settings from `global_config`.
     pub async fn get_auto_update_config(&self) -> Result<AutoUpdateConfig> {
         let row = global::Entity::find()
             .order_by_asc(global::Column::Id)
@@ -873,7 +914,7 @@ impl Downloader {
 fn text_field(value: &serde_json::Value, key: &str) -> Option<String> {
     value
         .get(key)
-        .and_then(|x| x.as_str())
+        .and_then(serde_json::Value::as_str)
         .map(ToString::to_string)
 }
 
@@ -923,11 +964,11 @@ mod tests {
     #[test]
     fn safe_component_rejects_traversal() {
         assert_eq!(safe_component("good-name").ok(), Some("good-name"));
-        assert!(safe_component("").is_err());
-        assert!(safe_component("..").is_err());
-        assert!(safe_component("a/b").is_err());
-        assert!(safe_component("a\\b").is_err());
-        assert!(safe_component(" a ").is_ok());
+        assert!(safe_component("").is_err(), "empty component rejected");
+        assert!(safe_component("..").is_err(), "dot-dot rejected");
+        assert!(safe_component("a/b").is_err(), "slash rejected");
+        assert!(safe_component("a\\b").is_err(), "backslash rejected");
+        assert!(safe_component(" a ").is_ok(), "whitespace allowed");
     }
 
     #[test]

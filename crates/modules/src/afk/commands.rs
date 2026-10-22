@@ -14,6 +14,7 @@ use super::config;
 use super::constants::{MAX_NICKNAME, NICK_COOLDOWN_MS, NICK_PREFIX};
 use super::data;
 
+/// Set your AFK status so mentions and DMs get an automatic reply.
 #[poise::command(slash_command, prefix_command)]
 pub async fn afk(
     ctx: Context<'_>,
@@ -65,7 +66,7 @@ async fn apply_nick_prefix(
     guild_id: serenity::GuildId,
     user_id: serenity::UserId,
 ) -> Result<(), Error> {
-    if !config::nick_prefix_enabled(&ctx.data().cache, &ctx.data().db, guild_id.get()).await? {
+    if !config::nick_prefix_enabled(&ctx.data().cache, &ctx.data().db, guild_id.get()).await {
         return Ok(());
     }
     let Some(member) = ctx.author_member().await else {
@@ -93,6 +94,7 @@ async fn apply_nick_prefix(
     Ok(())
 }
 
+/// List everyone currently AFK in this server.
 #[poise::command(slash_command, prefix_command)]
 pub async fn afklist(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
@@ -117,6 +119,7 @@ pub async fn afklist(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Show how many members are AFK in this server.
 #[poise::command(slash_command, prefix_command)]
 pub async fn afkstats(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {

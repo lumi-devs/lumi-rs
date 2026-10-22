@@ -108,7 +108,9 @@ mod tests {
         })
         .await;
 
-        assert!(result.is_err());
+        let Err(_) = result else {
+            panic!("expected error");
+        };
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -124,7 +126,9 @@ mod tests {
         })
         .await;
 
-        assert!(result.is_err());
+        let Err(_) = result else {
+            panic!("expected error");
+        };
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

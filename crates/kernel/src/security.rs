@@ -19,7 +19,9 @@ use lumi_db::entities::panic_state;
 
 use crate::{LumiError, Result};
 
+/// Default monitoring window duration in seconds.
 pub const DEFAULT_WINDOW_SECS: u64 = 60;
+/// Default cooldown duration after tripping in seconds.
 pub const DEFAULT_COOLDOWN_SECS: u64 = 300;
 
 /// How long a cached panic status may be stale before it is re-read.
@@ -28,20 +30,30 @@ const PANIC_CACHE_TTL: Duration = Duration::from_secs(60);
 /// Prune stale action windows once every this many recorded actions.
 const PRUNE_EVERY: u64 = 1024;
 
+/// Destructive guild actions monitored by anti-nuke.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DestructiveActionKind {
+    /// Member ban action.
     Ban,
+    /// Member kick action.
     Kick,
+    /// Channel deletion action.
     ChannelDelete,
+    /// Role deletion action.
     RoleDelete,
+    /// Webhook creation action.
     WebhookCreate,
+    /// Server vanity URL modification.
     VanityChange,
+    /// Granting elevated permissions.
     DangerousPermissionGrant,
+    /// Attempting to bypass quarantine.
     QuarantineBypass,
 }
 
 impl DestructiveActionKind {
+    /// Default action threshold limit before tripping.
     pub const fn default_limit(self) -> u32 {
         match self {
             Self::Ban | Self::Kick => 5,
@@ -62,6 +74,7 @@ impl DestructiveActionKind {
         Self::QuarantineBypass,
     ];
 
+    /// String identifier for this action kind.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ban => "ban",
@@ -76,20 +89,29 @@ impl DestructiveActionKind {
     }
 }
 
+/// Mitigation response taken when an anti-nuke threshold is breached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AntiNukeResponse {
+    /// Audit log warning only.
     Log,
+    /// Strip dangerous roles and apply quarantine.
     #[default]
     Quarantine,
+    /// Ban the responsible actor.
     Ban,
 }
 
+/// Anti-nuke rate limits and responses.
 #[derive(Clone, Debug)]
 pub struct AntiNukeConfig {
+    /// Whether anti-nuke protection is active.
     pub enabled: bool,
+    /// Monitoring window in seconds.
     pub window_secs: u64,
+    /// Action limits mapped by kind.
     pub limits: std::collections::HashMap<DestructiveActionKind, u32>,
+    /// Response types mapped by kind.
     pub responses: std::collections::HashMap<DestructiveActionKind, AntiNukeResponse>,
 }
 
@@ -111,20 +133,31 @@ impl Default for AntiNukeConfig {
     }
 }
 
+/// Current server lockdown and panic mode state.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PanicStatus {
+    /// Whether panic mode is currently active.
     pub active: bool,
+    /// Actor who activated panic mode.
     pub actor_id: Option<String>,
+    /// Whether invite creation and usage are paused.
     pub invites_paused: bool,
+    /// Channel IDs locked during panic mode.
     pub locked_channels: Vec<String>,
+    /// Activation timestamp.
     pub started_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
+/// Violation event emitted when an action limit is exceeded.
 #[derive(Clone, Debug)]
 pub struct ActionThresholdViolation {
+    /// Breached action kind.
     pub kind: DestructiveActionKind,
+    /// Number of actions recorded in window.
     pub count: u32,
+    /// Configured threshold limit.
     pub limit: u32,
+    /// Configured mitigation response.
     pub response: AntiNukeResponse,
 }
 
@@ -167,6 +200,7 @@ impl ActionTracker {
             .tripped_at
             .is_some_and(|t| now.duration_since(t) < cooldown)
         {
+            drop(entry);
             return None;
         }
         if entry.tripped_at.is_some() {
@@ -193,17 +227,21 @@ impl ActionTracker {
         }
 
         let count = u32::try_from(entry.events.len()).unwrap_or(u32::MAX);
-        if count > limit {
+        let violation = (count > limit).then(|| {
             entry.tripped_at = Some(now);
-            Some((count, limit))
-        } else {
-            None
-        }
+            (count, limit)
+        });
+        drop(entry);
+        violation
     }
 
     /// Drop windows that can no longer influence a decision.
     fn maybe_prune(&self, now: Instant) {
-        if self.recorded.fetch_add(1, Ordering::Relaxed) % PRUNE_EVERY != 0 {
+        if !self
+            .recorded
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(PRUNE_EVERY)
+        {
             return;
         }
         let cooldown = Duration::from_secs(DEFAULT_COOLDOWN_SECS);
@@ -222,6 +260,7 @@ impl ActionTracker {
     }
 }
 
+/// Rate tracking and panic mitigation engine.
 #[derive(Debug)]
 pub struct SecurityManager {
     db: DatabaseConnection,
@@ -230,6 +269,7 @@ pub struct SecurityManager {
 }
 
 impl SecurityManager {
+    /// Create a new security manager with database handle.
     pub fn new(db: DatabaseConnection) -> Self {
         Self {
             db,
@@ -238,6 +278,7 @@ impl SecurityManager {
         }
     }
 
+    /// Read a guild's panic state, cached briefly.
     pub async fn get_panic_status(&self, guild_id: &str) -> Result<Option<PanicStatus>> {
         if let Some(status) = self.panic_cache.get(guild_id).await {
             return Ok(Some(status));
@@ -277,6 +318,7 @@ impl SecurityManager {
         Ok(Some(status))
     }
 
+    /// Activate panic mode for a guild and cache the new state.
     pub async fn activate_panic(
         &self,
         guild_id: &str,
@@ -328,6 +370,7 @@ impl SecurityManager {
         Ok(status)
     }
 
+    /// Clear a guild's panic state, returning the state that was active.
     pub async fn deactivate_panic(&self, guild_id: &str) -> Result<Option<PanicStatus>> {
         let existing = self.get_panic_status(guild_id).await?;
         if existing.is_none() {
@@ -346,6 +389,7 @@ impl SecurityManager {
         Ok(existing)
     }
 
+    /// Record a destructive action against anti-nuke thresholds.
     pub fn record_destructive_action(
         &self,
         guild_id: &str,
@@ -380,6 +424,7 @@ impl SecurityManager {
         })
     }
 
+    /// File a quarantine moderation case for `target_user_id`.
     pub async fn apply_quarantine(
         &self,
         guild_id: &str,

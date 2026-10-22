@@ -6,7 +6,7 @@ use serenity::all::{
 
 use crate::panels::{MAX_ACTION_ROWS, clamp_action_row};
 
-/// Thin composition helper over `CreateContainer`, mirroring lumi's `ContainerBuilder`.
+/// Container builder for Discord Components V2.
 #[derive(Clone, Debug)]
 pub struct Container {
     inner: CreateContainer<'static>,
@@ -20,7 +20,7 @@ impl Default for Container {
 }
 
 impl Container {
-    #[must_use]
+    /// Create an empty container.
     pub fn new() -> Self {
         Self {
             inner: CreateContainer::new(Vec::new()),
@@ -28,6 +28,7 @@ impl Container {
         }
     }
 
+    /// Append a text display component.
     #[must_use]
     pub fn text(mut self, content: impl Into<String>) -> Self {
         self.inner = self
@@ -36,6 +37,7 @@ impl Container {
         self
     }
 
+    /// Append a section component.
     #[must_use]
     pub fn section(mut self, section: CreateSection<'static>) -> Self {
         self.inner = self
@@ -44,6 +46,7 @@ impl Container {
         self
     }
 
+    /// Append a separator component.
     #[must_use]
     pub fn separator(mut self, divider: bool, spacing: SeparatorSpacingSize) -> Self {
         self.inner = self
@@ -71,6 +74,7 @@ impl Container {
         self
     }
 
+    /// Append a media gallery component.
     #[must_use]
     pub fn media_gallery(mut self, gallery: CreateMediaGallery<'static>) -> Self {
         self.inner = self
@@ -79,15 +83,18 @@ impl Container {
         self
     }
 
+    /// Convert into a serenity container builder.
     pub fn into_create(self) -> CreateContainer<'static> {
         self.inner
     }
 }
 
+/// Build a text display component.
 pub fn text_display(content: impl Into<String>) -> CreateTextDisplay<'static> {
     CreateTextDisplay::new(content.into())
 }
 
+/// Build a section component with a thumbnail accessory.
 pub fn section_with_thumbnail(
     components: Vec<CreateSectionComponent<'static>>,
     url: impl Into<String>,

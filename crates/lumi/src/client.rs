@@ -125,6 +125,7 @@ fn holds_permissions(has: serenity::Permissions, required: serenity::Permissions
     required.is_empty() || has.administrator() || has.contains(required)
 }
 
+/// Build the serenity client and poise framework.
 pub async fn build(services: Data) -> Result<serenity::Client> {
     // The per-shard guild/member split uses Discord's shard math, so it needs the
     // fleet total as well as this process's shard latencies.
@@ -133,7 +134,7 @@ pub async fn build(services: Data) -> Result<serenity::Client> {
         let http = serenity::Http::new(token);
         if services.cfg.shard_count.is_none() {
             match http.get_bot_gateway().await {
-                Ok(gateway) => shard_total = u64::from(gateway.shards.get()),
+                Ok(gateway) => shard_total = std::num::NonZeroU64::from(gateway.shards).get(),
                 Err(e) => tracing::warn!(error = %e, "failed to read the recommended shard count"),
             }
         }
@@ -272,11 +273,15 @@ mod tests {
 
     #[test]
     fn prefix_permissions_union_the_command_tree() {
-        let mut root = Command::default();
-        root.name = "purge".into();
-        root.default_member_permissions = serenity::Permissions::MANAGE_MESSAGES;
-        let mut sub = Command::default();
-        sub.name = "messages".into();
+        let root = Command {
+            name: "purge".into(),
+            default_member_permissions: serenity::Permissions::MANAGE_MESSAGES,
+            ..Default::default()
+        };
+        let sub = Command {
+            name: "messages".into(),
+            ..Default::default()
+        };
 
         let tree = [&root, &sub];
         assert_eq!(
@@ -290,11 +295,15 @@ mod tests {
     fn subcommand_only_permissions_are_enforced() {
         // Discord registers `bank` with an empty default and ignores the
         // subcommand's MANAGE_GUILD, so the tree walk must pick it up.
-        let mut root = Command::default();
-        root.name = "bank".into();
-        let mut sub = Command::default();
-        sub.name = "set".into();
-        sub.default_member_permissions = serenity::Permissions::MANAGE_GUILD;
+        let root = Command {
+            name: "bank".into(),
+            ..Default::default()
+        };
+        let sub = Command {
+            name: "set".into(),
+            default_member_permissions: serenity::Permissions::MANAGE_GUILD,
+            ..Default::default()
+        };
 
         assert_eq!(
             required_member_permissions(&[&root, &sub]),

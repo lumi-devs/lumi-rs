@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::sync::{Arc, OnceLock};
 
 use base64::Engine;
@@ -24,7 +25,16 @@ pub struct LeaderboardRow {
     pub username: String,
     pub level: i32,
     pub xp: i64,
-    pub progress: f64,
+    /// Progress toward the top member, as a 0-100 percentage.
+    pub progress: u32,
+}
+
+/// Percentage of `max` covered by `value`, clamped to 0-100.
+pub(super) fn percent(value: i64, max: i64) -> u32 {
+    if max <= 0 {
+        return 100;
+    }
+    u32::try_from(value.clamp(0, max).saturating_mul(100) / max).unwrap_or(100)
 }
 
 fn escape_xml(input: &str) -> String {
@@ -52,14 +62,12 @@ fn format_voice(minutes: i32) -> String {
 
 fn get_fontdb() -> Arc<fontdb::Database> {
     static FONTDB: OnceLock<Arc<fontdb::Database>> = OnceLock::new();
-    FONTDB
-        .get_or_init(|| {
-            let mut db = fontdb::Database::new();
-            db.load_system_fonts();
-            db.set_sans_serif_family("DejaVu Sans");
-            Arc::new(db)
-        })
-        .clone()
+    Arc::clone(FONTDB.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        db.set_sans_serif_family("DejaVu Sans");
+        Arc::new(db)
+    }))
 }
 
 pub fn svg_to_png(svg: &str) -> Result<Vec<u8>, anyhow::Error> {
@@ -69,9 +77,7 @@ pub fn svg_to_png(svg: &str) -> Result<Vec<u8>, anyhow::Error> {
         ..Default::default()
     };
     let tree = Tree::from_str(svg, &opt)?;
-    let size = tree.size();
-    let width = size.width().ceil() as u32;
-    let height = size.height().ceil() as u32;
+    let (width, height) = tree.size().to_int_size().dimensions();
     let mut pixmap = Pixmap::new(width, height)
         .ok_or_else(|| anyhow::anyhow!("failed to create pixmap with size {width}x{height}"))?;
     resvg::render(&tree, Transform::default(), &mut pixmap.as_mut());
@@ -122,7 +128,8 @@ fn png_url(url: &str) -> String {
 pub async fn fetch_avatar_base64(url: Option<&str>) -> Option<String> {
     let url = png_url(url?);
     let mut response = http_client()?.get(url).send().await.ok()?;
-    if response.content_length().unwrap_or(0) > MAX_AVATAR_BYTES as u64 {
+    if response.content_length().unwrap_or(0) > u64::try_from(MAX_AVATAR_BYTES).unwrap_or(u64::MAX)
+    {
         return None;
     }
     let mut bytes = Vec::new();
@@ -138,15 +145,9 @@ pub async fn fetch_avatar_base64(url: Option<&str>) -> Option<String> {
 pub async fn render_rank_card(data: RankCardData<'_>) -> Result<Vec<u8>, anyhow::Error> {
     let width = 900;
     let height = 300;
-    let progress = if data.next_level_xp > 0 {
-        (data.current_xp as f64 / data.next_level_xp as f64).clamp(0.0, 1.0)
-    } else {
-        1.0
-    };
-    let bar_width = 560;
-    let fill_width = (bar_width as f64 * progress)
-        .round()
-        .clamp(0.0, f64::from(bar_width)) as u32;
+    let progress = percent(data.current_xp, data.next_level_xp);
+    let bar_width = 560_u32;
+    let fill_width = (bar_width * progress + 50) / 100;
 
     let clean_name = if data.username.chars().count() > 22 {
         let truncated: String = data.username.chars().take(21).collect();
@@ -158,18 +159,21 @@ pub async fn render_rank_card(data: RankCardData<'_>) -> Result<Vec<u8>, anyhow:
     let initial = clean_name.chars().next().unwrap_or('?').to_uppercase();
 
     let avatar_data = fetch_avatar_base64(data.avatar_url).await;
-    let avatar_svg = if let Some(base64) = avatar_data {
-        format!(
-            r##"<clipPath id="avatar-clip"><circle cx="130" cy="150" r="75"/></clipPath>
-               <image href="{base64}" x="55" y="75" width="150" height="150" clip-path="url(#avatar-clip)"/>"##
-        )
-    } else {
-        format!(
-            r##"<circle cx="130" cy="150" r="75" fill="{}" opacity="0.35"/>
+    let avatar_svg = avatar_data.map_or_else(
+        || {
+            format!(
+                r##"<circle cx="130" cy="150" r="75" fill="{}" opacity="0.35"/>
                <text x="130" y="175" font-family="DejaVu Sans, sans-serif" font-size="70" font-weight="bold" fill="#ffffff" text-anchor="middle">{}</text>"##,
-            data.accent, initial
-        )
-    };
+                data.accent, initial
+            )
+        },
+        |base64| {
+            format!(
+                r#"<clipPath id="avatar-clip"><circle cx="130" cy="150" r="75"/></clipPath>
+               <image href="{base64}" x="55" y="75" width="150" height="150" clip-path="url(#avatar-clip)"/>"#
+            )
+        },
+    );
 
     let rank_str = data
         .rank
@@ -224,9 +228,7 @@ pub fn render_leaderboard_card(
     let mut rows_svg = String::new();
     for (i, row) in rows.iter().enumerate() {
         let y = header_h + i * row_h;
-        let fill = (bar_max as f64 * row.progress.clamp(0.0, 1.0))
-            .round()
-            .clamp(0.0, f64::from(bar_max)) as u32;
+        let fill = (bar_max * row.progress.min(100) + 50) / 100;
         let clean_name = if row.username.chars().count() > 22 {
             let truncated: String = row.username.chars().take(21).collect();
             format!("{truncated}…")
@@ -235,14 +237,14 @@ pub fn render_leaderboard_card(
         };
         let name_xml = escape_xml(&clean_name);
 
-        rows_svg.push_str(&format!(
+        let _ = writeln!(
+            rows_svg,
             r##"<text x="36" y="{}" font-family="DejaVu Sans, sans-serif" font-size="26" font-weight="bold" fill="#7c8499">#{}</text>
   <text x="110" y="{}" font-family="DejaVu Sans, sans-serif" font-size="26" font-weight="bold" fill="#ffffff">{}</text>
   <text x="110" y="{}" font-family="DejaVu Sans, sans-serif" font-size="18" fill="#9aa3b8">Level {}</text>
   <text x="{}" y="{}" font-family="DejaVu Sans, sans-serif" font-size="20" font-weight="bold" fill="#ffffff" text-anchor="end">{} XP</text>
   <rect x="110" y="{}" width="{bar_max}" height="8" rx="4" fill="#10131c"/>
-  <rect x="110" y="{}" width="{fill}" height="8" rx="4" fill="{accent}"/>
-"##,
+  <rect x="110" y="{}" width="{fill}" height="8" rx="4" fill="{accent}"/>"##,
             y + 42,
             row.rank,
             y + 30,
@@ -254,7 +256,7 @@ pub fn render_leaderboard_card(
             row.xp,
             y + 64,
             y + 64,
-        ));
+        );
     }
 
     let title_xml = escape_xml(title);
@@ -325,12 +327,12 @@ mod tests {
             panic!("encode");
         };
         let avatar = format!(
-            r##"<clipPath id="avatar-clip"><circle cx="130" cy="150" r="75"/></clipPath>
-               <image href="data:image/png;base64,{}" x="55" y="75" width="150" height="150" clip-path="url(#avatar-clip)"/>"##,
+            r#"<clipPath id="avatar-clip"><circle cx="130" cy="150" r="75"/></clipPath>
+               <image href="data:image/png;base64,{}" x="55" y="75" width="150" height="150" clip-path="url(#avatar-clip)"/>"#,
             BASE64.encode(png)
         );
         let svg = format!(
-            r##"<svg width="300" height="300" xmlns="http://www.w3.org/2000/svg">{avatar}</svg>"##
+            r#"<svg width="300" height="300" xmlns="http://www.w3.org/2000/svg">{avatar}</svg>"#
         );
         let Ok(rendered) = svg_to_png(&svg)
             .and_then(|png| Pixmap::decode_png(&png).map_err(|err| anyhow::anyhow!("{err}")))
@@ -353,14 +355,14 @@ mod tests {
                 username: "Alice".to_string(),
                 level: 10,
                 xp: 5000,
-                progress: 0.8,
+                progress: 80,
             },
             LeaderboardRow {
                 rank: 2,
                 username: "Bob".to_string(),
                 level: 8,
                 xp: 3200,
-                progress: 0.5,
+                progress: 50,
             },
         ];
         let Ok(png) = render_leaderboard_card("Leaderboard", "Top members", &rows, "#6366f1")

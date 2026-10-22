@@ -4,7 +4,7 @@
 //! Heat resets on restart, which is acceptable because it is a per-guild
 //! anti-spam heuristic rather than durable moderation state.
 
-use std::collections::HashMap;
+use std::collections::hash_map::{Entry, HashMap};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -47,25 +47,34 @@ fn idle(entry: &HeatEntry, now: Instant) -> bool {
 }
 
 /// Add heat for a member, applying the lazy decay since the last update.
+#[must_use]
 pub fn add_heat(guild_id: u64, user_id: u64, points: f64, decay_per_minute: f64) -> f64 {
     let now = Instant::now();
     let mut heat = lock(&state().heat);
     if heat.len() > PRUNE_AT {
         heat.retain(|_, entry| !idle(entry, now));
     }
-    let entry = heat.entry((guild_id, user_id)).or_insert(HeatEntry {
-        heat: 0.0,
-        updated: now,
-    });
-    let decayed = if decay_per_minute > 0.0 {
-        let minutes = now.saturating_duration_since(entry.updated).as_secs_f64() / 60.0;
-        (entry.heat - minutes * decay_per_minute).max(0.0)
-    } else {
-        entry.heat.max(0.0)
-    };
-    entry.heat = decayed + points;
-    entry.updated = now;
-    entry.heat
+    match heat.entry((guild_id, user_id)) {
+        Entry::Occupied(mut occ) => {
+            let entry = occ.get_mut();
+            let decayed = if decay_per_minute > 0.0 {
+                let minutes = now.saturating_duration_since(entry.updated).as_secs_f64() / 60.0;
+                (entry.heat - minutes * decay_per_minute).max(0.0)
+            } else {
+                entry.heat.max(0.0)
+            };
+            entry.heat = decayed + points;
+            entry.updated = now;
+            entry.heat
+        }
+        Entry::Vacant(vac) => {
+            vac.insert(HeatEntry {
+                heat: points,
+                updated: now,
+            });
+            points
+        }
+    }
 }
 
 /// Forget a member's accumulated heat (used after quarantine).
@@ -74,6 +83,7 @@ pub fn reset_heat(guild_id: u64, user_id: u64) {
 }
 
 /// Add mentions to the guild's current window and return the window total.
+#[must_use]
 pub fn record_mentions(guild_id: u64, count: u64, window_seconds: u64) -> u64 {
     let window = Duration::from_secs(window_seconds.max(1));
     let now = Instant::now();
@@ -81,16 +91,25 @@ pub fn record_mentions(guild_id: u64, count: u64, window_seconds: u64) -> u64 {
     if mentions.len() > PRUNE_AT {
         mentions.retain(|_, entry| now.saturating_duration_since(entry.started) < window);
     }
-    let entry = mentions.entry(guild_id).or_insert(MentionWindow {
-        count: 0,
-        started: now,
-    });
-    if now.saturating_duration_since(entry.started) >= window {
-        entry.count = 0;
-        entry.started = now;
+    match mentions.entry(guild_id) {
+        Entry::Occupied(mut occ) => {
+            let entry = occ.get_mut();
+            if now.saturating_duration_since(entry.started) >= window {
+                entry.count = count;
+                entry.started = now;
+            } else {
+                entry.count = entry.count.saturating_add(count);
+            }
+            entry.count
+        }
+        Entry::Vacant(vac) => {
+            vac.insert(MentionWindow {
+                count,
+                started: now,
+            });
+            count
+        }
     }
-    entry.count = entry.count.saturating_add(count);
-    entry.count
 }
 
 #[cfg(test)]
@@ -100,10 +119,10 @@ mod tests {
     #[test]
     fn heat_accumulates_and_resets() {
         reset_heat(1, 2);
-        assert_eq!(add_heat(1, 2, 5.0, 0.0), 5.0);
-        assert_eq!(add_heat(1, 2, 2.5, 0.0), 7.5);
+        assert!((add_heat(1, 2, 5.0, 0.0) - 5.0).abs() < f64::EPSILON);
+        assert!((add_heat(1, 2, 2.5, 0.0) - 7.5).abs() < f64::EPSILON);
         reset_heat(1, 2);
-        assert_eq!(add_heat(1, 2, 1.0, 0.0), 1.0);
+        assert!((add_heat(1, 2, 1.0, 0.0) - 1.0).abs() < f64::EPSILON);
         reset_heat(1, 2);
     }
 
@@ -122,7 +141,9 @@ mod tests {
         };
         let stale = HeatEntry {
             heat: 1.0,
-            updated: now - Duration::from_secs_f64(IDLE_SECS + 1.0),
+            updated: now
+                .checked_sub(Duration::from_secs_f64(IDLE_SECS + 1.0))
+                .unwrap_or(now),
         };
         assert!(!idle(&fresh, now));
         assert!(idle(&stale, now));

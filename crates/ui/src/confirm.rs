@@ -50,15 +50,17 @@ pub async fn confirm(
         .await;
 
     let Some(press) = press else {
-        let _ = message.delete(&ctx.http, None).await;
+        drop(message.delete(&ctx.http, None).await);
         return Ok(false);
     };
 
-    let _ = press
-        .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
-        .await;
+    drop(
+        press
+            .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
+            .await,
+    );
     let confirmed = press.data.custom_id == confirm_id;
-    let _ = message.delete(&ctx.http, None).await;
+    drop(message.delete(&ctx.http, None).await);
     Ok(confirmed)
 }
 
@@ -103,18 +105,24 @@ pub async fn confirm_poise<U: Send + Sync + 'static, E: 'static>(
         .await;
 
     let Some(press) = press else {
-        let _ = reply
-            .edit(ctx, poise::CreateReply::default().components(Vec::new()))
-            .await;
+        drop(
+            reply
+                .edit(ctx, poise::CreateReply::default().components(Vec::new()))
+                .await,
+        );
         return Ok(false);
     };
 
-    let _ = press
-        .create_response(ctx.http(), CreateInteractionResponse::Acknowledge)
-        .await;
+    drop(
+        press
+            .create_response(ctx.http(), CreateInteractionResponse::Acknowledge)
+            .await,
+    );
     let confirmed = press.data.custom_id == confirm_id;
-    let _ = reply
-        .edit(ctx, poise::CreateReply::default().components(Vec::new()))
-        .await;
+    drop(
+        reply
+            .edit(ctx, poise::CreateReply::default().components(Vec::new()))
+            .await,
+    );
     Ok(confirmed)
 }

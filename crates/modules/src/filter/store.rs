@@ -29,8 +29,6 @@ const RULES_CACHE_CAPACITY: u64 = 10_000;
 /// Fully resolved, compiled filter config for one guild.
 #[derive(Debug)]
 pub struct FilterRules {
-    /// Original banned terms, for display and logs.
-    pub terms: Vec<String>,
     /// Aho-Corasick matcher over the normalised terms (lumi uses the same).
     term_matcher: Option<AhoCorasick>,
     /// Original term per matcher pattern, so a hit maps back to its display form.
@@ -71,7 +69,7 @@ pub struct FilterRules {
 impl FilterRules {
     /// Whether any rule could possibly fire; an unconfigured guild is skipped.
     #[must_use]
-    pub fn active(&self) -> bool {
+    pub const fn active(&self) -> bool {
         self.heat_enabled
             || self.lockdown_mention_threshold > 0
             || self.term_matcher.is_some()
@@ -93,7 +91,6 @@ impl FilterRules {
     }
 
     pub(crate) fn from_map(map: &Map<String, Value>) -> Self {
-        let mut terms = Vec::new();
         let mut patterns = Vec::new();
         let mut labels = Vec::new();
         for term in config::string_list(map, "terms") {
@@ -102,8 +99,7 @@ impl FilterRules {
                 continue;
             }
             patterns.push(normalized);
-            labels.push(term.clone());
-            terms.push(term);
+            labels.push(term);
         }
         let term_matcher = if patterns.is_empty() {
             None
@@ -115,13 +111,12 @@ impl FilterRules {
         };
 
         let regexes = compile_regexes(&config::string_list(map, "regex_rules"));
-        let warn_message = map
-            .get("warn_message")
-            .and_then(Value::as_str)
-            .map_or_else(|| DEFAULT_WARN_MESSAGE.to_string(), |text| text.to_string());
+        let warn_message = map.get("warn_message").and_then(Value::as_str).map_or_else(
+            || DEFAULT_WARN_MESSAGE.to_string(),
+            ToString::to_string,
+        );
 
         Self {
-            terms,
             term_matcher,
             term_labels: labels,
             regexes,
@@ -131,8 +126,10 @@ impl FilterRules {
             block_links: config::boolean(map, "block_links", false),
             max_mentions: config::integer(map, "max_mentions", 0),
             caps_pct: config::integer(map, "max_caps_percent", 0),
-            caps_min_len: config::integer(map, "caps_min_length", DEFAULT_CAPS_MIN_LENGTH).max(1)
-                as usize,
+            caps_min_len: usize::try_from(
+                config::integer(map, "caps_min_length", DEFAULT_CAPS_MIN_LENGTH).max(1),
+            )
+            .unwrap_or(usize::MAX),
             exempt_roles: config::id_list(map, "exempt_roles"),
             timeout_minutes: config::integer(map, "timeout_minutes", 0),
             spam_timeout_minutes: config::integer(map, "spam_timeout_minutes", 0),
@@ -167,11 +164,11 @@ pub fn normalize(input: &str) -> String {
     input
         .nfkd()
         .filter(|ch| !is_invisible(*ch) && !is_combining_mark(*ch))
-        .collect::<String>()
-        .to_lowercase()
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
-fn is_invisible(ch: char) -> bool {
+const fn is_invisible(ch: char) -> bool {
     matches!(
         ch,
         '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}'
@@ -283,8 +280,11 @@ fn compile_regexes(patterns: &[String]) -> Vec<regex::Regex> {
         .collect()
 }
 
-fn lowercase(items: Vec<String>) -> Vec<String> {
-    items.into_iter().map(|item| item.to_lowercase()).collect()
+fn lowercase(mut items: Vec<String>) -> Vec<String> {
+    for item in &mut items {
+        item.make_ascii_lowercase();
+    }
+    items
 }
 
 #[cfg(test)]
@@ -293,14 +293,20 @@ mod tests {
     use serde_json::json;
 
     fn map(value: Value) -> Map<String, Value> {
-        value.as_object().cloned().unwrap_or_default()
+        match value {
+            Value::Object(map) => map,
+            _ => Map::new(),
+        }
     }
 
     #[test]
     fn empty_config_uses_defaults_and_is_inactive() {
         let rules = FilterRules::from_map(&map(json!({})));
         assert!(!rules.active());
-        assert_eq!(rules.caps_min_len, DEFAULT_CAPS_MIN_LENGTH as usize);
+        assert_eq!(
+            rules.caps_min_len,
+            usize::try_from(DEFAULT_CAPS_MIN_LENGTH).unwrap_or_default()
+        );
         assert_eq!(rules.warn_message, DEFAULT_WARN_MESSAGE);
         assert!(rules.regexes.is_empty());
     }
@@ -340,7 +346,7 @@ mod tests {
     #[test]
     fn terms_match_case_accents_and_invisible_chars() {
         let rules = FilterRules::from_map(&map(json!({ "terms": ["BadWord", "café", ""] })));
-        assert_eq!(rules.terms, vec!["BadWord", "café"]);
+        assert_eq!(rules.term_labels, vec!["BadWord", "café"]);
         assert_eq!(
             rules.term_hit("That is a BADWORD"),
             Some("BadWord".to_string())

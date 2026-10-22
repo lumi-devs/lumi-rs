@@ -218,9 +218,9 @@ mod tests {
 
     #[test]
     fn case_numbers_reject_i32_overflow() {
-        assert_eq!(case_number(1).expect("in range"), 1);
-        assert_eq!(case_number(i64::from(i32::MAX)).expect("in range"), i32::MAX);
-        assert!(case_number(i64::from(i32::MAX) + 1).is_err());
+        assert_eq!(case_number(1).ok(), Some(1));
+        assert_eq!(case_number(i64::from(i32::MAX)).ok(), Some(i32::MAX));
+        assert!(case_number(i64::from(i32::MAX) + 1).is_err(), "overflow rejected");
     }
 
     #[test]

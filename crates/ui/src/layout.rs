@@ -1,17 +1,37 @@
-//! Text helpers, ported 1:1 from lumi's `src/lib/ui/Layout.ts`.
+//! Text layout helpers for Components V2.
 
 /// Status glyph + `LABEL` code — a badge for a status word.
 pub fn format_status_badge(status: &str, label: Option<&str>) -> String {
-    let icon = match status.to_ascii_lowercase().as_str() {
-        "online" | "success" | "enabled" | "active" => "\u{1f7e2}",
-        "idle" | "warning" | "pending" => "\u{1f7e1}",
-        "dnd" | "error" | "disabled" | "failed" => "\u{1f534}",
-        "offline" | "inactive" => "\u{26aa}",
-        _ => "\u{1f518}",
+    let icon = if status.eq_ignore_ascii_case("online")
+        || status.eq_ignore_ascii_case("success")
+        || status.eq_ignore_ascii_case("enabled")
+        || status.eq_ignore_ascii_case("active")
+    {
+        "\u{1f7e2}"
+    } else if status.eq_ignore_ascii_case("idle")
+        || status.eq_ignore_ascii_case("warning")
+        || status.eq_ignore_ascii_case("pending")
+    {
+        "\u{1f7e1}"
+    } else if status.eq_ignore_ascii_case("dnd")
+        || status.eq_ignore_ascii_case("error")
+        || status.eq_ignore_ascii_case("disabled")
+        || status.eq_ignore_ascii_case("failed")
+    {
+        "\u{1f534}"
+    } else if status.eq_ignore_ascii_case("offline")
+        || status.eq_ignore_ascii_case("inactive")
+    {
+        "\u{26aa}"
+    } else {
+        "\u{1f518}"
     };
-    let upper = status.to_uppercase();
-    let text = label.unwrap_or(&upper);
-    format!("{icon} `{text}`")
+    if let Some(text) = label {
+        format!("{icon} `{text}`")
+    } else {
+        let upper = status.to_uppercase();
+        format!("{icon} `{upper}`")
+    }
 }
 
 /// `-# text` (optionally prefixed with an icon).
@@ -21,21 +41,23 @@ pub fn format_subtitle(text: &str, icon: Option<&str>) -> String {
 
 /// Last crumb bold, crumbs joined by `separator`.
 pub fn format_breadcrumbs(crumbs: &[String], separator: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
     let last = crumbs.len().saturating_sub(1);
-    crumbs
-        .iter()
-        .enumerate()
-        .map(|(i, crumb)| {
-            if i == last {
-                format!("**{crumb}**")
-            } else {
-                crumb.clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(separator)
+    for (i, crumb) in crumbs.iter().enumerate() {
+        if i > 0 {
+            out.push_str(separator);
+        }
+        if i == last {
+            let _ = write!(out, "**{crumb}**");
+        } else {
+            out.push_str(crumb);
+        }
+    }
+    out
 }
 
+/// Separator string between breadcrumb segments.
 pub const BREADCRUMB_SEPARATOR: &str = " \u{276f} ";
 
 /// Breadcrumb header for the top of a card (`""` when there are no crumbs).

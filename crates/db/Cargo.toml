@@ -10,3 +10,4 @@ workspace = true
 [dependencies]
 sea-orm           = { workspace = true }
 sea-orm-migration = { workspace = true }
+tracing           = { workspace = true }

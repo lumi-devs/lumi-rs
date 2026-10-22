@@ -2,12 +2,13 @@ use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
 use crate::config;
 
-pub mod actions;
+pub(crate) mod actions;
 pub mod channels;
-pub mod commands;
-pub mod store;
-pub mod views;
+mod commands;
+pub(crate) mod store;
+mod views;
 
+/// Moderation action module.
 #[derive(Debug)]
 pub struct ModerationModule;
 

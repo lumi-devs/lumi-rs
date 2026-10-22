@@ -99,7 +99,7 @@ pub async fn cases_view(
     let cases = store::list_cases(
         &ctx.data().db,
         guild_id,
-        member.map(|user| user.get()),
+        member.map(UserId::get),
         action_filter,
         50,
     )
@@ -120,7 +120,7 @@ pub async fn cases_view(
         .iter()
         .take(15)
         .map(|case| {
-            let action = crate::moderation::views::action_label(&case.action).to_uppercase();
+            let action = crate::moderation::views::action_label(case.action).to_uppercase();
             let reason = case.reason.as_deref().unwrap_or("No reason provided");
             format!(
                 "**#{}** `{action}` for <@{}>: {reason} (<t:{}:R>)",
@@ -131,11 +131,13 @@ pub async fn cases_view(
         })
         .collect::<Vec<_>>();
 
-    let mut options = lumi_ui::CardOptions::default();
-    options.footer = Some(format!(
-        "Showing up to 15 of {} matching case(s)",
-        cases.len()
-    ));
+    let options = lumi_ui::CardOptions {
+        footer: Some(format!(
+            "Showing up to 15 of {} matching case(s)",
+            cases.len()
+        )),
+        ..lumi_ui::CardOptions::default()
+    };
     let title = member.map_or_else(
         || "📋 Server Moderation Cases".to_string(),
         |user| format!("📋 Cases for <@{}>", user.get()),

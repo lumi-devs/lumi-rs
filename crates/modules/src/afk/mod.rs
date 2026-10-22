@@ -16,6 +16,7 @@ use serde_json::json;
 
 use lumi_kernel::module::{ConfigField, ConfigFieldKind, Module, ModuleMeta};
 
+/// AFK status module.
 #[derive(Debug)]
 pub struct AfkModule;
 

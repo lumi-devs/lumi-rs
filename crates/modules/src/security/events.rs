@@ -26,7 +26,7 @@ const DANGEROUS_PERMISSIONS: [Permissions; 6] = [
 ];
 
 /// Map a Discord audit-log action to the destructive kind we score.
-fn destructive_kind(action: audit::Action) -> Option<DestructiveActionKind> {
+const fn destructive_kind(action: audit::Action) -> Option<DestructiveActionKind> {
     match action {
         audit::Action::Member(audit::MemberAction::BanAdd) => Some(DestructiveActionKind::Ban),
         audit::Action::Member(audit::MemberAction::Kick | audit::MemberAction::Prune) => {
@@ -270,13 +270,11 @@ async fn respond(
                 guild_id.get(),
             )
             .await?
-            {
-                if let Err(error) = guild_id
+                && let Err(error) = guild_id
                     .add_member_role(&ctx.http, executor, RoleId::new(role), Some(&reason))
                     .await
-                {
-                    tracing::warn!(%error, "anti-nuke quarantine failed");
-                }
+            {
+                tracing::warn!(%error, "anti-nuke quarantine failed");
             }
         }
         AntiNukeResponse::Ban => {
@@ -348,7 +346,8 @@ async fn audit_executor(
         .await
         .ok()?;
     let entry = logs.entries.iter().find(|entry| {
-        target.is_none_or(|target| entry.target_id.map(|id| id.get()) == Some(target))
+        target
+            .is_none_or(|target| entry.target_id.map(serenity::all::GenericId::get) == Some(target))
             && change_key.is_none_or(|key| entry.changes.iter().any(|change| change.key() == key))
     })?;
     let age = Timestamp::now().unix_timestamp() - entry.id.created_at().unix_timestamp();

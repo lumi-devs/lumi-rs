@@ -27,7 +27,9 @@ const USER_HZ: f64 = 100.0;
 /// shard math needs.
 #[derive(Clone, Debug, Default)]
 pub struct ShardSnapshot {
+    /// Information for each local shard.
     pub shards: Vec<ShardInfo>,
+    /// Fleet total shard count.
     pub total: u64,
 }
 
@@ -37,13 +39,15 @@ static SHARDS: OnceLock<Arc<dyn Fn() -> ShardSnapshot + Send + Sync>> = OnceLock
 
 /// Hand the gateway's shard snapshot over once the client is built.
 pub fn track_shards(source: impl Fn() -> ShardSnapshot + Send + Sync + 'static) {
-    let _ = SHARDS.set(Arc::new(source));
+    drop(SHARDS.set(Arc::new(source)));
 }
 
-/// The last collected snapshot, shared by every dashboard viewer.
-static SNAPSHOT: OnceLock<tokio::sync::Mutex<Option<(Instant, Arc<PingData>)>>> = OnceLock::new();
+type PingSnapshot = tokio::sync::Mutex<Option<(Instant, Arc<PingData>)>>;
 
-fn snapshot() -> &'static tokio::sync::Mutex<Option<(Instant, Arc<PingData>)>> {
+/// The last collected snapshot, shared by every dashboard viewer.
+static SNAPSHOT: OnceLock<PingSnapshot> = OnceLock::new();
+
+fn snapshot() -> &'static PingSnapshot {
     SNAPSHOT.get_or_init(|| tokio::sync::Mutex::new(None))
 }
 
@@ -195,10 +199,11 @@ async fn collect_fresh(services: &Services, ctx: &SerenityContext) -> PingData {
             shard.guilds = *guilds;
             shard.users = *members;
         }
-        metrics::gauge!("lumi.shard.ping_ms", "shard" => shard.id.to_string()).set(shard.ping);
-        metrics::gauge!("lumi.shard.guilds", "shard" => shard.id.to_string())
+        let shard_key = shard.id.to_string();
+        metrics::gauge!("lumi.shard.ping_ms", "shard" => shard_key.clone()).set(shard.ping);
+        metrics::gauge!("lumi.shard.guilds", "shard" => shard_key.clone())
             .set(shard.guilds as f64);
-        metrics::gauge!("lumi.shard.users", "shard" => shard.id.to_string())
+        metrics::gauge!("lumi.shard.users", "shard" => shard_key)
             .set(shard.users as f64);
     }
     metrics::gauge!("lumi.shard.total").set(shard_total as f64);

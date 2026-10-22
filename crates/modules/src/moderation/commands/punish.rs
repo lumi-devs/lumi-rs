@@ -44,7 +44,9 @@ async fn apply_warn_escalation(
     let thresholds = store::get_warn_thresholds(&ctx.data().db, guild_id_num).await?;
     let Some(rule) = thresholds
         .iter()
-        .filter(|threshold| threshold.warn_count as u64 <= total_warns)
+        .filter(|threshold| {
+            u64::try_from(threshold.warn_count).is_ok_and(|count| count <= total_warns)
+        })
         .max_by_key(|threshold| threshold.warn_count)
     else {
         return Ok(None);
@@ -192,7 +194,7 @@ pub async fn warn(
 
     send_card(
         ctx,
-        Card::lines("⚠️ Member Warned", lines).accent(Some(action_color(&CaseAction::Warn))),
+        Card::lines("⚠️ Member Warned", lines).accent(Some(action_color(CaseAction::Warn))),
     )
     .await
 }
@@ -407,7 +409,7 @@ pub async fn unban(
     )
     .await;
 
-    ctx.send(action_success_card(&CaseAction::Unban, user.get(), case, reason.as_deref()).reply())
+    ctx.send(action_success_card(CaseAction::Unban, user.get(), case, reason.as_deref()).reply())
         .await?;
     Ok(())
 }
@@ -485,7 +487,7 @@ pub async fn mute(
     )
     .await;
 
-    ctx.send(action_success_card(&CaseAction::Mute, user.get(), case, reason.as_deref()).reply())
+    ctx.send(action_success_card(CaseAction::Mute, user.get(), case, reason.as_deref()).reply())
         .await?;
     Ok(())
 }
@@ -536,7 +538,7 @@ pub async fn unmute(
     )
     .await;
 
-    ctx.send(action_success_card(&CaseAction::Unmute, user.get(), case, reason.as_deref()).reply())
+    ctx.send(action_success_card(CaseAction::Unmute, user.get(), case, reason.as_deref()).reply())
         .await?;
     Ok(())
 }
@@ -608,7 +610,7 @@ pub async fn softban(
     )
     .await;
     ctx.send(
-        action_success_card(&CaseAction::Softban, target.get(), case, reason.as_deref()).reply(),
+        action_success_card(CaseAction::Softban, target.get(), case, reason.as_deref()).reply(),
     )
     .await?;
     Ok(())
@@ -704,7 +706,7 @@ pub async fn quarantine_add(
 
     ctx.send(
         action_success_card(
-            &CaseAction::Quarantine,
+            CaseAction::Quarantine,
             member.get(),
             case,
             reason.as_deref(),
@@ -764,7 +766,7 @@ pub async fn quarantine_remove(
 
     ctx.send(
         action_success_card(
-            &CaseAction::Unquarantine,
+            CaseAction::Unquarantine,
             member.get(),
             case,
             reason.as_deref(),

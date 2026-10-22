@@ -123,33 +123,30 @@ pub async fn pay(
     )
     .await?;
 
-    match result {
-        Some(remaining) => {
-            let tax = cfg.transfer_tax(amount);
-            let tax_line = if tax > 0 {
-                format!("\nTax withheld: **{}**.", cfg.format_amount(tax))
-            } else {
-                String::new()
-            };
-            let card = Card::new(
-                "💸 Transfer Successful",
-                format!(
-                    "Transferred **{}** to <@{recipient_id}>.{tax_line}\nYour wallet: **{}**.",
-                    cfg.format_amount(amount),
-                    cfg.format_amount(remaining)
-                ),
-            )
-            .kind(CardKind::Success);
-            ctx.send(card.into_reply().reply()).await?;
-        }
-        None => {
-            let card = Card::new(
-                "❌ Insufficient Funds",
-                "You do not have enough funds in your wallet for this transfer.",
-            )
-            .kind(CardKind::Error);
-            ctx.send(card.into_reply().reply()).await?;
-        }
+    if let Some(remaining) = result {
+        let tax = cfg.transfer_tax(amount);
+        let tax_line = if tax > 0 {
+            format!("\nTax withheld: **{}**.", cfg.format_amount(tax))
+        } else {
+            String::new()
+        };
+        let card = Card::new(
+            "💸 Transfer Successful",
+            format!(
+                "Transferred **{}** to <@{recipient_id}>.{tax_line}\nYour wallet: **{}**.",
+                cfg.format_amount(amount),
+                cfg.format_amount(remaining)
+            ),
+        )
+        .kind(CardKind::Success);
+        ctx.send(card.into_reply().reply()).await?;
+    } else {
+        let card = Card::new(
+            "❌ Insufficient Funds",
+            "You do not have enough funds in your wallet for this transfer.",
+        )
+        .kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
     }
 
     Ok(())
@@ -193,30 +190,29 @@ pub async fn deposit_cmd(
     }
 
     let cfg = EconomyConfig::load(&ctx.data().cache, &ctx.data().db, guild_id).await?;
-    match store::deposit(&ctx.data().db, guild_id, user_id, amount, &cfg).await? {
-        Some((wallet, bank)) => {
-            let card = Card::new(
-                "🏦 Deposit Successful",
-                format!(
-                    "Moved **{}** into your {}.\nWallet: **{}** · {}: **{}**",
-                    cfg.format_amount(amount),
-                    cfg.bank_name,
-                    cfg.format_amount(wallet),
-                    cfg.bank_name,
-                    cfg.format_amount(bank)
-                ),
-            )
-            .kind(CardKind::Success);
-            ctx.send(card.into_reply().reply()).await?;
-        }
-        None => {
-            let card = Card::new(
-                "❌ Deposit Failed",
-                "You do not have enough wallet funds, or the bank is already at its cap.",
-            )
-            .kind(CardKind::Error);
-            ctx.send(card.into_reply().reply()).await?;
-        }
+    if let Some((wallet, bank)) =
+        store::deposit(&ctx.data().db, guild_id, user_id, amount, &cfg).await?
+    {
+        let card = Card::new(
+            "🏦 Deposit Successful",
+            format!(
+                "Moved **{}** into your {}.\nWallet: **{}** · {}: **{}**",
+                cfg.format_amount(amount),
+                cfg.bank_name,
+                cfg.format_amount(wallet),
+                cfg.bank_name,
+                cfg.format_amount(bank)
+            ),
+        )
+        .kind(CardKind::Success);
+        ctx.send(card.into_reply().reply()).await?;
+    } else {
+        let card = Card::new(
+            "❌ Deposit Failed",
+            "You do not have enough wallet funds, or the bank is already at its cap.",
+        )
+        .kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
     }
     Ok(())
 }
@@ -242,29 +238,28 @@ pub async fn withdraw_cmd(
     }
 
     let cfg = EconomyConfig::load(&ctx.data().cache, &ctx.data().db, guild_id).await?;
-    match store::withdraw(&ctx.data().db, guild_id, user_id, amount, &cfg).await? {
-        Some((wallet, bank)) => {
-            let card = Card::new(
-                "🏦 Withdrawal Successful",
-                format!(
-                    "Moved **{}** into your wallet.\nWallet: **{}** · {}: **{}**",
-                    cfg.format_amount(amount),
-                    cfg.format_amount(wallet),
-                    cfg.bank_name,
-                    cfg.format_amount(bank)
-                ),
-            )
-            .kind(CardKind::Success);
-            ctx.send(card.into_reply().reply()).await?;
-        }
-        None => {
-            let card = Card::new(
-                "❌ Withdrawal Failed",
-                "You do not have enough bank funds, or your wallet is already at its cap.",
-            )
-            .kind(CardKind::Error);
-            ctx.send(card.into_reply().reply()).await?;
-        }
+    if let Some((wallet, bank)) =
+        store::withdraw(&ctx.data().db, guild_id, user_id, amount, &cfg).await?
+    {
+        let card = Card::new(
+            "🏦 Withdrawal Successful",
+            format!(
+                "Moved **{}** into your wallet.\nWallet: **{}** · {}: **{}**",
+                cfg.format_amount(amount),
+                cfg.format_amount(wallet),
+                cfg.bank_name,
+                cfg.format_amount(bank)
+            ),
+        )
+        .kind(CardKind::Success);
+        ctx.send(card.into_reply().reply()).await?;
+    } else {
+        let card = Card::new(
+            "❌ Withdrawal Failed",
+            "You do not have enough bank funds, or your wallet is already at its cap.",
+        )
+        .kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
     }
     Ok(())
 }
@@ -440,7 +435,7 @@ pub async fn slots(
     if let Some(remaining) = claim_cooldown(
         &ctx.data().cache,
         &key,
-        cfg.cooldown_ms(cfg.slot_cooldown_seconds),
+        EconomyConfig::cooldown_ms(cfg.slot_cooldown_seconds),
     )
     .await?
     {
@@ -514,7 +509,15 @@ pub async fn leaderboard(ctx: Context<'_>) -> Result<(), Error> {
         .map_or_else(|| "this server".to_string(), |g| g.name.to_string());
     let caller_id = ctx.author().id.get();
 
-    let reply = leaderboard_reply(&ctx.data().cache, ctx.data().reader(), guild_id, &guild_name, 0, caller_id).await?;
+    let reply = leaderboard_reply(
+        &ctx.data().cache,
+        ctx.data().reader(),
+        guild_id,
+        &guild_name,
+        0,
+        caller_id,
+    )
+    .await?;
     ctx.send(reply.reply()).await?;
     Ok(())
 }
@@ -606,11 +609,13 @@ async fn leaderboard_reply(
         ));
     }
 
-    let mut opts = lumi_ui::CardOptions::default();
-    opts.footer = Some(format!("Page {} of {total_pages}", page + 1));
-    opts.action_rows = pagination_row("econ:lb", page, total_pages)
-        .into_iter()
-        .collect();
+    let opts = lumi_ui::CardOptions {
+        footer: Some(format!("Page {} of {total_pages}", page + 1)),
+        action_rows: pagination_row("econ:lb", page, total_pages)
+            .into_iter()
+            .collect(),
+        ..lumi_ui::CardOptions::default()
+    };
 
     Ok(Card::lines(format!("🏆 Richest in {guild_name}"), lines)
         .kind(CardKind::Gold)
@@ -618,6 +623,7 @@ async fn leaderboard_reply(
         .into_reply())
 }
 
+#[must_use]
 pub fn commands() -> Vec<Command> {
     vec![balance(), daily(), pay(), bank(), slots(), leaderboard()]
 }

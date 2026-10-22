@@ -8,10 +8,11 @@ use crate::text::cut;
 
 /// Accent colour per action. Colours are plain `0xRRGGBB` values: an extra
 /// leading byte silently turns the intended hue into another one.
-pub fn action_color(action: &CaseAction) -> Colour {
+#[must_use]
+pub const fn action_color(action: CaseAction) -> Colour {
     match action {
         CaseAction::Warn => Colour::new(0xf5_9f00),
-        CaseAction::Mute | CaseAction::VoiceMute => Colour::new(0xfab005),
+        CaseAction::Mute | CaseAction::VoiceMute => Colour::new(0x00fa_b005),
         CaseAction::Kick => Colour::new(0xfa_5252),
         CaseAction::Ban | CaseAction::Softban => Colour::new(0xc9_2a2a),
         CaseAction::Unban
@@ -22,7 +23,8 @@ pub fn action_color(action: &CaseAction) -> Colour {
     }
 }
 
-pub fn action_emoji(action: &CaseAction) -> &'static str {
+#[must_use]
+pub const fn action_emoji(action: CaseAction) -> &'static str {
     match action {
         CaseAction::Warn => "⚠️",
         CaseAction::Mute | CaseAction::VoiceMute => "🔇",
@@ -38,7 +40,8 @@ pub fn action_emoji(action: &CaseAction) -> &'static str {
 }
 
 /// Stable human label, replacing `format!("{action:?}")` scattered across cards.
-pub fn action_label(action: &CaseAction) -> &'static str {
+#[must_use]
+pub const fn action_label(action: CaseAction) -> &'static str {
     match action {
         CaseAction::Ban => "ban",
         CaseAction::Unban => "unban",
@@ -56,19 +59,31 @@ pub fn action_label(action: &CaseAction) -> &'static str {
 }
 
 /// Parse the `/cases view action:` filter without a lossy fallback.
+#[must_use]
 pub fn action_from_str(value: &str) -> Option<CaseAction> {
-    match value.trim().to_lowercase().as_str() {
-        "warn" => Some(CaseAction::Warn),
-        "kick" => Some(CaseAction::Kick),
-        "ban" => Some(CaseAction::Ban),
-        "unban" => Some(CaseAction::Unban),
-        "mute" | "timeout" => Some(CaseAction::Mute),
-        "unmute" => Some(CaseAction::Unmute),
-        "softban" => Some(CaseAction::Softban),
-        "quarantine" => Some(CaseAction::Quarantine),
-        "unquarantine" => Some(CaseAction::Unquarantine),
-        "antinuke_alert" => Some(CaseAction::AntinukeAlert),
-        _ => None,
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("warn") {
+        Some(CaseAction::Warn)
+    } else if v.eq_ignore_ascii_case("kick") {
+        Some(CaseAction::Kick)
+    } else if v.eq_ignore_ascii_case("ban") {
+        Some(CaseAction::Ban)
+    } else if v.eq_ignore_ascii_case("unban") {
+        Some(CaseAction::Unban)
+    } else if v.eq_ignore_ascii_case("mute") || v.eq_ignore_ascii_case("timeout") {
+        Some(CaseAction::Mute)
+    } else if v.eq_ignore_ascii_case("unmute") {
+        Some(CaseAction::Unmute)
+    } else if v.eq_ignore_ascii_case("softban") {
+        Some(CaseAction::Softban)
+    } else if v.eq_ignore_ascii_case("quarantine") {
+        Some(CaseAction::Quarantine)
+    } else if v.eq_ignore_ascii_case("unquarantine") {
+        Some(CaseAction::Unquarantine)
+    } else if v.eq_ignore_ascii_case("antinuke_alert") {
+        Some(CaseAction::AntinukeAlert)
+    } else {
+        None
     }
 }
 
@@ -87,12 +102,13 @@ pub fn human_seconds(seconds: i32) -> String {
     }
 }
 
+#[must_use]
 pub fn case_card(case: &moderation_case::Model) -> CardReply {
     let title = format!(
         "{} Case #{} | {}",
-        action_emoji(&case.action),
+        action_emoji(case.action),
         case.case_number,
-        action_label(&case.action).to_uppercase()
+        action_label(case.action).to_uppercase()
     );
 
     let mut lines = vec![
@@ -114,18 +130,19 @@ pub fn case_card(case: &moderation_case::Model) -> CardReply {
     lines.push(format!("**Reason:** {reason}"));
 
     Card::lines(title, lines)
-        .accent(Some(action_color(&case.action)))
+        .accent(Some(action_color(case.action)))
         .into_reply()
 }
 
 /// One card for a single or bulk punishment, including partial failures and
 /// cases that could not be persisted.
+#[must_use]
 pub fn punishment_card(outcome: &BulkOutcome, reason: Option<&str>) -> CardReply {
     let action = outcome.action;
-    let label = action_label(&action);
+    let label = action_label(action);
     let title = format!(
         "{} {} {}",
-        action_emoji(&action),
+        action_emoji(action),
         label.to_uppercase(),
         if outcome.applied.len() > 1 {
             format!("×{}", outcome.applied.len())
@@ -193,20 +210,21 @@ pub fn punishment_card(outcome: &BulkOutcome, reason: Option<&str>) -> CardReply
     }
 
     Card::lines(title.trim_end(), lines)
-        .accent(Some(action_color(&action)))
+        .accent(Some(action_color(action)))
         .into_reply()
 }
 
 /// Convenience wrapper for the single-target commands.
+#[must_use]
 pub fn action_success_card(
-    action: &CaseAction,
+    action: CaseAction,
     target: u64,
     case: Option<moderation_case::Model>,
     reason: Option<&str>,
 ) -> CardReply {
     punishment_card(
         &BulkOutcome {
-            action: *action,
+            action,
             applied: vec![AppliedCase {
                 target: UserId::new(target),
                 case,
@@ -217,8 +235,9 @@ pub fn action_success_card(
     )
 }
 
+#[must_use]
 pub fn notes_list_card(user_id: u64, notes: &[mod_note::Model]) -> CardReply {
-    let title = format!("📝 Notes for <@{}>", user_id);
+    let title = format!("📝 Notes for <@{user_id}>");
 
     if notes.is_empty() {
         return Card::lines(title, vec!["No notes found for this user.".to_string()]).into_reply();
@@ -238,8 +257,10 @@ pub fn notes_list_card(user_id: u64, notes: &[mod_note::Model]) -> CardReply {
         })
         .collect();
 
-    let mut options = CardOptions::default();
-    options.footer = Some(format!("Total: {} note(s)", notes.len()));
+    let options = CardOptions {
+        footer: Some(format!("Total: {} note(s)", notes.len())),
+        ..CardOptions::default()
+    };
 
     Card::lines(title, lines).options(options).into_reply()
 }

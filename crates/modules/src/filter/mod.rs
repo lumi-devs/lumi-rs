@@ -1,16 +1,18 @@
 //! Filter module: per-guild automod rule engine (terms, regex, invites, links,
 //! mention spam, caps) with delete/warn/timeout enforcement and hit logging.
 
-pub mod enforce;
+pub(crate) mod enforce;
+/// Filter gateway event handlers.
 pub mod events;
-pub mod heat;
-pub mod state;
-pub mod store;
+pub(crate) mod heat;
+pub(crate) mod state;
+pub(crate) mod store;
 
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
 use crate::config;
 
+/// Automod filter module.
 #[derive(Debug)]
 pub struct FilterModule;
 
@@ -41,228 +43,263 @@ impl Module for FilterModule {
     }
 
     fn config_schema(&self) -> Vec<ConfigField> {
-        let terms = "Terms & Patterns";
-        let links = "Invites & Links";
-        let spam = "Spam Limits";
-        let punish = "Punishment";
-        let heat = "Heat Engine";
-        let lockdown = "Auto-Lockdown";
-        vec![
-            string_array(
-                "terms",
-                "Filtered Terms",
-                "Words/phrases to block (case-insensitive substring), one per line.",
-                terms,
-            ),
-            string_array(
-                "regex_rules",
-                "Regex Rules",
-                "Regular expressions to block (case-insensitive, max 256 chars each), one per line. Invalid patterns are skipped.",
-                terms,
-            ),
-            boolean(
-                "block_invites",
-                "Block Invites",
-                "Delete messages containing Discord server invites.",
-                links,
-            ),
-            string_array(
-                "invite_allowlist",
-                "Allowed Invite Codes",
-                "Invite codes that are always allowed (e.g. your own server's), one per line.",
-                links,
-            ),
-            boolean(
-                "block_links",
-                "Block Links",
-                "Delete messages containing links, except allowlisted domains.",
-                links,
-            ),
-            string_array(
-                "link_allowlist",
-                "Allowed Link Domains",
-                "Domains exempt from link blocking (subdomains included), one per line, e.g. youtube.com.",
-                links,
-            ),
-            number(
-                "max_mentions",
-                "Max Mentions",
-                "Maximum user+role mentions per message. 0 disables the rule.",
-                0,
-                spam,
-            ),
-            number(
-                "max_caps_percent",
-                "Max Caps %",
-                "Delete messages whose letters are more than this % uppercase. 0 disables the rule.",
-                0,
-                spam,
-            ),
-            number(
-                "caps_min_length",
-                "Caps Min Length",
-                "Messages shorter than this never trip the caps rule.",
-                12,
-                spam,
-            ),
-            config::role_array_field(
-                "exempt_roles",
-                "Exempt Roles",
-                "Roles that bypass all filter rules (members with Manage Messages are always exempt).",
-                punish,
-            ),
-            number(
-                "timeout_minutes",
-                "Timeout (minutes)",
-                "Timeout the author for this many minutes on a filter hit. 0 disables punishment.",
-                0,
-                punish,
-            ),
-            number(
-                "spam_timeout_minutes",
-                "Spam Timeout (minutes)",
-                "Timeout for mention-spam/caps hits. 0 falls back to Timeout (minutes).",
-                0,
-                punish,
-            ),
-            number(
-                "invite_timeout_minutes",
-                "Invite Timeout (minutes)",
-                "Timeout for invite-block hits. 0 falls back to Timeout (minutes).",
-                0,
-                punish,
-            ),
-            number(
-                "link_timeout_minutes",
-                "Link Timeout (minutes)",
-                "Timeout for link-block hits. 0 falls back to Timeout (minutes).",
-                0,
-                punish,
-            ),
-            config::string_field(
-                "warn_message",
-                "Warning Message",
-                "Transient warning sent after a deletion. Placeholders: {user}, {reason}. Empty disables the warning.",
-                store::DEFAULT_WARN_MESSAGE,
-                punish,
-            ),
-            config::channel_field(
-                "log_channel_id",
-                "Log Channel",
-                "Channel where filter hits are logged.",
-                punish,
-            ),
-            boolean(
-                "heat_enabled",
-                "Enable Heat Engine",
-                "Track member activity heat to detect rapid-fire spam and raids.",
-                heat,
-            ),
-            number(
-                "heat_per_message",
-                "Heat Per Message",
-                "Points added per message sent.",
-                1,
-                heat,
-            ),
-            number(
-                "heat_per_mention",
-                "Heat Per Mention",
-                "Points added per user/role mention.",
-                2,
-                heat,
-            ),
-            number(
-                "heat_per_filter_hit",
-                "Heat Per Filter Hit",
-                "Points added when a message trips any filter rule.",
-                5,
-                heat,
-            ),
-            number(
-                "heat_per_attachment",
-                "Heat Per Attachment",
-                "Points added per file attachment.",
-                2,
-                heat,
-            ),
-            number(
-                "heat_per_emoji",
-                "Heat Per Emoji",
-                "Points added per emoji in the message.",
-                1,
-                heat,
-            ),
-            number(
-                "heat_per_link",
-                "Heat Per Link",
-                "Points added if message contains any link.",
-                2,
-                heat,
-            ),
-            number(
-                "heat_per_zalgo",
-                "Heat Per Zalgo",
-                "Points added if message is heavily composed of zalgo/combining characters.",
-                3,
-                heat,
-            ),
-            number(
-                "heat_decay_per_minute",
-                "Heat Decay / Min",
-                "Points subtracted per minute of inactivity.",
-                5,
-                heat,
-            ),
-            number(
-                "heat_warn",
-                "Warn Threshold",
-                "Heat level that triggers an automated warning. 0 disables.",
-                15,
-                heat,
-            ),
-            number(
-                "heat_timeout",
-                "Timeout Threshold",
-                "Heat level that triggers a timeout. 0 disables.",
-                30,
-                heat,
-            ),
-            number(
-                "heat_timeout_minutes",
-                "Heat Timeout Duration (m)",
-                "Duration in minutes for heat-triggered timeouts.",
-                10,
-                heat,
-            ),
-            number(
-                "heat_quarantine",
-                "Quarantine Threshold",
-                "Heat level that triggers quarantine. 0 disables.",
-                50,
-                heat,
-            ),
-            number(
-                "lockdown_mention_threshold",
-                "Mention Flood Threshold",
-                "Mentions within the window that trigger a server-wide channel lockdown. 0 disables.",
-                0,
-                lockdown,
-            ),
-            number(
-                "lockdown_window_seconds",
-                "Mention Window (s)",
-                "Window in seconds to aggregate mentions.",
-                10,
-                lockdown,
-            ),
-            number(
-                "lockdown_duration_minutes",
-                "Lockdown Duration (m)",
-                "How long text channels stay locked before auto-unlocking.",
-                10,
-                lockdown,
-            ),
-        ]
+        let mut fields = terms_schema();
+        fields.extend(spam_schema());
+        fields.extend(punishment_schema());
+        fields.extend(heat_schema());
+        fields.extend(lockdown_schema());
+        fields
     }
+}
+
+const GROUP_TERMS: &str = "Terms & Patterns";
+const GROUP_LINKS: &str = "Invites & Links";
+const GROUP_SPAM: &str = "Spam Limits";
+const GROUP_PUNISH: &str = "Punishment";
+const GROUP_HEAT: &str = "Heat Engine";
+const GROUP_LOCKDOWN: &str = "Auto-Lockdown";
+
+fn terms_schema() -> Vec<ConfigField> {
+    let (terms, links) = (GROUP_TERMS, GROUP_LINKS);
+    vec![
+        string_array(
+            "terms",
+            "Filtered Terms",
+            "Words/phrases to block (case-insensitive substring), one per line.",
+            terms,
+        ),
+        string_array(
+            "regex_rules",
+            "Regex Rules",
+            "Regular expressions to block (case-insensitive, max 256 chars each), one per line. Invalid patterns are skipped.",
+            terms,
+        ),
+        boolean(
+            "block_invites",
+            "Block Invites",
+            "Delete messages containing Discord server invites.",
+            links,
+        ),
+        string_array(
+            "invite_allowlist",
+            "Allowed Invite Codes",
+            "Invite codes that are always allowed (e.g. your own server's), one per line.",
+            links,
+        ),
+        boolean(
+            "block_links",
+            "Block Links",
+            "Delete messages containing links, except allowlisted domains.",
+            links,
+        ),
+        string_array(
+            "link_allowlist",
+            "Allowed Link Domains",
+            "Domains exempt from link blocking (subdomains included), one per line, e.g. youtube.com.",
+            links,
+        ),
+    ]
+}
+
+fn spam_schema() -> Vec<ConfigField> {
+    let spam = GROUP_SPAM;
+    vec![
+        number(
+            "max_mentions",
+            "Max Mentions",
+            "Maximum user+role mentions per message. 0 disables the rule.",
+            0,
+            spam,
+        ),
+        number(
+            "max_caps_percent",
+            "Max Caps %",
+            "Delete messages whose letters are more than this % uppercase. 0 disables the rule.",
+            0,
+            spam,
+        ),
+        number(
+            "caps_min_length",
+            "Caps Min Length",
+            "Messages shorter than this never trip the caps rule.",
+            12,
+            spam,
+        ),
+    ]
+}
+
+fn punishment_schema() -> Vec<ConfigField> {
+    let punish = GROUP_PUNISH;
+    vec![
+        config::role_array_field(
+            "exempt_roles",
+            "Exempt Roles",
+            "Roles that bypass all filter rules (members with Manage Messages are always exempt).",
+            punish,
+        ),
+        number(
+            "timeout_minutes",
+            "Timeout (minutes)",
+            "Timeout the author for this many minutes on a filter hit. 0 disables punishment.",
+            0,
+            punish,
+        ),
+        number(
+            "spam_timeout_minutes",
+            "Spam Timeout (minutes)",
+            "Timeout for mention-spam/caps hits. 0 falls back to Timeout (minutes).",
+            0,
+            punish,
+        ),
+        number(
+            "invite_timeout_minutes",
+            "Invite Timeout (minutes)",
+            "Timeout for invite-block hits. 0 falls back to Timeout (minutes).",
+            0,
+            punish,
+        ),
+        number(
+            "link_timeout_minutes",
+            "Link Timeout (minutes)",
+            "Timeout for link-block hits. 0 falls back to Timeout (minutes).",
+            0,
+            punish,
+        ),
+        config::string_field(
+            "warn_message",
+            "Warning Message",
+            "Transient warning sent after a deletion. Placeholders: {user}, {reason}. Empty disables the warning.",
+            store::DEFAULT_WARN_MESSAGE,
+            punish,
+        ),
+        config::channel_field(
+            "log_channel_id",
+            "Log Channel",
+            "Channel where filter hits are logged.",
+            punish,
+        ),
+    ]
+}
+
+fn heat_schema() -> Vec<ConfigField> {
+    let heat = GROUP_HEAT;
+    vec![
+        boolean(
+            "heat_enabled",
+            "Enable Heat Engine",
+            "Track member activity heat to detect rapid-fire spam and raids.",
+            heat,
+        ),
+        number(
+            "heat_per_message",
+            "Heat Per Message",
+            "Points added per message sent.",
+            1,
+            heat,
+        ),
+        number(
+            "heat_per_mention",
+            "Heat Per Mention",
+            "Points added per user/role mention.",
+            2,
+            heat,
+        ),
+        number(
+            "heat_per_filter_hit",
+            "Heat Per Filter Hit",
+            "Points added when a message trips any filter rule.",
+            5,
+            heat,
+        ),
+        number(
+            "heat_per_attachment",
+            "Heat Per Attachment",
+            "Points added per file attachment.",
+            2,
+            heat,
+        ),
+        number(
+            "heat_per_emoji",
+            "Heat Per Emoji",
+            "Points added per emoji in the message.",
+            1,
+            heat,
+        ),
+        number(
+            "heat_per_link",
+            "Heat Per Link",
+            "Points added if message contains any link.",
+            2,
+            heat,
+        ),
+        number(
+            "heat_per_zalgo",
+            "Heat Per Zalgo",
+            "Points added if message is heavily composed of zalgo/combining characters.",
+            3,
+            heat,
+        ),
+        number(
+            "heat_decay_per_minute",
+            "Heat Decay / Min",
+            "Points subtracted per minute of inactivity.",
+            5,
+            heat,
+        ),
+        number(
+            "heat_warn",
+            "Warn Threshold",
+            "Heat level that triggers an automated warning. 0 disables.",
+            15,
+            heat,
+        ),
+        number(
+            "heat_timeout",
+            "Timeout Threshold",
+            "Heat level that triggers a timeout. 0 disables.",
+            30,
+            heat,
+        ),
+        number(
+            "heat_timeout_minutes",
+            "Heat Timeout Duration (m)",
+            "Duration in minutes for heat-triggered timeouts.",
+            10,
+            heat,
+        ),
+        number(
+            "heat_quarantine",
+            "Quarantine Threshold",
+            "Heat level that triggers quarantine. 0 disables.",
+            50,
+            heat,
+        ),
+    ]
+}
+
+fn lockdown_schema() -> Vec<ConfigField> {
+    let lockdown = GROUP_LOCKDOWN;
+    vec![
+        number(
+            "lockdown_mention_threshold",
+            "Mention Flood Threshold",
+            "Mentions within the window that trigger a server-wide channel lockdown. 0 disables.",
+            0,
+            lockdown,
+        ),
+        number(
+            "lockdown_window_seconds",
+            "Mention Window (s)",
+            "Window in seconds to aggregate mentions.",
+            10,
+            lockdown,
+        ),
+        number(
+            "lockdown_duration_minutes",
+            "Lockdown Duration (m)",
+            "How long text channels stay locked before auto-unlocking.",
+            10,
+            lockdown,
+        ),
+    ]
 }

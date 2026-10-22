@@ -1,4 +1,4 @@
-//! Per-guild module enable/disable state and config, backed by SeaORM.
+//! Per-guild module enable/disable state and config, backed by `SeaORM`.
 //!
 //! The Modules tab reads and writes these; module metadata and the config
 //! schema stay in [`crate::module`].
@@ -25,11 +25,17 @@ use crate::{LumiError, Result};
 /// One row of the Modules list: module metadata plus its resolved state.
 #[derive(Clone, Debug)]
 pub struct FeatureRow {
+    /// Module name.
     pub name: String,
+    /// Display name.
     pub display_name: String,
+    /// Module emoji.
     pub emoji: String,
+    /// Module description.
     pub description: String,
+    /// Module version.
     pub version: String,
+    /// Whether the module is enabled.
     pub enabled: bool,
 }
 
@@ -49,6 +55,7 @@ async fn global_enabled(db: &DatabaseConnection, module: &str) -> Option<bool> {
         .map(|row| row.enabled)
 }
 
+/// Check if a module is enabled for a given guild.
 pub async fn is_enabled(db: &DatabaseConnection, guild_id: u64, module: &str) -> bool {
     let guild = guild_module_state::Entity::find()
         .filter(guild_module_state::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
@@ -61,6 +68,7 @@ pub async fn is_enabled(db: &DatabaseConnection, guild_id: u64, module: &str) ->
     resolve_enabled(global_enabled(db, module).await, guild)
 }
 
+/// Write a guild's enabled override for a module.
 pub async fn set_enabled(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -216,12 +224,14 @@ pub async fn config_cached(
     }
 }
 
+/// Drop the cached config for a guild + module.
 pub async fn invalidate_config(cache: &Cache, guild_id: u64, module: &str) -> Result<()> {
     let key = config_cache_key(guild_id, module);
     cache.invalidate(&key).await?;
     Ok(())
 }
 
+/// Single cached module config value for a guild.
 pub async fn config_cached_value(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -270,6 +280,7 @@ pub async fn config_u64(
         .and_then(parse_id))
 }
 
+/// Insert or update one config key.
 pub async fn set_config_field(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -317,6 +328,7 @@ fn coerce_value(raw: &str, kind: &ConfigFieldKind) -> Result<Value> {
     }
 }
 
+/// Coerce raw dashboard input and store it.
 pub async fn set_config_value(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -339,6 +351,7 @@ pub async fn clear_config(db: &DatabaseConnection, guild_id: u64, module: &str) 
     Ok(result.rows_affected)
 }
 
+/// Store one config key and drop the cached config.
 pub async fn set_config_field_cached(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -352,6 +365,7 @@ pub async fn set_config_field_cached(
     Ok(())
 }
 
+/// Coerce raw input, store it and drop the cached config.
 pub async fn set_config_value_cached(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -365,6 +379,7 @@ pub async fn set_config_value_cached(
     set_config_field_cached(cache, db, guild_id, module, key, value).await
 }
 
+/// Clear every override for a module and drop the cached config.
 pub async fn clear_config_cached(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -403,17 +418,17 @@ pub fn format_field_value(field: &ConfigField, value: Option<&Value>) -> String 
             if ids.is_empty() {
                 "-# *(not set)*".to_string()
             } else {
-                cut(&ids.join(" "), 120)
+                cut(&ids.join(" "), 120).into_owned()
             }
         }
         ConfigFieldKind::User => id_value(value, |id| format!("<@{id}>")),
         ConfigFieldKind::StringArray => {
-            let items: Vec<String> = value
+            let items: Vec<&str> = value
                 .as_array()
                 .map(|array| {
                     array
                         .iter()
-                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .filter_map(Value::as_str)
                         .collect()
                 })
                 .unwrap_or_default();
@@ -424,7 +439,7 @@ pub fn format_field_value(field: &ConfigField, value: Option<&Value>) -> String 
             }
         }
         ConfigFieldKind::ObjectArray => {
-            let count = value.as_array().map_or(0, |items| items.len());
+            let count = value.as_array().map_or(0, Vec::len);
             if count == 0 {
                 "-# *(not set)*".to_string()
             } else {
@@ -435,33 +450,38 @@ pub fn format_field_value(field: &ConfigField, value: Option<&Value>) -> String 
             }
         }
         _ => {
-            let text = value
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| value.to_string());
-            if text.is_empty() {
-                "-# *(not set)*".to_string()
+            if let Some(s) = value.as_str() {
+                if s.is_empty() {
+                    "-# *(not set)*".to_string()
+                } else {
+                    format!("`{}`", cut(s, 120))
+                }
             } else {
-                format!("`{}`", cut(&text, 120))
+                let text = value.to_string();
+                if text.is_empty() {
+                    "-# *(not set)*".to_string()
+                } else {
+                    format!("`{}`", cut(&text, 120))
+                }
             }
         }
     }
 }
 
-fn id_value(value: &Value, render: impl Fn(&str) -> String) -> String {
+fn id_value(value: &Value, render: impl Fn(u64) -> String) -> String {
     parse_id(value).map_or_else(
         || "-# *(not set)*".to_string(),
-        |id| render(&id.to_string()),
+        render,
     )
 }
 
-fn cut(text: &str, max: usize) -> String {
+fn cut(text: &str, max: usize) -> std::borrow::Cow<'_, str> {
     if text.chars().count() <= max {
-        return text.to_string();
+        return std::borrow::Cow::Borrowed(text);
     }
     let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
     out.push('\u{2026}');
-    out
+    std::borrow::Cow::Owned(out)
 }
 
 #[cfg(test)]
@@ -508,7 +528,7 @@ mod tests {
             coerce_value(" 7 ", &ConfigFieldKind::Integer).ok(),
             Some(json!(7))
         );
-        assert!(coerce_value("7.5", &ConfigFieldKind::Integer).is_err());
+        assert!(coerce_value("7.5", &ConfigFieldKind::Integer).is_err(), "float rejected for integer");
         assert_eq!(
             coerce_value("hi", &ConfigFieldKind::String).ok(),
             Some(Value::String("hi".into()))

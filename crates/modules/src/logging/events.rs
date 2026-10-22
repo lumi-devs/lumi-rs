@@ -46,7 +46,7 @@ async fn emit(
     )
     .await?
     {
-        let card = views::log_card(entry.color, entry.title, &entry.lines);
+        let card = views::log_card(entry.color, entry.title, entry.lines);
         channel.send_message(&ctx.http, card.message()).await?;
     }
     Ok(())
@@ -58,11 +58,11 @@ fn member_line(user: &User) -> String {
 
 /// lumi truncates message content to 450 (edits) / 900 (deletes); mirror that
 /// so a single text display never exceeds Discord's limit.
-fn cut(content: &str, max: usize) -> String {
-    if content.chars().count() <= max {
-        return content.to_string();
+fn cut(content: &str, max: usize) -> &str {
+    match content.char_indices().nth(max) {
+        Some((idx, _)) => &content[..idx],
+        None => content,
     }
-    content.chars().take(max).collect()
 }
 
 /// Role mentions added to / removed from a member, as `<@&id>` strings.
@@ -80,6 +80,7 @@ fn role_changes(old: &[RoleId], new: &[RoleId]) -> (Vec<String>, Vec<String>) {
     (added, removed)
 }
 
+/// Log a deleted message.
 pub async fn on_message_delete(
     ctx: &serenity::Context,
     services: &lumi_kernel::Services,
@@ -113,6 +114,7 @@ pub async fn on_message_delete(
     .await
 }
 
+/// Log an edited message.
 pub async fn on_message_update(
     ctx: &serenity::Context,
     services: &lumi_kernel::Services,
@@ -133,10 +135,10 @@ pub async fn on_message_update(
     }
     let before = old
         .as_ref()
-        .map(|message| message.content.to_string())
+        .map(|message| message.content.as_str())
         .filter(|content| !content.is_empty())
-        .unwrap_or_else(|| "(unknown)".to_string());
-    let after = new.content.to_string();
+        .unwrap_or("(unknown)");
+    let after = new.content.as_str();
     if before == after {
         return Ok(());
     }
@@ -157,8 +159,8 @@ pub async fn on_message_update(
                     new.author.id.get()
                 ),
                 format!("**Channel**: <#{}>", new.channel_id.get()),
-                format!("**Before**: {}", cut(&before, 450)),
-                format!("**After**: {}", cut(&after, 450)),
+                format!("**Before**: {}", cut(before, 450)),
+                format!("**After**: {}", cut(after, 450)),
                 format!("[Jump to message]({})", new.link()),
             ],
         },
@@ -166,6 +168,7 @@ pub async fn on_message_update(
     .await
 }
 
+/// Log a member joining.
 pub async fn on_member_add(
     ctx: &serenity::Context,
     services: &lumi_kernel::Services,
@@ -191,6 +194,7 @@ pub async fn on_member_add(
     .await
 }
 
+/// Log a member leaving.
 pub async fn on_member_remove(
     ctx: &serenity::Context,
     services: &lumi_kernel::Services,
@@ -213,6 +217,7 @@ pub async fn on_member_remove(
     .await
 }
 
+/// Log a ban.
 pub async fn on_ban_add(
     ctx: &serenity::Context,
     services: &lumi_kernel::Services,
@@ -235,6 +240,7 @@ pub async fn on_ban_add(
     .await
 }
 
+/// Log an unban.
 pub async fn on_ban_remove(
     ctx: &serenity::Context,
     services: &lumi_kernel::Services,
@@ -257,6 +263,7 @@ pub async fn on_ban_remove(
     .await
 }
 
+/// Log nickname and role changes.
 pub async fn on_member_update(
     ctx: &serenity::Context,
     services: &lumi_kernel::Services,

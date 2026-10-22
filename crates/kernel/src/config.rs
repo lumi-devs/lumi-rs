@@ -9,20 +9,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::{LumiError, Result};
 
+/// Deployment role determining process capabilities.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
+    /// Run all bot subsystems.
     #[default]
     All,
+    /// Run Discord gateway session.
     Gateway,
+    /// Run background task worker.
     Worker,
+    /// Run HTTP interaction API.
     Api,
 }
 
 impl Role {
     /// Whether this role holds a Discord gateway session.
-    #[must_use]
-    pub fn is_gateway(self) -> bool {
+    pub const fn is_gateway(self) -> bool {
         matches!(self, Self::All | Self::Gateway)
     }
 }
@@ -30,35 +34,45 @@ impl Role {
 /// Inclusive shard range this host owns out of the fleet total (`SHARDS`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShardRange {
+    /// Start shard index (inclusive).
     pub start: u16,
+    /// End shard index (inclusive).
     pub end: u16,
 }
 
 impl ShardRange {
     /// Serenity takes an exclusive range, while our config and leases are
     /// inclusive, so the upper bound must be advanced.
-    #[must_use]
-    pub fn start_range(self) -> std::ops::Range<u16> {
+    pub const fn start_range(self) -> std::ops::Range<u16> {
         self.start..self.end.saturating_add(1)
     }
 }
 
+/// Global kernel configuration loaded from environment.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
+    /// Deployment role.
     #[serde(default)]
     pub role: Role,
+    /// Discord bot token.
     pub token: String,
+    /// Primary database connection string.
     pub database_url: String,
     /// Read replica for lag-tolerant queries; falls back to `database_url`.
     #[serde(default)]
     pub database_read_url: Option<String>,
+    /// Redis connection string.
     #[serde(default = "default_redis_url")]
     pub redis_url: String,
+    /// Optional RPC authentication token.
     pub rpc_token: Option<String>,
+    /// RPC listening port.
     #[serde(default = "default_rpc_port")]
     pub rpc_port: u16,
+    /// List of bot owner user IDs.
     #[serde(default)]
     pub owner_ids: Vec<u64>,
+    /// Path to custom addons directory.
     #[serde(default = "default_custom_dir")]
     pub custom_dir: String,
     /// Fleet-wide total shard count (`SHARDS`).
@@ -72,8 +86,10 @@ pub struct Config {
     pub intents_guild_members: bool,
     /// Discord application public key (Ed25519) for verifying HTTP interactions.
     pub discord_public_key: Option<String>,
+    /// Whether shard coordinator is enabled.
     #[serde(default)]
     pub shard_coordinator: bool,
+    /// Maximum shards assigned per node.
     #[serde(default = "default_max_shards_per_node")]
     pub max_shards_per_node: u16,
 }
@@ -82,7 +98,7 @@ fn default_redis_url() -> String {
     "redis://127.0.0.1:6379/".into()
 }
 
-fn default_rpc_port() -> u16 {
+const fn default_rpc_port() -> u16 {
     8080
 }
 
@@ -90,7 +106,7 @@ fn default_custom_dir() -> String {
     "addons".into()
 }
 
-fn default_max_shards_per_node() -> u16 {
+const fn default_max_shards_per_node() -> u16 {
     16
 }
 
@@ -196,11 +212,6 @@ impl Config {
     }
 
     /// Reject a configuration that cannot serve `role`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LumiError::Config`] when a required value for `role` is
-    /// missing, malformed, or mutually inconsistent.
     pub fn validate_for(&self, role: Role) -> Result<()> {
         if !has_scheme(&self.database_url, &["postgres://", "postgresql://"]) {
             return Err(LumiError::Config(format!(
@@ -286,7 +297,7 @@ impl Config {
         Ok(())
     }
 
-    #[must_use]
+    /// Returns true if the user ID belongs to a bot owner.
     pub fn is_owner(&self, user_id: u64) -> bool {
         self.owner_ids.contains(&user_id)
     }
@@ -298,7 +309,7 @@ fn has_scheme(url: &str, schemes: &[&str]) -> bool {
 
 fn is_ed25519_hex(key: &str) -> bool {
     let key = key.trim();
-    key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit())
+    key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn parse_shard_range(raw: &str, shard_count: Option<u16>) -> Result<ShardRange> {
@@ -402,7 +413,7 @@ mod tests {
 
         let mut cfg = config(Role::Gateway);
         cfg.discord_public_key = None;
-        assert!(cfg.validate_for(Role::Gateway).is_ok());
+        assert!(cfg.validate_for(Role::Gateway).is_ok(), "gateway without public key is valid");
     }
 
     #[test]
@@ -421,45 +432,42 @@ mod tests {
 
         let mut cfg = config(Role::Api);
         cfg.discord_public_key = Some(KEY.to_ascii_uppercase());
-        assert!(
-            cfg.validate_for(Role::Api).is_ok(),
-            "uppercase hex rejected"
-        );
+        assert!(cfg.validate_for(Role::Api).is_ok(), "valid interaction key accepted");
     }
 
     #[test]
     fn storage_urls_must_have_supported_schemes() {
         let mut cfg = config(Role::Worker);
         cfg.database_url = "localhost:5432".into();
-        assert!(cfg.validate_for(Role::Worker).is_err());
+        assert!(cfg.validate_for(Role::Worker).is_err(), "invalid db url rejected");
 
         let mut cfg = config(Role::Worker);
         cfg.database_read_url = Some("mysql://localhost".into());
-        assert!(cfg.validate_for(Role::Worker).is_err());
+        assert!(cfg.validate_for(Role::Worker).is_err(), "unsupported db scheme rejected");
 
         let mut cfg = config(Role::Worker);
         cfg.redis_url = "http://localhost".into();
-        assert!(cfg.validate_for(Role::Worker).is_err());
+        assert!(cfg.validate_for(Role::Worker).is_err(), "http redis url rejected");
     }
 
     #[test]
     fn coordinator_requires_fleet_geometry() {
         let mut cfg = config(Role::Gateway);
         cfg.shard_coordinator = true;
-        assert!(cfg.validate_for(Role::Gateway).is_err());
+        assert!(cfg.validate_for(Role::Gateway).is_err(), "missing shard count rejected");
         cfg.shard_count = Some(8);
-        assert!(cfg.validate_for(Role::Gateway).is_ok());
+        assert!(cfg.validate_for(Role::Gateway).is_ok(), "valid coordinator accepted");
         cfg.max_shards_per_node = 0;
-        assert!(cfg.validate_for(Role::Gateway).is_err());
+        assert!(cfg.validate_for(Role::Gateway).is_err(), "zero max shards rejected");
     }
 
     #[test]
     fn deserialized_shard_range_requires_the_fleet_total() {
         let mut cfg = config(Role::Gateway);
         cfg.shard_range = Some(ShardRange { start: 0, end: 3 });
-        assert!(cfg.validate_for(Role::Gateway).is_err());
+        assert!(cfg.validate_for(Role::Gateway).is_err(), "missing fleet total rejected");
         cfg.shard_count = Some(8);
-        assert!(cfg.validate_for(Role::Gateway).is_ok());
+        assert!(cfg.validate_for(Role::Gateway).is_ok(), "valid shard count accepted");
     }
 
     #[test]
@@ -474,7 +482,7 @@ mod tests {
     fn zero_fleet_total_is_rejected() {
         let mut cfg = config(Role::Gateway);
         cfg.shard_count = Some(0);
-        assert!(cfg.validate_for(Role::Gateway).is_err());
+        assert!(cfg.validate_for(Role::Gateway).is_err(), "zero shard count rejected");
     }
 
     #[test]
@@ -482,12 +490,12 @@ mod tests {
         let mut cfg = config(Role::Gateway);
         cfg.shard_range = Some(ShardRange { start: 4, end: 2 });
         cfg.shard_count = Some(8);
-        assert!(cfg.validate_for(Role::Gateway).is_err());
+        assert!(cfg.validate_for(Role::Gateway).is_err(), "inverted shard range rejected");
 
         let mut cfg = config(Role::Gateway);
         cfg.shard_count = Some(4);
         cfg.shard_range = Some(ShardRange { start: 0, end: 4 });
-        assert!(cfg.validate_for(Role::Gateway).is_err());
+        assert!(cfg.validate_for(Role::Gateway).is_err(), "out of bounds shard range rejected");
     }
 
     #[test]
@@ -520,8 +528,8 @@ mod tests {
 
     #[test]
     fn shard_range_rejects_out_of_bounds_end() {
-        assert!(parse_shard_range("4-8", Some(8)).is_err());
-        assert!(parse_shard_range("0-7", Some(8)).is_ok());
+        assert!(parse_shard_range("4-8", Some(8)).is_err(), "range past fleet total rejected");
+        assert!(parse_shard_range("0-7", Some(8)).is_ok(), "valid range accepted");
     }
 
     #[test]

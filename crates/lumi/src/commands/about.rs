@@ -26,7 +26,7 @@ pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
         if mb >= 1024.0 {
             format!("{:.1} GB", mb / 1024.0)
         } else {
-            format!("{:.1} MB", mb)
+            format!("{mb:.1} MB")
         }
     };
 
@@ -97,12 +97,14 @@ pub async fn about(ctx: Context<'_>) -> Result<(), Error> {
         .into(),
     );
 
-    let mut opts = CardOptions::default();
-    opts.hide_title = true;
-    opts.no_accent = true;
-    opts.thumbnail_url = Some(data.avatar_url);
-    opts.separator_above_action_rows = true;
-    opts.action_rows = vec![row1, row2];
+    let opts = CardOptions {
+        hide_title: true,
+        no_accent: true,
+        thumbnail_url: Some(data.avatar_url),
+        separator_above_action_rows: true,
+        action_rows: vec![row1, row2],
+        ..CardOptions::default()
+    };
 
     let card = Card::lines("", body).kind(CardKind::Primary).options(opts);
 
@@ -142,15 +144,14 @@ pub async fn help(
             let card = Card::lines(title, lines).kind(CardKind::Info);
             ctx.send(card.into_reply().reply()).await?;
             return Ok(());
-        } else {
-            let card = Card::new(
-                "❌ Command Not Found",
-                format!("No command matching `/{query}` was found."),
-            )
-            .kind(CardKind::Error);
-            ctx.send(card.into_reply().reply()).await?;
-            return Ok(());
         }
+        let card = Card::new(
+            "❌ Command Not Found",
+            format!("No command matching `/{query}` was found."),
+        )
+        .kind(CardKind::Error);
+        ctx.send(card.into_reply().reply()).await?;
+        return Ok(());
     }
 
     let mut categories: BTreeMap<String, Vec<(&str, &str)>> = BTreeMap::new();
@@ -197,7 +198,8 @@ pub async fn help(
     for (cat_name, cmds) in categories {
         let mut section = format!("### {cat_name}\n");
         for (name, desc) in cmds {
-            section.push_str(&format!("• `/{name}` — {desc}\n"));
+            use std::fmt::Write as _;
+            let _ = writeln!(section, "• `/{name}` — {desc}");
         }
         body.push(section);
     }

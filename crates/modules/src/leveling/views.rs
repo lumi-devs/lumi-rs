@@ -5,15 +5,16 @@ use lumi_ui::{Card, CardKind, CardOptions, CardReply};
 pub fn rank_card(
     username: &str,
     avatar_url: Option<String>,
-    level: i32,
     rank: Option<i64>,
-    current_xp: i64,
     next_level_xp: i64,
-    total_xp: i64,
-    message_count: i32,
-    voice_minutes: i32,
+    account: &level_account::Model,
 ) -> CardReply {
     let rank_str = rank.map_or_else(|| "Unranked".to_string(), |r| format!("#{r}"));
+    let level = account.level;
+    let current_xp = account.xp;
+    let total_xp = account.total_xp;
+    let message_count = account.message_count;
+    let voice_minutes = account.voice_minutes;
     let lines = vec![
         format!("**Rank**: `{rank_str}` \u{00b7} **Level**: `{level}`"),
         format!("**Progress**: `{current_xp}` / `{next_level_xp}` XP"),
@@ -21,11 +22,13 @@ pub fn rank_card(
         format!("**Messages**: `{message_count}` \u{00b7} **Voice**: `{voice_minutes}m`"),
     ];
 
-    let mut options = CardOptions::default();
-    options.thumbnail_url = avatar_url;
-    options.footer = Some(format!(
-        "{current_xp} / {next_level_xp} XP needed for next level"
-    ));
+    let options = CardOptions {
+        thumbnail_url: avatar_url,
+        footer: Some(format!(
+            "{current_xp} / {next_level_xp} XP needed for next level"
+        )),
+        ..CardOptions::default()
+    };
 
     Card::lines(format!("📊 Rank \u{2014} {username}"), lines)
         .kind(CardKind::Purple)
@@ -67,8 +70,10 @@ pub fn leaderboard_card(entries: &[level_account::Model]) -> CardReply {
         ));
     }
 
-    let mut options = CardOptions::default();
-    options.footer = Some(format!("Top {} members", entries.len()));
+    let options = CardOptions {
+        footer: Some(format!("Top {} members", entries.len())),
+        ..CardOptions::default()
+    };
 
     Card::lines("🏆 Server Leaderboard", lines)
         .kind(CardKind::Gold)

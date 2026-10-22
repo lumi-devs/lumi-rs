@@ -29,10 +29,15 @@ pub fn field(
         kind,
         default,
         subfields: Vec::new(),
-        group: Some(group.to_string()),
+        group: if group.is_empty() {
+            None
+        } else {
+            Some(group.to_string())
+        },
     }
 }
 
+/// Create a boolean configuration field.
 #[must_use]
 pub fn bool_field(
     key: &str,
@@ -51,6 +56,7 @@ pub fn bool_field(
     )
 }
 
+/// Create an integer configuration field.
 #[must_use]
 pub fn int_field(
     key: &str,
@@ -69,6 +75,7 @@ pub fn int_field(
     )
 }
 
+/// Create a string configuration field.
 #[must_use]
 pub fn string_field(
     key: &str,
@@ -87,6 +94,7 @@ pub fn string_field(
     )
 }
 
+/// Create a string array configuration field.
 #[must_use]
 pub fn string_array_field(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
     field(
@@ -99,6 +107,7 @@ pub fn string_array_field(key: &str, label: &str, description: &str, group: &str
     )
 }
 
+/// Create a channel configuration field.
 #[must_use]
 pub fn channel_field(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
     field(
@@ -111,6 +120,7 @@ pub fn channel_field(key: &str, label: &str, description: &str, group: &str) -> 
     )
 }
 
+/// Create a role configuration field.
 #[must_use]
 pub fn role_field(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
     field(
@@ -123,6 +133,7 @@ pub fn role_field(key: &str, label: &str, description: &str, group: &str) -> Con
     )
 }
 
+/// Create a role array configuration field.
 #[must_use]
 pub fn role_array_field(key: &str, label: &str, description: &str, group: &str) -> ConfigField {
     field(
@@ -135,7 +146,7 @@ pub fn role_array_field(key: &str, label: &str, description: &str, group: &str) 
     )
 }
 
-#[must_use]
+/// Create an enum configuration field.
 pub fn enum_field(
     key: &str,
     label: &str,
@@ -154,19 +165,18 @@ pub fn enum_field(
     )
 }
 
+/// Read a configuration value by key.
 #[must_use]
 pub fn value<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
     map.get(key)
 }
 
 /// Snowflake for `key`, accepting a JSON number or a numeric string.
-#[must_use]
 pub fn id(map: &Map<String, Value>, key: &str) -> Option<u64> {
     value(map, key).and_then(module_state::parse_id)
 }
 
 /// Array of snowflakes; unparsable entries are skipped.
-#[must_use]
 pub fn id_list(map: &Map<String, Value>, key: &str) -> Vec<u64> {
     value(map, key)
         .and_then(Value::as_array)
@@ -175,7 +185,6 @@ pub fn id_list(map: &Map<String, Value>, key: &str) -> Vec<u64> {
 }
 
 /// Array of strings; non-string entries are skipped.
-#[must_use]
 pub fn string_list(map: &Map<String, Value>, key: &str) -> Vec<String> {
     value(map, key)
         .and_then(Value::as_array)
@@ -190,7 +199,6 @@ pub fn string_list(map: &Map<String, Value>, key: &str) -> Vec<String> {
 }
 
 /// Boolean value, falling back when unset or of another type.
-#[must_use]
 pub fn boolean(map: &Map<String, Value>, key: &str, fallback: bool) -> bool {
     value(map, key).and_then(Value::as_bool).unwrap_or(fallback)
 }
@@ -208,7 +216,6 @@ pub fn integer(map: &Map<String, Value>, key: &str, fallback: i64) -> i64 {
 }
 
 /// Non-negative integer, clamped at zero.
-#[must_use]
 pub fn unsigned(map: &Map<String, Value>, key: &str, fallback: u64) -> u64 {
     value(map, key)
         .and_then(module_state::parse_id)

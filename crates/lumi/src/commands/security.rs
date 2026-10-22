@@ -15,7 +15,6 @@ async fn set_invites_disabled(
     guild_id: serenity::GuildId,
     disabled: bool,
 ) -> bool {
-    // Extract owned feature names so no cache guard lives across the await.
     let mut features: Vec<Cow<'static, str>> = {
         let Some(guild) = ctx.cache().guild(guild_id) else {
             return false;
@@ -28,7 +27,7 @@ async fn set_invites_disabled(
     };
     features.retain(|feature| feature.as_ref() != "INVITES_DISABLED");
     if disabled {
-        features.push(Cow::Owned("INVITES_DISABLED".to_string()));
+        features.push(Cow::Borrowed("INVITES_DISABLED"));
     }
     guild_id
         .edit(ctx.http(), EditGuild::new().features(features))
@@ -149,17 +148,18 @@ pub async fn on(ctx: Context<'_>) -> Result<(), Error> {
 
     let invites_paused = set_invites_disabled(ctx, guild_id, true).await;
 
+    let locked_len = locked.len();
     sec.activate_panic(
         &guild_id.to_string(),
         &actor_id.to_string(),
         invites_paused,
-        locked.clone(),
+        locked,
     )
     .await?;
 
     let lines = vec![
-        format!("Triggered by <@{}>.", actor_id),
-        format!("**Locked Channels**: `{}`", locked.len()),
+        format!("Triggered by <@{actor_id}>."),
+        format!("**Locked Channels**: `{locked_len}`"),
         format!(
             "Server invites are {}.",
             if invites_paused {
@@ -201,8 +201,6 @@ pub async fn off(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     };
 
-    // Only lift the bits panic added; deleting the overwrite outright would
-    // publish channels that were private before the lockdown.
     let everyone = guild_id.everyone_role();
     let mask = Permissions::SEND_MESSAGES | Permissions::ADD_REACTIONS;
     let channels = match guild_id.channels(ctx.http()).await {
@@ -272,6 +270,7 @@ pub async fn status_cmd(ctx: Context<'_>) -> Result<(), Error> {
     panic_status_action(ctx).await
 }
 
+#[must_use]
 pub fn commands() -> Vec<Command> {
     vec![panic()]
 }

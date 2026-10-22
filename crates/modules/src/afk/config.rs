@@ -3,7 +3,6 @@
 use sea_orm::DatabaseConnection;
 use serde_json::{Map, Value};
 
-use lumi_kernel::Result;
 use lumi_kernel::{Cache, module_state};
 
 use super::constants::DEFAULT_WELCOME_TTL_SECS;
@@ -17,41 +16,29 @@ async fn load(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> Map<Stri
 }
 
 /// Whether a welcome-back card is posted when an AFK member returns.
-pub async fn welcome_enabled(
-    cache: &Cache,
-    db: &DatabaseConnection,
-    guild_id: u64,
-) -> Result<bool> {
+pub async fn welcome_enabled(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> bool {
     let config = load(cache, db, guild_id).await;
-    Ok(config
+    config
         .get("welcome_back_enabled")
         .and_then(Value::as_bool)
-        .unwrap_or(true))
+        .unwrap_or(true)
 }
 
 /// Seconds the welcome-back card stays before it (and the mention list) goes.
-pub async fn welcome_ttl_secs(
-    cache: &Cache,
-    db: &DatabaseConnection,
-    guild_id: u64,
-) -> Result<u64> {
+pub async fn welcome_ttl_secs(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> u64 {
     let config = load(cache, db, guild_id).await;
-    Ok(config
+    config
         .get("welcome_ttl_seconds")
         .and_then(Value::as_u64)
         .unwrap_or(DEFAULT_WELCOME_TTL_SECS)
-        .max(1))
+        .max(1)
 }
 
 /// Whether `[AFK] ` is prepended to the nickname while AFK.
-pub async fn nick_prefix_enabled(
-    cache: &Cache,
-    db: &DatabaseConnection,
-    guild_id: u64,
-) -> Result<bool> {
+pub async fn nick_prefix_enabled(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> bool {
     let config = load(cache, db, guild_id).await;
-    Ok(config
+    config
         .get("nick_prefix_enabled")
         .and_then(Value::as_bool)
-        .unwrap_or(true))
+        .unwrap_or(true)
 }

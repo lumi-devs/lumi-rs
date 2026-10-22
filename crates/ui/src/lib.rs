@@ -1,5 +1,8 @@
+//! Components V2 presentation toolkit for Lumi.
+
 pub mod cards;
 pub mod confirm;
+/// Container components.
 pub mod container;
 pub mod ids;
 pub mod layout;

@@ -21,6 +21,7 @@ pub enum XpKind {
 }
 
 impl XpKind {
+    #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "xp" => Some(Self::Xp),
@@ -29,6 +30,7 @@ impl XpKind {
         }
     }
 
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Xp => "XP",
@@ -37,17 +39,18 @@ impl XpKind {
     }
 }
 
+/// XP needed to advance from `level` to the next one.
+///
+/// Integer form of `floor(0.04t^3 + 0.8t^2 + 2t + 100.5)` with `t = level - 1`.
 #[must_use]
 pub fn xp_for_level(level: i32) -> i64 {
-    let lv = level.max(1);
-    let t = f64::from(lv - 1);
-    let val = 100.0 + 0.04 * t * t * t + 0.8 * t * t + 2.0 * t + 0.5;
-    val.floor() as i64
+    let t = i64::from(level.max(1) - 1);
+    (2 * t * t * t + 40 * t * t + 100 * t + 5_025) / 50
 }
 
 #[must_use]
 pub fn total_xp_for_level(level: i32) -> i64 {
-    (1..level.min(MAX_LEVEL)).fold(0i64, |total, lv| total.saturating_add(xp_for_level(lv)))
+    (1..level.min(MAX_LEVEL)).fold(0_i64, |total, lv| total.saturating_add(xp_for_level(lv)))
 }
 
 #[must_use]
@@ -172,10 +175,10 @@ pub async fn award_xp(
 ) -> Result<Option<(level_account::Model, i32)>> {
     // Cheap uncontended check; the locked check inside the transaction stays
     // authoritative for concurrent awards.
-    if let Some(account) = get_account(db, guild_id, user_id).await? {
-        if is_on_cooldown(account.last_xp_at, cooldown_seconds) {
-            return Ok(None);
-        }
+    if let Some(account) = get_account(db, guild_id, user_id).await?
+        && is_on_cooldown(account.last_xp_at, cooldown_seconds)
+    {
+        return Ok(None);
     }
 
     let txn = db.begin().await?;
@@ -365,13 +368,6 @@ pub async fn get_leaderboard(
         .limit(limit)
         .offset(offset)
         .all(db)
-        .await?)
-}
-
-pub async fn count_accounts(db: &DatabaseConnection, guild_id: u64) -> Result<u64> {
-    Ok(level_account::Entity::find()
-        .filter(level_account::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
-        .count(db)
         .await?)
 }
 

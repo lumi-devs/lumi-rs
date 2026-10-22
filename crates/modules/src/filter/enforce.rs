@@ -18,7 +18,8 @@ pub enum Reason {
 
 impl Reason {
     /// Human-readable reason, used in the warning message.
-    pub fn label(&self) -> &'static str {
+    #[must_use]
+    pub const fn label(&self) -> &'static str {
         match self {
             Self::Term(_) => "a filtered term",
             Self::Regex(_) => "a filtered pattern",
@@ -30,7 +31,8 @@ impl Reason {
     }
 
     /// Rule name, used in logs and the audit-log timeout reason.
-    pub fn action(&self) -> &'static str {
+    #[must_use]
+    pub const fn action(&self) -> &'static str {
         match self {
             Self::Term(_) => "term",
             Self::Regex(_) => "regex",
@@ -41,6 +43,7 @@ impl Reason {
         }
     }
 
+    #[must_use]
     pub fn detail(&self) -> String {
         match self {
             Self::Term(term) => format!("term `{term}`"),
@@ -63,7 +66,7 @@ pub struct Verdict {
 }
 
 impl Verdict {
-    fn clean() -> Self {
+    const fn clean() -> Self {
         Self {
             delete: false,
             reasons: Vec::new(),
@@ -74,6 +77,7 @@ impl Verdict {
 }
 
 /// Evaluate the rules in lumi's precedence order; the first hit wins.
+#[must_use]
 pub fn evaluate(rules: &FilterRules, content: &str, mention_count: u64) -> Verdict {
     let Some(reason) = first_hit(rules, content, mention_count) else {
         return Verdict::clean();
@@ -95,27 +99,30 @@ fn first_hit(rules: &FilterRules, content: &str, mention_count: u64) -> Option<R
         return Some(Reason::Regex(regex.as_str().to_string()));
     }
 
-    if rules.block_invites {
-        if let Some(code) = blocked_invite(content, &rules.invite_allow) {
-            return Some(Reason::Invite(code));
-        }
+    if rules.block_invites
+        && let Some(code) = blocked_invite(content, &rules.invite_allow)
+    {
+        return Some(Reason::Invite(code));
     }
 
-    if rules.block_links {
-        if let Some(host) = blocked_link(content, &rules.link_allow) {
-            return Some(Reason::Link(host));
-        }
+    if rules.block_links
+        && let Some(host) = blocked_link(content, &rules.link_allow)
+    {
+        return Some(Reason::Link(host));
     }
 
-    if rules.max_mentions > 0 && mention_count as i64 > rules.max_mentions {
+    if rules.max_mentions > 0
+        && u64::try_from(rules.max_mentions).is_ok_and(|max_mentions| mention_count > max_mentions)
+    {
         return Some(Reason::Mentions(mention_count));
     }
 
-    if rules.caps_pct > 0 && content.chars().count() >= rules.caps_min_len {
-        let percent = caps_percent(content);
-        if percent > rules.caps_pct as f64 {
-            return Some(Reason::Caps(percent.round() as i64));
-        }
+    if rules.caps_pct > 0
+        && content.chars().count() >= rules.caps_min_len
+        && let Ok(caps_pct) = u64::try_from(rules.caps_pct)
+        && let Some(percent) = caps_percent(content, caps_pct)
+    {
+        return Some(Reason::Caps(percent));
     }
 
     None
@@ -140,8 +147,10 @@ fn timeout_for(rules: &FilterRules, reason: &Reason) -> Option<i64> {
 fn blocked_invite(content: &str, allow: &[String]) -> Option<String> {
     let captures = invite_regex()?.captures(content)?;
     let code = captures.get(1)?.as_str();
-    let lower = code.to_lowercase();
-    if allow.iter().any(|allowed| allowed == &lower) {
+    if allow
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(code))
+    {
         None
     } else {
         Some(code.to_string())
@@ -163,9 +172,12 @@ fn blocked_link(content: &str, allow: &[String]) -> Option<String> {
         if host.is_empty() {
             continue;
         }
-        let allowed = allow
-            .iter()
-            .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")));
+        let allowed = allow.iter().any(|domain| {
+            host == *domain
+                || host
+                    .strip_suffix(domain.as_str())
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        });
         if !allowed {
             return Some(host);
         }
@@ -173,8 +185,8 @@ fn blocked_link(content: &str, allow: &[String]) -> Option<String> {
     None
 }
 
-/// Share of cased letters that are uppercase, as a percentage.
-fn caps_percent(content: &str) -> f64 {
+/// Rounded share of letters that are uppercase, when it exceeds `caps_pct`.
+fn caps_percent(content: &str, caps_pct: u64) -> Option<i64> {
     let mut letters = 0_u64;
     let mut upper = 0_u64;
     for ch in content.chars() {
@@ -185,11 +197,11 @@ fn caps_percent(content: &str) -> f64 {
             }
         }
     }
-    if letters == 0 {
-        0.0
-    } else {
-        (upper as f64 / letters as f64) * 100.0
+    if letters == 0 || upper.saturating_mul(100) <= caps_pct.saturating_mul(letters) {
+        return None;
     }
+    let percent = (upper.saturating_mul(100).saturating_add(letters / 2)) / letters;
+    Some(i64::try_from(percent).unwrap_or(i64::MAX))
 }
 
 fn invite_regex() -> Option<&'static Regex> {
@@ -209,7 +221,10 @@ mod tests {
     use serde_json::{Value, json};
 
     fn rules(value: Value) -> FilterRules {
-        let map = value.as_object().cloned().unwrap_or_default();
+        let map = match value {
+            Value::Object(map) => map,
+            _ => serde_json::Map::new(),
+        };
         FilterRules::from_map(&map)
     }
 

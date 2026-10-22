@@ -10,7 +10,6 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 /// Compile a constant pattern, logging (not swallowing) a failure.
-#[must_use]
 pub fn compile(pattern: &str) -> Option<Regex> {
     match Regex::new(pattern) {
         Ok(regex) => Some(regex),
@@ -22,7 +21,6 @@ pub fn compile(pattern: &str) -> Option<Regex> {
 }
 
 /// Lazily compile a constant pattern into a process-wide slot.
-#[must_use]
 pub fn cached(slot: &'static OnceLock<Option<Regex>>, pattern: &str) -> Option<&'static Regex> {
     slot.get_or_init(|| compile(pattern)).as_ref()
 }

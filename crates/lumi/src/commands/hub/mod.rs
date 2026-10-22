@@ -1,5 +1,3 @@
-#![allow(clippy::field_reassign_with_default, clippy::assigning_clones)]
-
 use poise::serenity_prelude as serenity;
 use serenity::all::{
     ComponentInteraction, CreateAllowedMentions, CreateInteractionResponse,
@@ -11,16 +9,15 @@ use lumi_kernel::bot::{Command, Context, Error};
 use lumi_kernel::permits::CheckContext;
 use lumi_ui::{Card, CardReply};
 
-pub mod addons;
-pub mod home;
-pub mod modules;
-pub mod permissions;
-pub mod settings;
+mod addons;
+mod home;
+mod modules;
+mod permissions;
+mod settings;
 
 /// Every hub custom id starts with this.
 pub const PREFIX: &str = "lumi";
 pub const PREFIX_MODAL_ID: &str = "lumi:prefixmodal";
-pub const ADDON_MODAL_ID: &str = "lumi:addonmodal";
 
 /// The permit required to use any hub management action.
 pub const ADMIN_NODE: &str = "admin.*";
@@ -35,6 +32,7 @@ pub enum HubView {
 }
 
 impl HubView {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Home => "home",
@@ -44,24 +42,12 @@ impl HubView {
             Self::Addons => "addons",
         }
     }
-
-    pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "home" => Some(Self::Home),
-            "modules" => Some(Self::Modules),
-            "permissions" => Some(Self::Permissions),
-            "settings" => Some(Self::Settings),
-            "addons" => Some(Self::Addons),
-            _ => None,
-        }
-    }
 }
 
 /// Guild context captured once per interaction.
 #[derive(Clone, Debug)]
 pub struct GuildCtx {
     pub id: u64,
-    pub name: String,
     pub icon: Option<String>,
 }
 
@@ -98,6 +84,7 @@ pub async fn panel(ctx: Context<'_>) -> Result<(), Error> {
     open(ctx).await
 }
 
+#[must_use]
 pub fn commands() -> Vec<Command> {
     vec![lumi()]
 }
@@ -109,7 +96,6 @@ async fn open(ctx: Context<'_>) -> Result<(), Error> {
             .ok_or_else(|| anyhow::anyhow!("this command is guild only"))?;
         GuildCtx {
             id: guild.id.get(),
-            name: guild.name.to_string(),
             icon: guild.icon_url(),
         }
     };
@@ -185,7 +171,6 @@ pub async fn handle_modal(
         let guild = modal.guild_id.map_or_else(
             || GuildCtx {
                 id: 0,
-                name: "this server".to_string(),
                 icon: None,
             },
             |id| guild_ctx(ctx, id),
@@ -193,34 +178,33 @@ pub async fn handle_modal(
         let outcome = settings::handle_prefix_modal(services, &guild, modal).await?;
         return respond_modal(ctx, modal, outcome).await;
     }
-    if let Some(parsed) = HubId::parse(&modal.data.custom_id, PREFIX) {
-        if parsed.head() == Some("cfgmodal") {
+    let Some(parsed) = HubId::parse(&modal.data.custom_id, PREFIX) else {
+        return Ok(());
+    };
+    match parsed.head() {
+        Some("cfgmodal") => {
             if !caller_may_manage_modal(ctx, services, modal).await {
                 return deny_modal(ctx, modal).await;
             }
             let outcome =
                 modules::handle_modal(services, &guild_ctx_from_modal(ctx, modal), modal).await?;
-            return respond_modal(ctx, modal, outcome).await;
+            respond_modal(ctx, modal, outcome).await
         }
-        if parsed.head() == Some("addonmodal") {
+        Some("addonmodal") => {
             if !services.cfg.is_owner(modal.user.id.get()) {
                 return deny_modal(ctx, modal).await;
             }
-            let guild = modal.guild_id.map_or_else(
-                || GuildCtx {
-                    id: 0,
-                    name: "this server".to_string(),
-                    icon: None,
-                },
-                |id| guild_ctx(ctx, id),
-            );
-            let outcome =
-                addons::handle_modal(services, &guild, modal, parsed.get(1).unwrap_or_default())
-                    .await?;
-            return respond_modal(ctx, modal, outcome).await;
+            let outcome = addons::handle_modal(
+                services,
+                &guild_ctx_from_modal(ctx, modal),
+                modal,
+                parsed.get(1).unwrap_or_default(),
+            )
+            .await?;
+            respond_modal(ctx, modal, outcome).await
         }
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 async fn dispatch(
@@ -321,10 +305,12 @@ pub async fn caller_may_manage(
         (false, manager, roles)
     };
 
-    let _ = services
-        .permits
-        .ensure_guild(&services.db, guild_id.get())
-        .await;
+    drop(
+        services
+            .permits
+            .ensure_guild(&services.db, guild_id.get())
+            .await,
+    );
 
     let check = CheckContext {
         guild_id: guild_id.get().to_string(),
@@ -380,10 +366,12 @@ async fn caller_may_manage_modal(
         (false, manager, roles)
     };
 
-    let _ = services
-        .permits
-        .ensure_guild(&services.db, guild_id.get())
-        .await;
+    drop(
+        services
+            .permits
+            .ensure_guild(&services.db, guild_id.get())
+            .await,
+    );
 
     let check = CheckContext {
         guild_id: guild_id.get().to_string(),
@@ -457,7 +445,7 @@ async fn respond_modal(
                 .create_response(
                     &ctx.http,
                     CreateInteractionResponse::Defer(
-                        serenity::CreateInteractionResponseMessage::new(),
+                        CreateInteractionResponseMessage::new(),
                     ),
                 )
                 .await?;
@@ -509,6 +497,7 @@ async fn deny_modal(ctx: &serenity::Context, modal: &ModalInteraction) -> Result
 }
 
 /// Read a labeled input value out of a modal submission.
+#[must_use]
 pub fn read_input(components: &[serenity::ModalComponent], custom_id: &str) -> Option<String> {
     for component in components {
         if let serenity::ModalComponent::Label(label) = component
@@ -536,7 +525,6 @@ fn guild_ctx_from_modal(ctx: &serenity::Context, modal: &ModalInteraction) -> Gu
     modal.guild_id.map_or_else(
         || GuildCtx {
             id: 0,
-            name: "this server".to_string(),
             icon: None,
         },
         |id| guild_ctx(ctx, id),
@@ -544,16 +532,15 @@ fn guild_ctx_from_modal(ctx: &serenity::Context, modal: &ModalInteraction) -> Gu
 }
 
 /// Guild display context from the cache, falling back to a placeholder.
+#[must_use]
 pub fn guild_ctx(ctx: &serenity::Context, guild_id: GuildId) -> GuildCtx {
     ctx.cache.guild(guild_id).map_or_else(
         || GuildCtx {
             id: guild_id.get(),
-            name: "this server".to_string(),
             icon: None,
         },
         |guild| GuildCtx {
             id: guild_id.get(),
-            name: guild.name.to_string(),
             icon: guild.icon_url(),
         },
     )
@@ -601,9 +588,9 @@ mod tests {
             lumi_cmd.default_member_permissions.is_empty(),
             "default_member_permissions must be empty so Discord shows /lumi panel to all users including bot owners"
         );
-        let Some(panel_sub) = lumi_cmd.subcommands.iter().find(|s| s.name == "panel") else {
-            panic!("panel subcommand under lumi");
-        };
-        assert_eq!(panel_sub.name, "panel");
+        assert!(
+            lumi_cmd.subcommands.iter().any(|s| s.name == "panel"),
+            "panel subcommand under lumi"
+        );
     }
 }

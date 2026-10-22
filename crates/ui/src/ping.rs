@@ -1,14 +1,4 @@
-//! The `ping` health dashboard: a per-shard status board with a pager.
-//!
-//! The layout mirrors the reference dashboard exactly: a `__## <bot> Status:__`
-//! header, one block per shard (three per page) separated by dividers, an
-//! external-services block, and a `◀️ · Close · ▶️` pager.
-
-#![allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
+//! Health dashboard: per-shard status board with a pager.
 
 use serenity::all::{
     ButtonStyle, ConnectionStage, CreateActionRow, CreateButton, CreateComponent,
@@ -28,14 +18,17 @@ const SPACE: char = '\u{2800}';
 /// Connection state of a shard, condensed from serenity's `ConnectionStage`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ShardStatus {
+    /// Shard is connecting.
     #[default]
     Connecting,
+    /// Shard is connected and online.
     Online,
+    /// Shard is disconnected and offline.
     Offline,
 }
 
 impl ShardStatus {
-    #[must_use]
+    /// Return the emoji indicator for this status.
     pub const fn dot(self) -> &'static str {
         match self {
             Self::Online => "🟢",
@@ -45,7 +38,6 @@ impl ShardStatus {
     }
 
     /// Condense a serenity gateway stage.
-    #[must_use]
     pub const fn from_stage(stage: ConnectionStage) -> Self {
         match stage {
             ConnectionStage::Connected => Self::Online,
@@ -55,113 +47,138 @@ impl ShardStatus {
     }
 }
 
-/// Per-shard connection info plus the slice of the bot that shard serves.
+/// Per-shard connection info.
 #[derive(Clone, Debug, Default)]
 pub struct ShardInfo {
+    /// Shard identifier.
     pub id: u64,
+    /// Shard gateway ping in milliseconds.
     pub ping: f64,
+    /// Current shard connection status.
     pub status: ShardStatus,
+    /// Number of guilds on this shard.
     pub guilds: u64,
+    /// Number of users on this shard.
     pub users: u64,
 }
 
-/// Every value the ping dashboard renders.
+/// Values rendered by the ping dashboard.
 #[derive(Clone, Debug, Default)]
 pub struct PingData {
+    /// Bot display name.
     pub bot_name: String,
+    /// WebSocket gateway ping in milliseconds.
     pub ws_ping: f64,
+    /// Per-shard status list.
     pub shards: Vec<ShardInfo>,
+    /// Bot process uptime in milliseconds.
     pub uptime: f64,
+    /// Resident set size memory in bytes.
     pub rss: u64,
+    /// Total system memory in bytes.
     pub ram_total: u64,
+    /// CPU usage percentage.
     pub cpu_percent: f64,
+    /// Total guilds across all shards.
     pub guilds: u64,
+    /// Total users across all shards.
     pub users: u64,
+    /// Redis cache hit ratio percentage.
     pub redis_hit_ratio: Option<f64>,
+    /// Database ping latency in milliseconds.
     pub db_latency_ms: Option<f64>,
 
-    /// Instance counters and host uptime shared with `about`.
+    /// Cached channel count.
     pub channels: u64,
+    /// Host operating system uptime in seconds.
     pub os_uptime_secs: u64,
+    /// Bot avatar image URL.
     pub avatar_url: String,
     /// Unix seconds when this snapshot was collected.
     pub collected_at: u64,
 }
 
 fn fmt_ms(ms: Option<f64>) -> String {
-    match ms {
-        Some(n) if n >= 0.0 => format!("{n:.0}ms"),
-        _ => "Analyzing…".to_string(),
-    }
+    ms.filter(|n| *n >= 0.0)
+        .map_or_else(|| "Analyzing…".to_string(), |n| format!("{n:.0}ms"))
 }
 
 fn fmt_mb(bytes: u64) -> String {
-    format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
+    const MIB: u128 = 1024 * 1024;
+    let tenths = (u128::from(bytes) * 10 + (MIB / 2)) / MIB;
+    format!("{}.{} MB", tenths / 10, tenths % 10)
 }
 
 fn fmt_count(count: u64) -> String {
     if count >= 1000 {
-        format!("{:.1}K", count as f64 / 1000.0)
+        let tenths = (count + 50) / 100;
+        format!("{}.{}K", tenths / 10, tenths % 10)
     } else {
         count.to_string()
     }
 }
 
-/// Share of the machine's RAM this process holds, as the dashboard's percentage.
 fn ram_share(rss: u64, total: u64) -> String {
     if total == 0 {
         return "0.00%".to_string();
     }
-    format!("{:.2}%", rss as f64 / total as f64 * 100.0)
+    let total_u128 = u128::from(total);
+    let bps = (u128::from(rss) * 10_000 + (total_u128 / 2)) / total_u128;
+    format!("{}.{:02}%", bps / 100, bps % 100)
 }
 
 fn format_duration(ms: f64) -> String {
-    let total_seconds = (ms / 1000.0).floor().max(0.0) as u64;
-    let days = total_seconds / 86400;
-    let hours = (total_seconds % 86400) / 3600;
-    let minutes = (total_seconds % 3600) / 60;
+    use std::fmt::Write;
+    let total_seconds = if ms > 0.0 {
+        std::time::Duration::try_from_secs_f64(ms / 1000.0).map_or(0, |d| d.as_secs())
+    } else {
+        0
+    };
+    let days = total_seconds / 86_400;
+    let hours = (total_seconds % 86_400) / 3_600;
+    let minutes = (total_seconds % 3_600) / 60;
     let seconds = total_seconds % 60;
-    let mut parts: Vec<String> = Vec::new();
+    let mut out = String::new();
     if days > 0 {
-        parts.push(format!("{days}d"));
+        let _ = write!(out, "{days}d");
     }
     if hours > 0 {
-        parts.push(format!("{hours}h"));
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        let _ = write!(out, "{hours}h");
     }
     if minutes > 0 {
-        parts.push(format!("{minutes}m"));
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        let _ = write!(out, "{minutes}m");
     }
-    if seconds > 0 || parts.is_empty() {
-        parts.push(format!("{seconds}s"));
+    if seconds > 0 || out.is_empty() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        let _ = write!(out, "{seconds}s");
     }
-    parts.join(" ")
+    out
 }
 
-/// The shards to render: the live snapshot, or a stand-in for tiers that run none.
-fn effective_shards(data: &PingData) -> Vec<ShardInfo> {
+/// Shards to render, falling back to a dummy shard if empty.
+fn effective_shards<'a>(data: &'a PingData, fallback: &'a [ShardInfo; 1]) -> &'a [ShardInfo] {
     if !data.shards.is_empty() {
-        return data.shards.clone();
+        return &data.shards;
     }
-    vec![ShardInfo {
-        id: 0,
-        ping: data.ws_ping,
-        status: if data.ws_ping >= 0.0 {
-            ShardStatus::Online
-        } else {
-            ShardStatus::Connecting
-        },
-        guilds: data.guilds,
-        users: data.users,
-    }]
+    fallback
 }
 
 /// Pages of shards this dataset renders, never zero.
-#[must_use]
 pub fn shard_page_count(data: &PingData) -> usize {
-    effective_shards(data)
-        .len()
-        .div_ceil(SHARDS_PER_PAGE)
-        .max(1)
+    let count = if data.shards.is_empty() {
+        1
+    } else {
+        data.shards.len()
+    };
+    count.div_ceil(SHARDS_PER_PAGE).max(1)
 }
 
 fn shard_block(data: &PingData, shard: &ShardInfo) -> String {
@@ -182,7 +199,7 @@ fn shard_block(data: &PingData, shard: &ShardInfo) -> String {
     )
 }
 
-/// The `◀️ · Close · ▶️` pager, disabled at either end, keyed to the viewer.
+/// Shard pager action row.
 fn shard_pager(
     prefix: &str,
     user_id: u64,
@@ -209,17 +226,26 @@ fn shard_pager(
     action_row_of(vec![previous, close, next])
 }
 
-/// The dashboard page: header, three shards, external services and the pager.
-#[must_use]
+/// Overview card with per-shard health and latency.
 pub fn build_overview_card(data: &PingData, user_id: u64, page: usize, prefix: &str) -> CardReply {
-    let shards = effective_shards(data);
+    let fallback = [ShardInfo {
+        id: 0,
+        ping: data.ws_ping,
+        status: if data.ws_ping >= 0.0 {
+            ShardStatus::Online
+        } else {
+            ShardStatus::Connecting
+        },
+        guilds: data.guilds,
+        users: data.users,
+    }];
+    let shards = effective_shards(data, &fallback);
     let total_pages = shard_page_count(data);
     let page = page.min(total_pages - 1);
-    let updated = data.collected_at;
     let mut container = Container::new()
         .text(format!(
-            "__## {} Status:__\n-# Updated <t:{updated}:R>",
-            data.bot_name
+            "__## {} Status:__\n-# Updated <t:{}:R>",
+            data.bot_name, data.collected_at
         ))
         .separator(true, SeparatorSpacingSize::Small);
 

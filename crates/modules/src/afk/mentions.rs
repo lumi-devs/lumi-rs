@@ -31,7 +31,11 @@ pub async fn add_batch(cache: &Cache, guild_id: u64, batch: &[(u64, Mention)]) -
         let key = mentions_key(guild_id, *user_id);
         pipe.lpush(&key, serde_json::to_string(mention)?)
             .ignore()
-            .ltrim(&key, 0, MAX_MENTIONS as isize - 1)
+            .ltrim(
+                &key,
+                0,
+                isize::try_from(MAX_MENTIONS).unwrap_or(isize::MAX) - 1,
+            )
             .ignore()
             .expire(&key, MENTIONS_TTL_SECS)
             .ignore();

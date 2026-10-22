@@ -85,6 +85,7 @@ async fn invalidate_guild(cache: &Cache, guild_id: u64) {
     }
 }
 
+/// Mark a member AFK with `reason`, replacing any existing entry.
 pub async fn set(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -111,18 +112,20 @@ pub async fn set(
     Ok(())
 }
 
+/// The member's AFK entry, or `None` when they are not AFK.
 pub async fn get(
     db: &DatabaseConnection,
     guild_id: u64,
     user_id: u64,
 ) -> Result<Option<afk_entry::Model>> {
     Ok(afk_entry::Entity::find()
-        .filter(afk_entry::Column::GuildId.eq(guild_id as i64))
-        .filter(afk_entry::Column::UserId.eq(user_id as i64))
+        .filter(afk_entry::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(afk_entry::Column::UserId.eq(lumi_db::ids::UserId::from(user_id)))
         .one(db)
         .await?)
 }
 
+/// Remove a member's AFK entry, reporting whether one existed.
 pub async fn clear(
     cache: &Cache,
     db: &DatabaseConnection,
@@ -131,17 +134,18 @@ pub async fn clear(
 ) -> Result<bool> {
     invalidate_guild(cache, guild_id).await;
     let result = afk_entry::Entity::delete_many()
-        .filter(afk_entry::Column::GuildId.eq(guild_id as i64))
-        .filter(afk_entry::Column::UserId.eq(user_id as i64))
+        .filter(afk_entry::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
+        .filter(afk_entry::Column::UserId.eq(lumi_db::ids::UserId::from(user_id)))
         .exec(db)
         .await?;
     invalidate_guild(cache, guild_id).await;
     Ok(result.rows_affected > 0)
 }
 
+/// Every AFK entry in a guild, oldest first.
 pub async fn list(db: &DatabaseConnection, guild_id: u64) -> Result<Vec<afk_entry::Model>> {
     Ok(afk_entry::Entity::find()
-        .filter(afk_entry::Column::GuildId.eq(guild_id as i64))
+        .filter(afk_entry::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .order_by_asc(afk_entry::Column::Since)
         .all(db)
         .await?)
@@ -150,7 +154,7 @@ pub async fn list(db: &DatabaseConnection, guild_id: u64) -> Result<Vec<afk_entr
 /// Counted in the database instead of loading every row.
 pub async fn count(db: &DatabaseConnection, guild_id: u64) -> Result<u64> {
     Ok(afk_entry::Entity::find()
-        .filter(afk_entry::Column::GuildId.eq(guild_id as i64))
+        .filter(afk_entry::Column::GuildId.eq(lumi_db::ids::GuildId::from(guild_id)))
         .count(db)
         .await?)
 }

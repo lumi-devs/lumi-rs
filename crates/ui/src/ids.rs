@@ -4,12 +4,19 @@
 //! malformed id yields `None` or a default page, never a panic.
 
 /// Build `prefix:part:part…` (or just `prefix` when there are no parts).
-#[must_use]
 pub fn build(prefix: &str, parts: &[&str]) -> String {
     if parts.is_empty() {
         prefix.to_string()
     } else {
-        format!("{prefix}:{}", parts.join(":"))
+        let mut out = String::with_capacity(
+            prefix.len() + parts.iter().map(|p| p.len() + 1).sum::<usize>(),
+        );
+        out.push_str(prefix);
+        for part in parts {
+            out.push(':');
+            out.push_str(part);
+        }
+        out
     }
 }
 
@@ -21,7 +28,6 @@ pub struct CustomId {
 
 impl CustomId {
     /// Parse `input` against `prefix`; `None` when the prefix does not match.
-    #[must_use]
     pub fn parse(input: &str, prefix: &str) -> Option<Self> {
         let mut segments = input.split(':');
         if segments.next()? != prefix {
@@ -33,29 +39,26 @@ impl CustomId {
     }
 
     /// The first segment, e.g. the action verb.
-    #[must_use]
     pub fn head(&self) -> Option<&str> {
         self.get(0)
     }
 
     /// Segment at `index`, or `None` when out of range.
-    #[must_use]
     pub fn get(&self, index: usize) -> Option<&str> {
         self.parts.get(index).map(String::as_str)
     }
 
-    #[must_use]
+    /// Return the custom id segments.
     pub fn segments(&self) -> &[String] {
         &self.parts
     }
 
-    #[must_use]
+    /// Return the last segment, or None if empty.
     pub fn last(&self) -> Option<&str> {
         self.parts.last().map(String::as_str)
     }
 
     /// Segments from `from` onward, joined by `:` (empty past the end).
-    #[must_use]
     pub fn tail(&self, from: usize) -> String {
         self.parts
             .get(from..)
@@ -63,22 +66,21 @@ impl CustomId {
     }
 
     /// `index` parsed as a page number, defaulting to `0`.
-    #[must_use]
     pub fn page(&self, index: usize) -> usize {
         self.parse_usize(index).unwrap_or(0)
     }
 
-    #[must_use]
+    /// Parse a segment at index as usize.
     pub fn parse_usize(&self, index: usize) -> Option<usize> {
         self.get(index)?.parse().ok()
     }
 
-    #[must_use]
+    /// Parse a segment at index as u64.
     pub fn parse_u64(&self, index: usize) -> Option<u64> {
         self.get(index)?.parse().ok()
     }
 
-    #[must_use]
+    /// Parse a segment at index as i32.
     pub fn parse_i32(&self, index: usize) -> Option<i32> {
         self.get(index)?.parse().ok()
     }

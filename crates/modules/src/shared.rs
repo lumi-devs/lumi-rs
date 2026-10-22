@@ -31,6 +31,7 @@ pub fn config_field(
     }
 }
 
+#[must_use]
 pub fn string_field(
     key: &str,
     label: &str,
@@ -48,6 +49,7 @@ pub fn string_field(
     )
 }
 
+#[must_use]
 pub fn int_field(
     key: &str,
     label: &str,
@@ -65,6 +67,7 @@ pub fn int_field(
     )
 }
 
+#[must_use]
 pub fn bool_field(
     key: &str,
     label: &str,
@@ -82,6 +85,7 @@ pub fn bool_field(
     )
 }
 
+#[must_use]
 pub fn channel_field(
     key: &str,
     label: &str,
@@ -98,6 +102,7 @@ pub fn channel_field(
     )
 }
 
+#[must_use]
 pub fn string_array_field(
     key: &str,
     label: &str,
@@ -110,24 +115,6 @@ pub fn string_array_field(
         description,
         ConfigFieldKind::StringArray,
         json!([]),
-        group,
-    )
-}
-
-pub fn enum_field(
-    key: &str,
-    label: &str,
-    description: &str,
-    options: &[&str],
-    default: &str,
-    group: Option<&str>,
-) -> ConfigField {
-    config_field(
-        key,
-        label,
-        description,
-        ConfigFieldKind::Enum(options.iter().map(|o| (*o).to_string()).collect()),
-        json!(default),
         group,
     )
 }
@@ -149,17 +136,20 @@ pub async fn claim_cooldown(cache: &Cache, key: &str, ttl_ms: u64) -> Result<Opt
 }
 
 /// Stable Redis key for a per-user cooldown in a module.
+#[must_use]
 pub fn cooldown_key(scope: &str, guild_id: u64, user_id: u64) -> String {
     format!("lumi:{scope}:{guild_id}:{user_id}")
 }
 
 /// Milliseconds rounded up to whole seconds, clamped at zero.
+#[must_use]
 pub fn secs_ceil(ms: i64) -> i64 {
     ms.max(0).saturating_add(999) / 1000
 }
 
 /// Human-readable duration, clamped at zero, at most the two largest units
 /// (`90_000` -> `1d 1h`, `3_725` -> `1h 2m`, `65` -> `1m 5s`, `5` -> `5s`).
+#[must_use]
 pub fn format_seconds(seconds: i64) -> String {
     let total = seconds.max(0);
     let (days, rest) = (total / 86_400, total % 86_400);
@@ -177,11 +167,12 @@ pub fn format_seconds(seconds: i64) -> String {
 }
 
 /// `1,234,567` / `-42`.
+#[must_use]
 pub fn group_digits(n: i64) -> String {
     let digits = n.unsigned_abs().to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -189,11 +180,13 @@ pub fn group_digits(n: i64) -> String {
     if n < 0 { format!("-{out}") } else { out }
 }
 
+#[must_use]
 pub fn truncate_chars(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
 }
 
 /// Cut to at most `max` characters, appending `…` when the text was shortened.
+#[must_use]
 pub fn ellipsize(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
@@ -204,11 +197,15 @@ pub fn ellipsize(text: &str, max: usize) -> String {
 }
 
 /// Clamped page math for a fixed page size: `(page, total_pages, offset)`.
+#[must_use]
 pub fn page_bounds(total_items: u64, per_page: u64, requested: usize) -> (usize, usize, u64) {
     let per_page = per_page.max(1);
-    let total_pages = total_items.div_ceil(per_page).max(1) as usize;
+    let total_pages = usize::try_from(total_items.div_ceil(per_page).max(1)).unwrap_or(usize::MAX);
     let page = requested.min(total_pages - 1);
-    (page, total_pages, page as u64 * per_page)
+    let offset = u64::try_from(page)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(per_page);
+    (page, total_pages, offset)
 }
 
 #[cfg(test)]

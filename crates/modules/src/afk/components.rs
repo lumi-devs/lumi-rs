@@ -20,6 +20,7 @@ pub const PREFIX: &str = "afk";
 
 const PAGE_SIZE: usize = 5;
 
+/// Handle the paged "who mentioned you" panel.
 pub async fn handle_component(
     ctx: &serenity::Context,
     services: &Services,

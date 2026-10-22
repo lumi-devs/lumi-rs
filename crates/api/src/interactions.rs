@@ -15,11 +15,7 @@ struct InteractionState {
     public_key: Option<Vec<u8>>,
 }
 
-async fn verify_signature(
-    headers: &HeaderMap,
-    body: &[u8],
-    public_key: &[u8],
-) -> Result<(), StatusCode> {
+fn verify_signature(headers: &HeaderMap, body: &[u8], public_key: &[u8]) -> Result<(), StatusCode> {
     let signature_header = headers
         .get("X-Signature-Ed25519")
         .and_then(|h| h.to_str().ok())
@@ -40,15 +36,15 @@ async fn verify_signature(
         .map_err(|_| StatusCode::UNAUTHORIZED)
 }
 
-async fn handle_interaction_inner(
+fn handle_interaction_inner(
     State(state): State<InteractionState>,
-    headers: HeaderMap,
-    body: Bytes,
+    headers: &HeaderMap,
+    body: &Bytes,
 ) -> Result<impl IntoResponse, StatusCode> {
     let public_key = state.public_key.as_ref().ok_or(StatusCode::UNAUTHORIZED)?;
-    verify_signature(&headers, &body, public_key).await?;
+    verify_signature(headers, body, public_key)?;
 
-    let payload: Value = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let payload: Value = serde_json::from_slice(body).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let interaction_type = payload
         .get("type")
@@ -56,23 +52,16 @@ async fn handle_interaction_inner(
         .ok_or(StatusCode::BAD_REQUEST)?;
 
     match interaction_type {
-        1 => {
-            // PING
-            Ok((StatusCode::OK, Json(json!({ "type": 1 }))))
-        }
-        2 | 3 => {
-            // APPLICATION_COMMAND or MESSAGE_COMPONENT
-            // Return deferred ephemeral response
-            Ok((
-                StatusCode::OK,
-                Json(json!({
-                    "type": 5,
-                    "data": {
-                        "flags": 64
-                    }
-                })),
-            ))
-        }
+        1 => Ok((StatusCode::OK, Json(json!({ "type": 1 })))),
+        2 | 3 => Ok((
+            StatusCode::OK,
+            Json(json!({
+                "type": 5,
+                "data": {
+                    "flags": 64
+                }
+            })),
+        )),
         _ => Err(StatusCode::BAD_REQUEST),
     }
 }
@@ -82,9 +71,7 @@ async fn handle_interaction(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    handle_interaction_inner(State(state), headers, body)
-        .await
-        .into_response()
+    handle_interaction_inner(State(state), &headers, &body).into_response()
 }
 
 pub fn router(config: &Config) -> Router {
@@ -113,6 +100,7 @@ mod tests {
             role: lumi_kernel::Role::Api,
             token: "test".into(),
             database_url: "postgres://localhost".into(),
+            database_read_url: None,
             redis_url: "redis://localhost".into(),
             rpc_token: None,
             rpc_port: 8080,
@@ -121,11 +109,8 @@ mod tests {
             shard_count: None,
             shard_range: None,
             intents_guild_members: false,
-            discord_public_key: if with_key {
-                Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
-            } else {
-                None
-            },
+            discord_public_key: with_key
+                .then(|| "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
             shard_coordinator: false,
             max_shards_per_node: 16,
         }

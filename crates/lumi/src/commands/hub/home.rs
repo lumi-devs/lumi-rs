@@ -4,6 +4,13 @@ use lumi_ui::{Card, CardKind, CardOptions, CardReply};
 
 use super::{GuildCtx, HubView, tab_row};
 
+const HINTS: &str = "\
+⚙️ **Modules** - enable, disable, and configure every feature
+🛡️ **Permissions** - permit grants and per-command overrides
+🏰 **Settings** - server command prefix
+📦 **Addons** - extend Lumi with add-on modules";
+
+/// Render the hub landing card.
 pub async fn card(services: &Services, guild: &GuildCtx) -> Result<CardReply, Error> {
     let prefix = lumi_kernel::prefix::get(&services.cache, &services.db, guild.id)
         .await
@@ -14,28 +21,22 @@ pub async fn card(services: &Services, guild: &GuildCtx) -> Result<CardReply, Er
     let total = rows.len();
     let enabled = rows.iter().filter(|r| r.enabled).count();
 
-    let hints = [
-        "⚙️ **Modules** - enable, disable, and configure every feature",
-        "🛡️ **Permissions** - permit grants and per-command overrides",
-        "🏰 **Settings** - server command prefix",
-        "📦 **Addons** - extend Lumi with add-on modules",
-    ]
-    .join("\n");
-
     let body = vec![
         "Manage everything for this server from one place - no scattered commands to remember."
             .to_string(),
         format!("⚙️ **{enabled}** of **{total}** modules enabled"),
         format!("🏰 Prefix `{prefix}`"),
-        hints,
+        HINTS.to_string(),
     ];
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Hub".to_string()];
-    opts.thumbnail_url = guild.icon.clone();
-    opts.footer = Some("Select a tab below to continue.".to_string());
-    opts.separator_above_action_rows = true;
-    opts.action_rows = vec![tab_row(HubView::Home)];
+    let opts = CardOptions {
+        breadcrumbs: vec!["Hub".to_string()],
+        thumbnail_url: guild.icon.clone(),
+        footer: Some("Select a tab below to continue.".to_string()),
+        separator_above_action_rows: true,
+        action_rows: vec![tab_row(HubView::Home)],
+        ..Default::default()
+    };
 
     Ok(Card::lines("🤖 Lumi Control Panel", body)
         .kind(CardKind::Primary)

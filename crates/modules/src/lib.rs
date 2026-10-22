@@ -1,16 +1,27 @@
+//! Feature modules for Lumi.
+
+/// AFK module.
 pub mod afk;
-pub mod config;
+pub(crate) mod config;
+/// Economy module.
 pub mod economy;
+/// Content filtering module.
 pub mod filter;
+/// Leveling and experience module.
 pub mod leveling;
+/// Guild audit and event logging module.
 pub mod logging;
+/// Moderation action module.
 pub mod moderation;
-pub mod patterns;
-pub mod regex;
+pub(crate) mod patterns;
+pub(crate) mod regex;
+/// Security and anti-nuke module.
 pub mod security;
-pub mod shared;
+pub(crate) mod shared;
+/// Temporary voice channel module.
 pub mod tempvc;
-pub mod text;
+pub(crate) mod text;
+/// General utility module.
 pub mod utility;
 
 pub use afk::AfkModule;

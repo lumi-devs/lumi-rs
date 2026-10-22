@@ -26,6 +26,10 @@ const RENEW_SCRIPT: &str = "if redis.call('get', KEYS[1]) == ARGV[1] \
                              then return redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[2]) \
                              else return false end";
 
+fn shard_lease_key(shard_id: u16) -> String {
+    format!("lumi:shard_lease:{shard_id}")
+}
+
 /// Renew `shard_id` if (and only if) `node_id` still owns it.
 async fn renew_one(
     conn: &mut redis::aio::ConnectionManager,
@@ -33,7 +37,7 @@ async fn renew_one(
     node_id: &str,
 ) -> redis::RedisResult<Option<String>> {
     let script = redis::Script::new(RENEW_SCRIPT);
-    let key = format!("lumi:shard_lease:{shard_id}");
+    let key = shard_lease_key(shard_id);
     script
         .key(key)
         .arg(node_id)
@@ -48,7 +52,7 @@ async fn release_one(
     node_id: &str,
 ) -> Result<i64> {
     let script = redis::Script::new(RELEASE_SCRIPT);
-    let key = format!("lumi:shard_lease:{shard_id}");
+    let key = shard_lease_key(shard_id);
     let released = script.key(key).arg(node_id).invoke_async(conn).await?;
     metrics::gauge!("lumi.shard.lease.owned", "shard" => shard_id.to_string()).set(0.0);
     Ok(released)
@@ -73,7 +77,7 @@ pub async fn lease_shard_range(
         let mut claimed = 0;
 
         for shard_id in start..block_end {
-            let key = format!("lumi:shard_lease:{shard_id}");
+            let key = shard_lease_key(shard_id);
             let res: Option<String> = redis::cmd("SET")
                 .arg(&key)
                 .arg(node_id)
@@ -136,8 +140,11 @@ pub async fn release_shard_range(cache: &Cache, range: ShardRange, node_id: &str
 /// Outcome of one heartbeat renewal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeaseRefresh {
+    /// Lease was successfully renewed.
     Renewed,
+    /// Lease was lost or expired.
     Lost,
+    /// Transient error during lease renewal.
     Transient,
 }
 
@@ -168,11 +175,12 @@ pub struct LeaseHeartbeat {
 }
 
 impl LeaseHeartbeat {
-    #[must_use]
+    /// Watch receiver that indicates if the lease was lost.
     pub fn lost(&self) -> watch::Receiver<bool> {
         self.lost.clone()
     }
 
+    /// Abort the heartbeat task.
     pub fn abort(&self) {
         self.handle.abort();
     }
@@ -288,8 +296,8 @@ mod tests {
     #[test]
     fn fencing_follows_ownership_and_ttl() {
         let now = Instant::now();
-        let fresh = now - Duration::from_secs(1);
-        let stale = now - Duration::from_secs(31);
+        let fresh = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
+        let stale = now.checked_sub(Duration::from_secs(31)).unwrap_or(now);
         let ttl = Duration::from_secs(30);
 
         assert!(!should_fence(LeaseRefresh::Renewed, stale, now, ttl));

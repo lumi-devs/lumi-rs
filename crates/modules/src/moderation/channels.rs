@@ -10,21 +10,25 @@ use serenity::all::{
 /// How many text channels were changed or rejected.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChannelChanges {
+    /// Number of modified channels.
     pub modified: u32,
+    /// Number of failed channel changes.
     pub failed: u32,
 }
 
 impl ChannelChanges {
+    /// True if all targeted channel modifications failed.
     #[must_use]
-    pub fn all_failed(self) -> bool {
+    pub const fn all_failed(self) -> bool {
         self.modified == 0 && self.failed > 0
     }
 }
 
-/// Merge a deny mask into the `@everyone` overwrite while preserving every
-/// unrelated bit. Locking must not wipe a channel's existing view/reaction
-/// restrictions, and unlocking must not publish a private channel. `None`
-/// means the overwrite should be deleted.
+/// Merge a deny mask into the `@everyone` overwrite while preserving unrelated bits.
+///
+/// Locking must not wipe a channel's existing view/reaction restrictions,
+/// and unlocking must not publish a private channel. `None` means the overwrite
+/// should be deleted.
 #[must_use]
 pub fn merge_everyone_overwrite(
     existing: Option<&PermissionOverwrite>,
@@ -49,7 +53,7 @@ pub fn merge_everyone_overwrite(
     })
 }
 
-/// Apply or remove the `@everyone` SendMessages denial for one channel.
+/// Apply or remove the `@everyone` `SendMessages` denial for one channel.
 pub async fn set_channel_locked(
     http: &Http,
     channel_id: ChannelId,
@@ -92,7 +96,7 @@ pub async fn set_guild_locked(
 
     let everyone = guild_id.everyone_role();
     let mut changes = ChannelChanges::default();
-    for channel in channels.iter() {
+    for channel in &channels {
         if !matches!(channel.base.kind, ChannelType::Text | ChannelType::News) {
             continue;
         }
@@ -129,9 +133,11 @@ mod tests {
         let everyone = RoleId::new(1);
         let existing = overwrite(Permissions::empty(), Permissions::VIEW_CHANNEL);
 
-        let locked =
+        let Some(locked) =
             merge_everyone_overwrite(Some(&existing), everyone, Permissions::SEND_MESSAGES, true)
-                .expect("overwrite stays");
+        else {
+            panic!("overwrite stays");
+        };
         assert_eq!(
             locked.deny,
             Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES
@@ -146,9 +152,11 @@ mod tests {
             Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES,
         );
 
-        let unlocked =
+        let Some(unlocked) =
             merge_everyone_overwrite(Some(&existing), everyone, Permissions::SEND_MESSAGES, false)
-                .expect("view restriction must survive");
+        else {
+            panic!("view restriction must survive");
+        };
         assert_eq!(unlocked.deny, Permissions::VIEW_CHANNEL);
         assert!(unlocked.allow.is_empty());
     }
@@ -156,8 +164,11 @@ mod tests {
     #[test]
     fn locking_an_untouched_channel_is_fully_reverted() {
         let everyone = RoleId::new(1);
-        let locked = merge_everyone_overwrite(None, everyone, Permissions::SEND_MESSAGES, true)
-            .expect("lock creates an overwrite");
+        let Some(locked) =
+            merge_everyone_overwrite(None, everyone, Permissions::SEND_MESSAGES, true)
+        else {
+            panic!("lock creates an overwrite");
+        };
         assert_eq!(locked.deny, Permissions::SEND_MESSAGES);
 
         assert!(
@@ -171,15 +182,19 @@ mod tests {
     fn explicit_allow_survives_lock_and_unlock() {
         let everyone = RoleId::new(1);
         let existing = overwrite(Permissions::SEND_MESSAGES, Permissions::empty());
-        let locked =
+        let Some(locked) =
             merge_everyone_overwrite(Some(&existing), everyone, Permissions::SEND_MESSAGES, true)
-                .expect("lock keeps the allow");
+        else {
+            panic!("lock keeps the allow");
+        };
         assert_eq!(locked.allow, Permissions::SEND_MESSAGES);
         assert_eq!(locked.deny, Permissions::SEND_MESSAGES);
 
-        let unlocked =
+        let Some(unlocked) =
             merge_everyone_overwrite(Some(&locked), everyone, Permissions::SEND_MESSAGES, false)
-                .expect("allow remains");
+        else {
+            panic!("allow remains");
+        };
         assert_eq!(unlocked.allow, Permissions::SEND_MESSAGES);
         assert!(unlocked.deny.is_empty());
     }

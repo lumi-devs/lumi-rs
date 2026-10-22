@@ -43,7 +43,7 @@ pub async fn list_card(
                 lock,
                 kind_str(a.kind),
                 target_type,
-                mention(a.target_type, &a.target_id.to_string()),
+                mention(a.target_type, a.target_id),
             );
             let payload = format!("{}|{}|{}", a.permit_id, target_type, a.target_id);
             let revoke = CreateButton::new(cid(&["permdel", payload.as_str()]))
@@ -91,12 +91,14 @@ pub async fn list_card(
         "-# ✅ custom · enforced. Enforced permits survive anti-nuke quarantine.".to_string()
     };
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Hub".to_string(), "Permissions".to_string()];
-    opts.separator_above_action_rows = true;
-    opts.sections = sections;
-    opts.footer = Some(footer);
-    opts.action_rows = action_rows;
+    let opts = CardOptions {
+        breadcrumbs: vec!["Hub".to_string(), "Permissions".to_string()],
+        separator_above_action_rows: true,
+        sections,
+        footer: Some(footer),
+        action_rows,
+        ..Default::default()
+    };
 
     Ok(Card::lines("🛡️ Permits", vec![body])
         .kind(CardKind::Primary)
@@ -160,14 +162,16 @@ async fn order_card(
         lines.join("\n")
     };
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec![
-        "Hub".to_string(),
-        "Permissions".to_string(),
-        "Order".to_string(),
-    ];
-    opts.separator_above_action_rows = true;
-    opts.action_rows = action_rows;
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Permissions".to_string(),
+            "Order".to_string(),
+        ],
+        separator_above_action_rows: true,
+        action_rows,
+        ..Default::default()
+    };
 
     Ok(Card::lines("🛡️ Permit Order", vec![body])
         .kind(CardKind::Primary)
@@ -220,14 +224,16 @@ async fn picker_card(
         )
     };
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec![
-        "Hub".to_string(),
-        "Permissions".to_string(),
-        format!("Pick {kind_label} Permit"),
-    ];
-    opts.separator_above_action_rows = true;
-    opts.action_rows = action_rows;
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Permissions".to_string(),
+            format!("Pick {kind_label} Permit"),
+        ],
+        separator_above_action_rows: true,
+        action_rows,
+        ..Default::default()
+    };
 
     Ok(Card::lines("🛡️ Pick a Permit", vec![body])
         .kind(CardKind::Primary)
@@ -251,15 +257,17 @@ fn assign_target_card(permit_id: i32, permit_name: &str, kind: PermitKind) -> Ca
         )
     };
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec![
-        "Hub".to_string(),
-        "Permissions".to_string(),
-        permit_name.to_string(),
-        "Pick Target".to_string(),
-    ];
-    opts.separator_above_action_rows = true;
-    opts.action_rows = vec![select, back_button(cid(&["tab", "permissions"]))];
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Permissions".to_string(),
+            permit_name.to_string(),
+            "Pick Target".to_string(),
+        ],
+        separator_above_action_rows: true,
+        action_rows: vec![select, back_button(cid(&["tab", "permissions"]))],
+        ..Default::default()
+    };
 
     Card::lines(format!("🛡️ {permit_name}"), vec![body.to_string()])
         .kind(CardKind::Primary)
@@ -313,14 +321,16 @@ async fn explain_picker_card(
         },
     );
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec![
-        "Hub".to_string(),
-        "Permissions".to_string(),
-        "Explain".to_string(),
-    ];
-    opts.separator_above_action_rows = true;
-    opts.action_rows = action_rows;
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Permissions".to_string(),
+            "Explain".to_string(),
+        ],
+        separator_above_action_rows: true,
+        action_rows,
+        ..Default::default()
+    };
 
     Ok(Card::lines("🔍 Explain Access", vec![body])
         .kind(CardKind::Primary)
@@ -373,14 +383,16 @@ async fn explain_card(
         lines
     };
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec![
-        "Hub".to_string(),
-        "Permissions".to_string(),
-        "Explain".to_string(),
-    ];
-    opts.separator_above_action_rows = true;
-    opts.action_rows = vec![back_button(cid(&["permexplain"]))];
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Permissions".to_string(),
+            "Explain".to_string(),
+        ],
+        separator_above_action_rows: true,
+        action_rows: vec![back_button(cid(&["permexplain"]))],
+        ..Default::default()
+    };
 
     Ok(Card::lines(
         format!(
@@ -403,6 +415,7 @@ async fn node_names(services: &Services, guild: &GuildCtx) -> Result<Vec<String>
     Ok(names)
 }
 
+/// Route permission interactions.
 pub async fn dispatch(
     services: &Services,
     guild: &GuildCtx,
@@ -411,20 +424,40 @@ pub async fn dispatch(
     user_id: u64,
 ) -> Result<HubOutcome, Error> {
     match id.head().unwrap_or_default() {
+        "permdel" | "permpage" | "permorder" | "permorderpage" | "permmove" => {
+            dispatch_list(services, guild, id, user_id).await
+        }
+        "permexplain" | "permexplainnodepage" | "permexplainuser" | "permexplainnode" => {
+            dispatch_explain(services, guild, id, data).await
+        }
+        "permit" => dispatch_permit(services, guild, id, data, user_id).await,
+        _ => Ok(HubOutcome::Done),
+    }
+}
+
+async fn dispatch_list(
+    services: &Services,
+    guild: &GuildCtx,
+    id: &HubId,
+    user_id: u64,
+) -> Result<HubOutcome, Error> {
+    match id.head().unwrap_or_default() {
         "permdel" => {
             if let Some((permit_id, target_type, target_str_id)) = id.get(1).and_then(parse_target)
+                && let Ok(target_snowflake) = target_str_id.parse::<lumi_db::ids::SnowflakeId>()
             {
-                if let Ok(target_snowflake) = target_str_id.parse::<lumi_db::ids::SnowflakeId>() {
-                    lumi_db::unassign_permit(
-                        &services.db,
-                        guild.id,
-                        permit_id,
-                        target_type,
-                        target_snowflake,
-                    )
+                lumi_db::unassign_permit(
+                    &services.db,
+                    guild.id,
+                    permit_id,
+                    target_type,
+                    target_snowflake,
+                )
+                .await?;
+                services
+                    .permits
+                    .reload_guild(&services.db, guild.id)
                     .await?;
-                    services.permits.reload_guild(&services.db, guild.id).await?;
-                }
             }
             Ok(HubOutcome::Update(
                 list_card(services, guild, 0, user_id).await?,
@@ -439,11 +472,14 @@ pub async fn dispatch(
         "permmove" => {
             let moved = id.get(1).and_then(|payload| {
                 let (permit_id, direction) = payload.split_once('|')?;
-                Some((permit_id.parse::<i32>().ok()?, direction.to_string()))
+                Some((permit_id.parse::<i32>().ok()?, direction))
             });
             let page = if let Some((permit_id, direction)) = moved {
-                lumi_db::move_permit(&services.db, guild.id, permit_id, &direction).await?;
-                services.permits.reload_guild(&services.db, guild.id).await?;
+                lumi_db::move_permit(&services.db, guild.id, permit_id, direction).await?;
+                services
+                    .permits
+                    .reload_guild(&services.db, guild.id)
+                    .await?;
                 let permits = lumi_db::list_permits(&services.db, guild.id).await?;
                 permits
                     .iter()
@@ -454,6 +490,17 @@ pub async fn dispatch(
             };
             Ok(HubOutcome::Update(order_card(services, guild, page).await?))
         }
+        _ => Ok(HubOutcome::Done),
+    }
+}
+
+async fn dispatch_explain(
+    services: &Services,
+    guild: &GuildCtx,
+    id: &HubId,
+    data: &serenity::ComponentInteractionData,
+) -> Result<HubOutcome, Error> {
+    match id.head().unwrap_or_default() {
         "permexplain" => Ok(HubOutcome::Update(
             explain_picker_card(services, guild, None, 0).await?,
         )),
@@ -486,58 +533,69 @@ pub async fn dispatch(
                 )),
             }
         }
-        "permit" => match id.get(1) {
-            Some("grant") => {
-                let kind = parse_kind(&id.tail(2));
-                Ok(HubOutcome::Update(
-                    picker_card(services, guild, kind).await?,
-                ))
-            }
-            Some("pick") => {
-                let kind = parse_kind(&id.tail(2));
-                let permit = match first_value(data).and_then(|v| v.parse::<i32>().ok()) {
-                    Some(permit_id) => {
-                        lumi_db::get_permit(&services.db, guild.id, permit_id).await?
-                    }
-                    None => None,
-                };
-                match permit {
-                    Some(permit) => Ok(HubOutcome::Update(assign_target_card(
-                        permit.id,
-                        &permit.name,
-                        kind,
-                    ))),
-                    None => Ok(HubOutcome::Update(
-                        list_card(services, guild, 0, user_id).await?,
-                    )),
-                }
-            }
-            Some("assign") => {
-                let target_type = match &data.kind {
-                    ComponentInteractionDataKind::RoleSelect { .. } => PermitTargetType::Role,
-                    _ => PermitTargetType::User,
-                };
-                if let (Some(permit_id), Some(target_val)) =
-                    (id.tail(2).parse::<i32>().ok(), first_value(data))
-                {
-                    if let Ok(target_snowflake) = target_val.parse::<lumi_db::ids::SnowflakeId>() {
-                        lumi_db::assign_permit(
-                            &services.db,
-                            guild.id,
-                            permit_id,
-                            target_type,
-                            target_snowflake,
-                        )
-                        .await?;
-                        services.permits.reload_guild(&services.db, guild.id).await?;
-                    }
-                }
-                Ok(HubOutcome::Update(
+        _ => Ok(HubOutcome::Done),
+    }
+}
+
+async fn dispatch_permit(
+    services: &Services,
+    guild: &GuildCtx,
+    id: &HubId,
+    data: &serenity::ComponentInteractionData,
+    user_id: u64,
+) -> Result<HubOutcome, Error> {
+    match id.get(1) {
+        Some("grant") => {
+            let kind = parse_kind(&id.tail(2));
+            Ok(HubOutcome::Update(
+                picker_card(services, guild, kind).await?,
+            ))
+        }
+        Some("pick") => {
+            let kind = parse_kind(&id.tail(2));
+            let permit = match first_value(data).and_then(|v| v.parse::<i32>().ok()) {
+                Some(permit_id) => lumi_db::get_permit(&services.db, guild.id, permit_id).await?,
+                None => None,
+            };
+            match permit {
+                Some(permit) => Ok(HubOutcome::Update(assign_target_card(
+                    permit.id,
+                    &permit.name,
+                    kind,
+                ))),
+                None => Ok(HubOutcome::Update(
                     list_card(services, guild, 0, user_id).await?,
-                ))
+                )),
             }
-            _ => Ok(HubOutcome::Done),
-        },
+        }
+        Some("assign") => {
+            let target_type =
+                if matches!(&data.kind, ComponentInteractionDataKind::RoleSelect { .. }) {
+                    PermitTargetType::Role
+                } else {
+                    PermitTargetType::User
+                };
+            if let (Some(permit_id), Some(target_val)) =
+                (id.tail(2).parse::<i32>().ok(), first_value(data))
+                && let Ok(target_snowflake) = target_val.parse::<lumi_db::ids::SnowflakeId>()
+            {
+                lumi_db::assign_permit(
+                    &services.db,
+                    guild.id,
+                    permit_id,
+                    target_type,
+                    target_snowflake,
+                )
+                .await?;
+                services
+                    .permits
+                    .reload_guild(&services.db, guild.id)
+                    .await?;
+            }
+            Ok(HubOutcome::Update(
+                list_card(services, guild, 0, user_id).await?,
+            ))
+        }
         _ => Ok(HubOutcome::Done),
     }
 }
@@ -576,7 +634,7 @@ const fn icon(kind: PermitKind) -> &'static str {
     }
 }
 
-fn mention(target_type: PermitTargetType, target_id: &str) -> String {
+fn mention(target_type: PermitTargetType, target_id: impl std::fmt::Display) -> String {
     match target_type {
         PermitTargetType::Role => format!("<@&{target_id}>"),
         PermitTargetType::Channel => format!("<#{target_id}>"),
@@ -585,7 +643,7 @@ fn mention(target_type: PermitTargetType, target_id: &str) -> String {
 }
 
 /// `permitId|targetType|targetId` from a `permdel` custom id.
-fn parse_target(payload: &str) -> Option<(i32, PermitTargetType, String)> {
+fn parse_target(payload: &str) -> Option<(i32, PermitTargetType, &str)> {
     let mut parts = payload.split('|');
     let permit_id = parts.next()?.parse().ok()?;
     let target_type = match parts.next()? {
@@ -594,7 +652,7 @@ fn parse_target(payload: &str) -> Option<(i32, PermitTargetType, String)> {
         "channel" => PermitTargetType::Channel,
         _ => return None,
     };
-    Some((permit_id, target_type, parts.next()?.to_string()))
+    Some((permit_id, target_type, parts.next()?))
 }
 
 fn parse_page(token: Option<&str>) -> usize {

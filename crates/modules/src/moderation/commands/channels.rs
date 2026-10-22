@@ -52,7 +52,7 @@ pub async fn lock(ctx: Context<'_>) -> Result<(), Error> {
     .await
 }
 
-/// Deny @everyone SendMessages in a channel.
+/// Deny @everyone `SendMessages` in a channel.
 #[poise::command(
     slash_command,
     prefix_command,
@@ -94,7 +94,7 @@ pub async fn lock_enable(
     .await
 }
 
-/// Restore @everyone SendMessages in a channel.
+/// Restore @everyone `SendMessages` in a channel.
 #[poise::command(
     slash_command,
     prefix_command,

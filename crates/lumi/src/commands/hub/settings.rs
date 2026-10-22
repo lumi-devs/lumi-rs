@@ -11,6 +11,7 @@ use lumi_ui::{Card, CardKind, CardOptions, CardReply};
 
 use super::{GuildCtx, HubOutcome, HubView, cid, tab_row};
 
+/// Render the server settings tab.
 pub async fn card(
     services: &Services,
     guild: &GuildCtx,
@@ -40,15 +41,17 @@ pub async fn card(
         .emoji('🔄')
         .style(serenity::ButtonStyle::Secondary);
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Hub".to_string(), "Settings".to_string()];
-    opts.thumbnail_url = guild.icon.clone();
-    opts.separator_above_action_rows = true;
-    opts.sections = vec![prefix_section];
-    opts.action_rows = vec![
-        action_row_of(vec![reset, update_all]),
-        tab_row(HubView::Settings),
-    ];
+    let opts = CardOptions {
+        breadcrumbs: vec!["Hub".to_string(), "Settings".to_string()],
+        thumbnail_url: guild.icon.clone(),
+        separator_above_action_rows: true,
+        sections: vec![prefix_section],
+        action_rows: vec![
+            action_row_of(vec![reset, update_all]),
+            tab_row(HubView::Settings),
+        ],
+        ..Default::default()
+    };
 
     Ok(Card::lines("🏰 Server Settings", vec![])
         .kind(CardKind::Primary)

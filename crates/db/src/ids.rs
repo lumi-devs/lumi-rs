@@ -13,21 +13,23 @@ macro_rules! snowflake {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, DeriveValueType)]
-        pub struct $name(pub i64);
+        pub struct $name(
+            /// Raw 64-bit representation of the snowflake.
+            pub i64,
+        );
 
         impl $name {
             /// Reinterpret a Discord snowflake `u64` as the stored `i64`.
-            #[must_use]
             pub const fn from_raw(raw: u64) -> Self {
                 Self(i64::from_ne_bytes(raw.to_ne_bytes()))
             }
 
-            #[must_use]
+            /// Extract the underlying u64 snowflake.
             pub const fn get(self) -> u64 {
                 u64::from_ne_bytes(self.0.to_ne_bytes())
             }
 
-            #[must_use]
+            /// Return the underlying stored i64 value.
             pub const fn as_i64(self) -> i64 {
                 self.0
             }
@@ -80,12 +82,18 @@ macro_rules! snowflake {
     };
 }
 
-snowflake!(GuildId);
+snowflake!(
+    /// A guild snowflake.
+    GuildId
+);
 snowflake!(
     /// A user snowflake. Also used for actors, moderators and message authors.
     UserId
 );
-snowflake!(ChannelId);
+snowflake!(
+    /// A channel snowflake.
+    ChannelId
+);
 snowflake!(
     /// A permit assignment target: a user, role or channel depending on
     /// `permit_assignments.target_type`.
@@ -120,7 +128,7 @@ mod tests {
         assert_eq!(GuildId::from_raw(raw).get(), raw);
         assert_eq!(UserId::from(raw).get(), raw);
         assert_eq!(GuildId::from_raw(0).as_i64(), 0);
-        assert!(matches!("12345".parse::<UserId>(), Ok(id) if id.get() == 12345));
+        assert!(matches!("12345".parse::<UserId>(), Ok(id) if id.get() == 12_345));
         assert_eq!(SnowflakeId::from(UserId::from_raw(42)).as_i64(), 42);
     }
 }

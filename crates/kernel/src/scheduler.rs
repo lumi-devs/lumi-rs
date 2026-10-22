@@ -25,9 +25,12 @@ const RETRY_MAX: Duration = Duration::from_secs(300);
 /// retryable failure while keeping the queue moving.
 pub const JOB_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Scheduled job definition.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
+    /// Job name.
     pub name: String,
+    /// Optional JSON payload.
     #[serde(default)]
     pub payload: Option<Value>,
     /// Re-enqueue interval for recurring jobs; `None` runs once.
@@ -39,14 +42,12 @@ pub struct Job {
 }
 
 /// Exponential backoff before the next one-shot attempt.
-#[must_use]
 pub fn retry_delay(attempt: u32) -> Duration {
     let shift = attempt.saturating_sub(1).min(6);
     RETRY_BASE.saturating_mul(1_u32 << shift).min(RETRY_MAX)
 }
 
 /// Whether a failed one-shot job should be re-enqueued.
-#[must_use]
 pub fn should_retry(err: &LumiError, attempt: u32) -> bool {
     err.is_retryable() && attempt + 1 < MAX_ATTEMPTS
 }
@@ -62,12 +63,14 @@ struct WorkerState {
     storage: Storage,
 }
 
+/// Redis-backed job queue and scheduler.
 #[derive(Clone, Debug)]
 pub struct Scheduler {
     storage: Storage,
 }
 
 impl Scheduler {
+    /// Connect the apalis Redis backend.
     pub async fn connect(redis_url: &str) -> Result<Self> {
         let conn = apalis_redis::connect(redis_url)
             .await
@@ -77,6 +80,7 @@ impl Scheduler {
         })
     }
 
+    /// Push a job onto the queue.
     pub async fn enqueue(&self, job: Job) -> Result<()> {
         let mut storage = self.storage.clone();
         storage.push(job).await.map_err(sink_error)
@@ -224,15 +228,12 @@ mod tests {
 
     #[tokio::test]
     async fn hung_job_times_out_and_is_retried() {
-        let result: crate::Result<()> = crate::retry::with_timeout(
-            "job",
-            std::time::Duration::from_millis(5),
-            async {
-                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        let result: crate::Result<()> =
+            crate::retry::with_timeout("job", Duration::from_millis(5), async {
+                tokio::time::sleep(Duration::from_secs(30)).await;
                 Ok(())
-            },
-        )
-        .await;
+            })
+            .await;
 
         let Err(err) = result else {
             panic!("expected the job to time out");

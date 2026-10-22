@@ -1,36 +1,38 @@
 //! Custom-id registry and shared interaction router.
-//!
-//! Every component/modal prefix the host understands is declared once in
-//! [`COMPONENT_ROUTES`]. Adding a new interactive surface means adding one route
-//! there and one match arm in [`handle_component`] or [`handle_modal`]; the
-//! gateway itself never inspects raw custom ids.
 
 use poise::serenity_prelude as serenity;
-use serenity::all::{
-    ComponentInteraction, CreateAllowedMentions, CreateInteractionResponse,
-    CreateInteractionResponseMessage, MessageFlags, MessageInteractionMetadata, ModalInteraction,
-    UserId,
-};
+use serenity::all::{ComponentInteraction, ModalInteraction};
 
 use lumi_kernel::Services;
-use lumi_kernel::bot::{Context, Error};
-use lumi_ui::{Card, CardKind, CardOptions, CardReply};
+use lumi_kernel::bot::Error;
 
+/// Hub interaction custom ID prefix.
 pub const HUB_PREFIX: &str = crate::commands::hub::PREFIX;
+/// `TempVC` interaction custom ID prefix.
 pub const TEMPVC_PREFIX: &str = "tempvc";
+/// Media interaction custom ID prefix.
 pub const MEDIA_PREFIX: &str = "media";
+/// Economy interaction custom ID prefix.
 pub const ECONOMY_PREFIX: &str = "econ";
+/// Ping interaction custom ID prefix.
 pub const PING_PREFIX: &str = "ping";
+/// AFK interaction custom ID prefix.
 pub const AFK_PREFIX: &str = lumi_modules::afk::PREFIX;
 
 /// Component surfaces routed by the gateway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentRoute {
+    /// Hub control panel.
     Hub,
+    /// Temporary voice channel controls.
     TempVc,
+    /// Media attachments.
     Media,
+    /// Economy interactions.
     Economy,
+    /// Ping dashboard interactions.
     Ping,
+    /// AFK status interactions.
     Afk,
 }
 
@@ -45,8 +47,7 @@ pub const COMPONENT_ROUTES: &[(&str, ComponentRoute)] = &[
 ];
 
 impl ComponentRoute {
-    /// Classify a raw custom id by its prefix. Splits on `:` instead of slicing
-    /// bytes, so arbitrary UTF-8 custom ids cannot panic.
+    /// Classify a custom id by prefix.
     #[must_use]
     pub fn from_custom_id(custom_id: &str) -> Option<Self> {
         let prefix = custom_id.split(':').next()?;
@@ -59,11 +60,14 @@ impl ComponentRoute {
 /// Modal surfaces routed by the gateway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalRoute {
+    /// Hub modal dialogs.
     Hub,
+    /// `TempVC` rename and setup modal dialogs.
     TempVc,
 }
 
 impl ModalRoute {
+    /// Classify a modal custom id by prefix.
     #[must_use]
     pub fn from_custom_id(custom_id: &str) -> Option<Self> {
         match custom_id.split(':').next()? {
@@ -79,7 +83,7 @@ impl ModalRoute {
     name = "interaction.component",
     skip(ctx, services, component),
     fields(
-        guild_id = ?component.guild_id.map(|id| id.get()),
+        guild_id = ?component.guild_id.map(poise::serenity_prelude::GuildId::get),
         channel_id = %component.channel_id,
         user_id = %component.user.id,
         custom_id = %component.data.custom_id,
@@ -118,7 +122,7 @@ pub async fn handle_component(
     name = "interaction.modal",
     skip(ctx, services, modal),
     fields(
-        guild_id = ?modal.guild_id.map(|id| id.get()),
+        guild_id = ?modal.guild_id.map(poise::serenity_prelude::GuildId::get),
         channel_id = %modal.channel_id,
         user_id = %modal.user.id,
         custom_id = %modal.data.custom_id,
@@ -134,124 +138,6 @@ pub async fn handle_modal(
         Some(ModalRoute::TempVc) => lumi_modules::tempvc::handle_modal(ctx, services, modal).await,
         None => Ok(()),
     }
-}
-
-/// The user who originally rendered a component panel.
-///
-/// Discord attaches this to interaction response messages, so panels can be
-/// owner-locked without trusting a user id embedded in the custom id (which is
-/// rewritten by some UI builders).
-#[must_use]
-pub fn panel_owner(component: &ComponentInteraction) -> Option<UserId> {
-    let metadata = component.message.interaction_metadata.as_deref()?;
-    match metadata {
-        MessageInteractionMetadata::Command(meta) => Some(meta.user.id),
-        MessageInteractionMetadata::Component(meta) => Some(meta.user.id),
-        MessageInteractionMetadata::ModalSubmit(meta) => Some(meta.user.id),
-        _ => None,
-    }
-}
-
-/// Whether `component.user` owns the panel. Falls back to the id encoded in the
-/// custom id when Discord did not attach interaction metadata.
-#[must_use]
-pub fn caller_is_owner(component: &ComponentInteraction, fallback_id: u64) -> bool {
-    panel_owner(component).map_or_else(
-        || fallback_id == 0 || fallback_id == component.user.id.get(),
-        |owner| owner == component.user.id,
-    )
-}
-
-/// Replace the panel with a freshly rendered card.
-pub async fn update_message(
-    http: &serenity::Http,
-    component: &ComponentInteraction,
-    reply: &CardReply,
-) -> Result<(), serenity::Error> {
-    component
-        .create_response(
-            http,
-            CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new()
-                    .components(reply.components.clone())
-                    .allowed_mentions(CreateAllowedMentions::new())
-                    .flags(MessageFlags::IS_COMPONENTS_V2),
-            ),
-        )
-        .await
-}
-
-/// Send an ephemeral (only-visible-to-caller) text response.
-pub async fn reply_ephemeral(
-    http: &serenity::Http,
-    component: &ComponentInteraction,
-    content: impl Into<String>,
-) -> Result<(), serenity::Error> {
-    let card = Card::warning("Notice", content.into()).ephemeral();
-    let reply = card.into_reply();
-    component
-        .create_response(
-            http,
-            CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new()
-                    .components(reply.components)
-                    .flags(MessageFlags::IS_COMPONENTS_V2 | MessageFlags::EPHEMERAL)
-                    .allowed_mentions(CreateAllowedMentions::new()),
-            ),
-        )
-        .await
-}
-
-/// Generic confirmation collector: prompts the command caller with a warning
-/// card and Confirm/Cancel buttons, awaiting their decision for up to 30s.
-pub async fn confirm(
-    ctx: Context<'_>,
-    title: &str,
-    body: &str,
-    confirm_label: Option<&str>,
-) -> Result<bool, Error> {
-    let confirm_id = "confirm:yes";
-    let cancel_id = "confirm:no";
-    let opts = CardOptions {
-        action_rows: vec![lumi_ui::panels::confirm_row(
-            confirm_id,
-            cancel_id,
-            confirm_label,
-            Some("Cancel"),
-        )],
-        ..Default::default()
-    };
-
-    let card = Card::lines(title, vec![body.to_string()])
-        .kind(CardKind::Warning)
-        .options(opts);
-
-    let reply = ctx.send(card.into_reply().reply()).await?;
-    let msg = reply.message().await?;
-
-    let interaction =
-        serenity::collector::ComponentInteractionCollector::new(ctx.serenity_context())
-            .message_id(msg.id)
-            .author_id(ctx.author().id)
-            .timeout(std::time::Duration::from_secs(30))
-            .await;
-
-    let Some(press) = interaction else {
-        let _ = reply
-            .edit(ctx, poise::CreateReply::default().components(Vec::new()))
-            .await;
-        return Ok(false);
-    };
-
-    let _ = press
-        .create_response(ctx.http(), CreateInteractionResponse::Acknowledge)
-        .await;
-
-    let _ = reply
-        .edit(ctx, poise::CreateReply::default().components(Vec::new()))
-        .await;
-
-    Ok(press.data.custom_id == confirm_id)
 }
 
 #[cfg(test)]
@@ -286,7 +172,6 @@ mod tests {
         );
         assert_eq!(ComponentRoute::from_custom_id("nope:1"), None);
         assert_eq!(ComponentRoute::from_custom_id(""), None);
-        // Multi-byte prefix must not hit a byte slice.
         assert_eq!(ComponentRoute::from_custom_id("h\u{e9}llo:1"), None);
     }
 

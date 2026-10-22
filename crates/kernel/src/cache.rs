@@ -2,6 +2,7 @@
 //! invalidation so every process drops matching local entries.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -17,15 +18,20 @@ use serde_json::Value;
 use crate::Result;
 use crate::retry::{retry_transient, with_timeout};
 
+/// Redis pub/sub channel for cross-process cache invalidation.
 pub const INVALIDATE_CHANNEL: &str = "lumi:invalidate";
 
+/// Default in-process cache capacity.
 pub const DEFAULT_LOCAL_CAPACITY: u64 = 20_000;
+/// Minimum in-process cache capacity.
 pub const MIN_LOCAL_CAPACITY: u64 = 1_000;
+/// Maximum in-process cache capacity.
 pub const MAX_LOCAL_CAPACITY: u64 = 500_000;
 
+/// Active in-process cache capacity constant.
 pub const LOCAL_CAPACITY: u64 = DEFAULT_LOCAL_CAPACITY;
 
-#[must_use]
+/// Active local cache capacity parsed from environment.
 pub fn local_capacity() -> u64 {
     std::env::var("CACHE_LOCAL_CAPACITY")
         .ok()
@@ -48,14 +54,14 @@ fn info_field<T: std::str::FromStr>(info: &str, name: &str) -> Option<T> {
 }
 
 /// Payload stored for keys written through [`Cache::set_json_ttl`].
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct TtlEntry {
     exp: i64,
     v: Value,
 }
 
 impl TtlEntry {
-    fn live(&self, now: i64) -> bool {
+    const fn live(&self, now: i64) -> bool {
         self.exp > now
     }
 }
@@ -63,11 +69,12 @@ impl TtlEntry {
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis() as i64)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+        })
 }
 
-/// Local-tier hit ratio is what tells a cache regression apart from a Redis
-/// problem, so count it where the lookup happens rather than only in `/ping`.
+/// Record local-tier cache hits and misses.
 fn record_local(result: &'static str) {
     metrics::counter!("lumi.cache.local", "result" => result).increment(1);
 }
@@ -84,23 +91,29 @@ pub struct SingleFlight {
 }
 
 impl SingleFlight {
+    /// Fetch `key` once, sharing the result with concurrent callers.
     pub async fn get_or_fetch<F, Fut>(&self, key: &str, fetcher: F) -> Result<Value>
     where
         F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<Value>>,
+        Fut: Future<Output = Result<Value>>,
     {
         let (rx, is_leader) = {
             let mut map = self
                 .in_flight
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(tx) = map.get(key) {
-                (tx.subscribe(), false)
-            } else {
-                let (tx, rx) = broadcast::channel(1);
-                map.insert(key.to_string(), tx);
-                (rx, true)
-            }
+            let result = match map.entry(key.to_string()) {
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    (entry.get().subscribe(), false)
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let (tx, rx) = broadcast::channel(1);
+                    entry.insert(tx);
+                    (rx, true)
+                }
+            };
+            drop(map);
+            result
         };
 
         if is_leader {
@@ -109,7 +122,7 @@ impl SingleFlight {
                 sf: &'a SingleFlight,
                 active: bool,
             }
-            impl<'a> Drop for Guard<'a> {
+            impl Drop for Guard<'_> {
                 fn drop(&mut self) {
                     if self.active {
                         let mut map = self
@@ -130,16 +143,21 @@ impl SingleFlight {
             let res = fetcher().await;
 
             guard.active = false;
-            let mut map = self
-                .in_flight
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(tx) = map.remove(key) {
+            let sender = {
+                let mut map = self
+                    .in_flight
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let sender = map.remove(key);
+                drop(map);
+                sender
+            };
+            if let Some(tx) = sender {
                 let to_send = match &res {
                     Ok(v) => Ok(v.clone()),
                     Err(e) => Err(e.to_string()),
                 };
-                let _ = tx.send(to_send);
+                drop(tx.send(to_send));
             }
             res
         } else {
@@ -157,7 +175,7 @@ impl SingleFlight {
 
 fn ttl_entry(value: &Value, ttl: Duration, now: i64) -> TtlEntry {
     TtlEntry {
-        exp: now.saturating_add(ttl.as_millis() as i64),
+        exp: now.saturating_add(i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX)),
         v: value.clone(),
     }
 }
@@ -171,14 +189,11 @@ struct Claims {
 impl Claims {
     fn claim(&self, key: &str, ttl: Duration) -> bool {
         let now = Instant::now();
+        let cap = usize::try_from(local_capacity()).unwrap_or(usize::MAX);
         let mut until = self
             .until
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if until.get(key).is_some_and(|deadline| *deadline > now) {
-            return false;
-        }
-        let cap = local_capacity() as usize;
         if until.len() >= cap {
             until.retain(|_, deadline| *deadline > now);
             // Cooldowns are best-effort: dropping a live slot only costs an
@@ -190,8 +205,20 @@ impl Claims {
                 until.remove(&expired_key);
             }
         }
-        until.insert(key.to_string(), now + ttl);
-        true
+        match until.entry(key.to_string()) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if *entry.get() > now {
+                    false
+                } else {
+                    entry.insert(now + ttl);
+                    true
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(now + ttl);
+                true
+            }
+        }
     }
 
     fn release(&self, key: &str) {
@@ -210,6 +237,7 @@ enum Invalidation {
     All,
 }
 
+/// Two-tier local memory and Redis cache.
 pub struct Cache {
     local: MokaCache<String, Arc<TtlEntry>>,
     claims: Claims,
@@ -220,19 +248,19 @@ pub struct Cache {
 
 impl std::fmt::Debug for Cache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let claims_len = self.claims.until.lock().map_or(0, |map| map.len());
         f.debug_struct("Cache")
             .field("local", &self.local.entry_count())
-            .field(
-                "claims",
-                &self.claims.until.lock().map_or(0, |map| map.len()),
-            )
+            .field("claims", &claims_len)
             .field("client", &self.client)
             .field("redis", &"ConnectionManager")
+            .field("singleflight", &self.singleflight)
             .finish()
     }
 }
 
 impl Cache {
+    /// Connect the Redis client and build the local cache tier.
     pub async fn connect(redis_url: &str) -> Result<Self> {
         let client = redis::Client::open(redis_url)?;
         let connector = client.clone();
@@ -262,6 +290,7 @@ impl Cache {
         })
     }
 
+    /// Clone the underlying Redis connection manager.
     pub fn redis(&self) -> ConnectionManager {
         self.redis.clone()
     }
@@ -289,8 +318,8 @@ impl Cache {
     /// on a missing key counts as a miss and would drag the hit ratio to 0%).
     pub async fn probe_read_ms(&self) -> Result<f64> {
         let mut conn = self.redis.clone();
-        let started = std::time::Instant::now();
-        let _: String = redis::cmd("PING").query_async(&mut conn).await?;
+        let started = Instant::now();
+        let _unused: String = redis::cmd("PING").query_async(&mut conn).await?;
         Ok(started.elapsed().as_secs_f64() * 1000.0)
     }
 
@@ -302,10 +331,13 @@ impl Cache {
         let info: String = redis::cmd("INFO").query_async(&mut conn).await?;
         let hits = info_field::<u64>(&info, "keyspace_hits").unwrap_or(0);
         let misses = info_field::<u64>(&info, "keyspace_misses").unwrap_or(0);
-        let lookups = hits + misses;
-        Ok((lookups > 0).then(|| hits as f64 / lookups as f64 * 100.0))
+        let hits = u32::try_from(hits).unwrap_or(u32::MAX);
+        let misses = u32::try_from(misses).unwrap_or(u32::MAX);
+        let lookups = hits.saturating_add(misses);
+        Ok((lookups > 0).then(|| f64::from(hits) / f64::from(lookups) * 100.0))
     }
 
+    /// Redis server version string.
     pub async fn server_version(&self) -> Result<String> {
         let mut conn = self.redis.clone();
         let info: String = redis::cmd("INFO")
@@ -350,11 +382,11 @@ impl Cache {
     pub async fn set_json_ttl(&self, key: &str, value: &Value, ttl: Duration) -> Result<()> {
         let entry = ttl_entry(value, ttl, now_ms());
         let raw = serde_json::to_string(&entry)?;
-        let ttl_ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
+        let ttl_ms = u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX);
         let mut conn = self.redis.clone();
         let opts = SetOptions::default().with_expiration(SetExpiry::PX(ttl_ms));
         let started = Instant::now();
-        let _: Option<String> = conn.set_options(key, raw, opts).await?;
+        let _unused: Option<String> = conn.set_options(key, raw, opts).await?;
         record_redis_op("set", started);
         self.local.insert(key.to_string(), Arc::new(entry)).await;
         Ok(())
@@ -369,7 +401,7 @@ impl Cache {
     ) -> Result<Value>
     where
         F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<Value>>,
+        Fut: Future<Output = Result<Value>>,
     {
         self.get_or_fetch_json_with_ttl(key, || async move {
             let value = fetcher().await?;
@@ -383,7 +415,7 @@ impl Cache {
     pub async fn get_or_fetch_json_with_ttl<F, Fut>(&self, key: &str, fetcher: F) -> Result<Value>
     where
         F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<(Value, Duration)>>,
+        Fut: Future<Output = Result<(Value, Duration)>>,
     {
         match self.get_json_ttl(key).await {
             Ok(Some(v)) => return Ok(v),
@@ -428,6 +460,7 @@ impl Cache {
         self.publish(&Invalidation::All).await
     }
 
+    /// Drop one key locally and in Redis, then publish the invalidation.
     pub async fn invalidate(&self, key: &str) -> Result<()> {
         self.local.invalidate(key).await;
         let mut conn = self.redis.clone();
@@ -436,6 +469,7 @@ impl Cache {
             .await
     }
 
+    /// Drop every local key with `prefix` and delete the matching Redis keys.
     pub async fn invalidate_prefix(&self, prefix: &str) -> Result<()> {
         let local_keys: Vec<String> = self
             .local
@@ -470,6 +504,7 @@ impl Cache {
             .await
     }
 
+    /// Publish one invalidation message.
     async fn publish(&self, msg: &Invalidation) -> Result<()> {
         let payload = serde_json::to_string(msg)?;
         let mut conn = self.redis.clone();
@@ -483,7 +518,7 @@ impl Cache {
     /// backoff capped at [`BACKOFF_MAX`].
     pub async fn spawn_invalidation(self: Arc<Self>) {
         let mut backoff = BACKOFF_MIN;
-        loop {
+        while Arc::strong_count(&self) > 0 {
             match self.subscribe_loop().await {
                 Ok(()) => backoff = BACKOFF_MIN,
                 Err(err) => {
@@ -548,7 +583,7 @@ mod tests {
 
     #[test]
     fn malformed_entry_is_a_miss() {
-        assert!(serde_json::from_str::<TtlEntry>(r#"{"exp": 1}"#).is_err());
+        assert!(serde_json::from_str::<TtlEntry>(r#"{"exp": 1}"#).is_err(), "malformed entry");
     }
 
     #[test]
@@ -563,7 +598,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len();
-        assert_eq!(len, LOCAL_CAPACITY as usize);
+        assert_eq!(len, usize::try_from(LOCAL_CAPACITY).unwrap_or(usize::MAX));
     }
 
     #[test]
@@ -599,9 +634,9 @@ mod tests {
 
         let handles: Vec<_> = (0..10)
             .map(|_| {
-                let sf = sf.clone();
-                let call_count = call_count.clone();
-                let barrier = barrier.clone();
+                let sf = Arc::clone(&sf);
+                let call_count = Arc::clone(&call_count);
+                let barrier = Arc::clone(&barrier);
                 tokio::spawn(async move {
                     barrier.wait().await;
                     sf.get_or_fetch("key", || async {
@@ -610,7 +645,9 @@ mod tests {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         *n += 1;
-                        Ok::<Value, crate::LumiError>(json!({"x": *n}))
+                        let value = json!({"x": *n});
+                        drop(n);
+                        Ok::<Value, crate::LumiError>(value)
                     })
                     .await
                 })
@@ -636,9 +673,9 @@ mod tests {
 
         let handles: Vec<_> = (0..5)
             .map(|_| {
-                let sf = sf.clone();
-                let attempt = attempt.clone();
-                let barrier = barrier.clone();
+                let sf = Arc::clone(&sf);
+                let attempt = Arc::clone(&attempt);
+                let barrier = Arc::clone(&barrier);
                 tokio::spawn(async move {
                     barrier.wait().await;
                     sf.get_or_fetch("key", || async {
@@ -647,6 +684,7 @@ mod tests {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         *n += 1;
+                        drop(n);
                         Err::<Value, crate::LumiError>(crate::LumiError::Cache("fail".into()))
                     })
                     .await

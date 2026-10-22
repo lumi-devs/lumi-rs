@@ -1,5 +1,6 @@
 //! RPC/dashboard HTTP surface (axum): health, Prometheus metrics, and typed action dispatch.
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock};
 
@@ -46,16 +47,23 @@ struct RpcState {
     services: Arc<Services>,
 }
 
+/// RPC action request payload.
 #[derive(Deserialize, Debug)]
 pub struct ActionRequest {
+    /// Action method name.
     pub action: String,
+    /// Action parameters.
     pub payload: Option<Value>,
 }
 
+/// RPC action response payload.
 #[derive(Serialize, Debug)]
 pub struct ActionResponse {
+    /// Whether the action succeeded.
     pub success: bool,
+    /// Response data if successful.
     pub data: Option<Value>,
+    /// Error message on failure.
     pub error: Option<String>,
 }
 
@@ -72,7 +80,7 @@ pub async fn serve_with_shutdown<F>(
     shutdown: F,
 ) -> Result<()>
 where
-    F: std::future::Future<Output = ()> + Send + 'static,
+    F: Future<Output = ()> + Send + 'static,
 {
     init_metrics();
     let token = services.cfg.rpc_token.clone();
@@ -167,111 +175,88 @@ async fn metrics() -> impl IntoResponse {
 async fn action(
     State(state): State<RpcState>,
     Json(req): Json<ActionRequest>,
-) -> impl IntoResponse {
-    tracing::info!(action = %req.action, "executing rpc action");
+) -> (StatusCode, Json<ActionResponse>) {
+    let action = req.action.as_str();
+    tracing::info!(action, "executing rpc action");
 
-    match req.action.as_str() {
-        "ping" => (
-            StatusCode::OK,
-            Json(ActionResponse {
-                success: true,
-                data: Some(json!({ "status": "pong", "time": chrono::Utc::now().to_rfc3339() })),
-                error: None,
-            }),
-        ),
-        "cache.clear" => {
-            state.services.cache.clear_local();
-            match state.services.cache.publish_clear().await {
-                Ok(()) => (
-                    StatusCode::OK,
-                    Json(ActionResponse {
-                        success: true,
-                        data: Some(json!({ "message": "cache cleared and invalidation signal published" })),
-                        error: None,
-                    }),
-                ),
-                Err(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ActionResponse {
-                        success: false,
-                        data: None,
-                        error: Some(err.to_string()),
-                    }),
-                ),
-            }
-        }
-        "modules.list" => {
-            let modules: Vec<_> = state
-                .services
-                .registry
-                .iter()
-                .map(|m| {
-                    let meta = m.metadata();
-                    json!({
-                        "name": m.name(),
-                        "display_name": meta.display_name,
-                        "emoji": meta.emoji,
-                        "version": meta.version,
-                    })
-                })
-                .collect();
+    match action {
+        "ping" => ok_response(json!({
+            "status": "pong",
+            "time": chrono::Utc::now().to_rfc3339(),
+        })),
+        "cache.clear" => cache_clear(&state).await,
+        "modules.list" => modules_list(&state),
+        "security.panic.status" => panic_status(&state, &req).await,
+        _ => error_response(StatusCode::NOT_FOUND, format!("unknown action: {action}")),
+    }
+}
 
-            (
-                StatusCode::OK,
-                Json(ActionResponse {
-                    success: true,
-                    data: Some(json!({ "modules": modules })),
-                    error: None,
-                }),
-            )
+const fn ok_response(data: Value) -> (StatusCode, Json<ActionResponse>) {
+    (
+        StatusCode::OK,
+        Json(ActionResponse {
+            success: true,
+            data: Some(data),
+            error: None,
+        }),
+    )
+}
+
+const fn error_response(status: StatusCode, message: String) -> (StatusCode, Json<ActionResponse>) {
+    (
+        status,
+        Json(ActionResponse {
+            success: false,
+            data: None,
+            error: Some(message),
+        }),
+    )
+}
+
+async fn cache_clear(state: &RpcState) -> (StatusCode, Json<ActionResponse>) {
+    state.services.cache.clear_local();
+    match state.services.cache.publish_clear().await {
+        Ok(()) => {
+            ok_response(json!({ "message": "cache cleared and invalidation signal published" }))
         }
-        "security.panic.status" => {
-            if let Some(guild_id) = req
-                .payload
-                .as_ref()
-                .and_then(|payload| payload.get("guild_id"))
-                .and_then(Value::as_str)
-            {
-                match state.services.security.get_panic_status(guild_id).await {
-                    Ok(st) => {
-                        return (
-                            StatusCode::OK,
-                            Json(ActionResponse {
-                                success: true,
-                                data: Some(json!({ "panic": st })),
-                                error: None,
-                            }),
-                        );
-                    }
-                    Err(e) => {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(ActionResponse {
-                                success: false,
-                                data: None,
-                                error: Some(e.to_string()),
-                            }),
-                        );
-                    }
-                }
-            }
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ActionResponse {
-                    success: false,
-                    data: None,
-                    error: Some("missing guild_id in payload".to_string()),
-                }),
-            )
-        }
-        _ => (
-            StatusCode::NOT_FOUND,
-            Json(ActionResponse {
-                success: false,
-                data: None,
-                error: Some(format!("unknown action: {}", req.action)),
-            }),
-        ),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+    }
+}
+
+fn modules_list(state: &RpcState) -> (StatusCode, Json<ActionResponse>) {
+    let modules: Vec<_> = state
+        .services
+        .registry
+        .iter()
+        .map(|m| {
+            let meta = m.metadata();
+            json!({
+                "name": m.name(),
+                "display_name": meta.display_name,
+                "emoji": meta.emoji,
+                "version": meta.version,
+            })
+        })
+        .collect();
+    ok_response(json!({ "modules": modules }))
+}
+
+async fn panic_status(state: &RpcState, req: &ActionRequest) -> (StatusCode, Json<ActionResponse>) {
+    let Some(guild_id) = req
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.get("guild_id"))
+        .and_then(Value::as_str)
+    else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "missing guild_id in payload".to_string(),
+        );
+    };
+
+    match state.services.security.get_panic_status(guild_id).await {
+        Ok(status) => ok_response(json!({ "panic": status })),
+        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
     }
 }
 

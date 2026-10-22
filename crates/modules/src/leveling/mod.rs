@@ -1,14 +1,14 @@
 use lumi_kernel::module::{ConfigField, Module, ModuleMeta};
 
-pub mod commands;
-pub mod events;
-pub mod images;
-pub mod store;
-pub mod views;
+mod commands;
+mod events;
+mod images;
+pub(crate) mod store;
+mod views;
 
-pub use commands::commands;
 pub use events::{on_message, on_voice_state_update};
 
+/// Member leveling and XP progression module.
 #[derive(Debug)]
 pub struct LevelingModule;
 

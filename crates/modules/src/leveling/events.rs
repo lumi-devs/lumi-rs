@@ -15,7 +15,7 @@ const VOICE_XP_PER_MINUTE: i64 = 5;
 /// grows past this size rather than on every update.
 const SESSION_PRUNE_AT: usize = 50_000;
 /// No real voice session earns for longer than this; older entries are stale.
-const SESSION_MAX_AGE: Duration = Duration::from_secs(6 * 60 * 60);
+const SESSION_MAX_AGE: Duration = Duration::from_hours(6);
 
 static VOICE_SESSIONS: OnceLock<DashMap<(u64, u64), Instant>> = OnceLock::new();
 
@@ -70,10 +70,11 @@ fn is_audible(ctx: &serenity::Context, state: &VoiceState) -> bool {
 
 fn start_session(guild_id: u64, user_id: u64) {
     let sessions = voice_sessions();
-    prune_sessions(sessions, Instant::now());
+    let now = Instant::now();
+    prune_sessions(sessions, now);
     sessions
         .entry((guild_id, user_id))
-        .or_insert_with(Instant::now);
+        .or_insert(now);
 }
 
 /// Stop a session and bank the whole minutes earned. No-op when not started.
@@ -110,7 +111,7 @@ enum SessionTransition {
 /// Bank whenever the member is no longer audible. The old state is deliberately
 /// ignored: the post-update cache can make a leaver look inaudible before the
 /// event, and a session must never be left behind to accrue offline time.
-fn session_transition(_was_audible: bool, now_audible: bool) -> SessionTransition {
+const fn session_transition(_was_audible: bool, now_audible: bool) -> SessionTransition {
     if now_audible {
         SessionTransition::Start
     } else {
@@ -155,6 +156,7 @@ async fn sync_channel(
     Ok(())
 }
 
+/// Award chat XP on message create.
 pub async fn on_message(
     _ctx: &serenity::Context,
     services: &lumi_kernel::Services,
@@ -193,10 +195,11 @@ pub async fn on_message(
     Ok(())
 }
 
+/// Track voice XP on voice state change.
 pub async fn on_voice_state_update(
     ctx: &serenity::Context,
     services: &lumi_kernel::Services,
-    old: &Option<VoiceState>,
+    old: Option<&VoiceState>,
     new: &VoiceState,
 ) -> Result<()> {
     let Some(guild_id) = new.guild_id else {
@@ -208,12 +211,12 @@ pub async fn on_voice_state_update(
     let user_id = new.user_id;
     let guild = guild_id.get();
 
-    let old_channel = old.as_ref().and_then(|state| state.channel_id);
+    let old_channel = old.and_then(|state| state.channel_id);
     let new_channel = new.channel_id;
     // Cache is updated before dispatch, so a leaver is already gone from the
     // channel's occupancy. Never use the old audibility to decide whether to
     // bank a session: a stale session would then accrue time while offline.
-    let was_audible = old.as_ref().is_some_and(|state| is_audible(ctx, state));
+    let was_audible = old.is_some_and(|state| is_audible(ctx, state));
     let now_audible = is_audible(ctx, new);
 
     match session_transition(was_audible, now_audible) {
@@ -234,10 +237,10 @@ pub async fn on_voice_state_update(
     if let Some(channel_id) = old_channel {
         sync_channel(ctx, services, guild_id, channel_id, Some(user_id)).await?;
     }
-    if let Some(channel_id) = new_channel {
-        if Some(channel_id) != old_channel {
-            sync_channel(ctx, services, guild_id, channel_id, None).await?;
-        }
+    if let Some(channel_id) = new_channel
+        && Some(channel_id) != old_channel
+    {
+        sync_channel(ctx, services, guild_id, channel_id, None).await?;
     }
     Ok(())
 }
@@ -251,12 +254,16 @@ mod tests {
     fn only_sessions_older_than_the_cap_are_stale() {
         let now = Instant::now();
         assert!(!stale_session(now, now));
-        assert!(!stale_session(now - Duration::from_secs(60), now));
-        assert!(!stale_session(now - SESSION_MAX_AGE, now));
-        assert!(stale_session(
-            now - SESSION_MAX_AGE - Duration::from_secs(1),
-            now
-        ));
+        let sixty_ago = now
+            .checked_sub(Duration::from_secs(60))
+            .unwrap_or(now);
+        assert!(!stale_session(sixty_ago, now));
+        let max_age_ago = now.checked_sub(SESSION_MAX_AGE).unwrap_or(now);
+        assert!(!stale_session(max_age_ago, now));
+        let past_max_age = now
+            .checked_sub(SESSION_MAX_AGE + Duration::from_secs(1))
+            .unwrap_or(now);
+        assert!(stale_session(past_max_age, now));
     }
 
     #[test]

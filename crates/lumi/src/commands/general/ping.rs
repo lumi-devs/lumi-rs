@@ -62,8 +62,7 @@ fn is_gone(error: &serenity::Error) -> bool {
     )
 }
 
-/// Dashboard buttons: `ping:p:<page>:<user>`, `ping:n:<page>:<user>` and
-/// `ping:close:<user>`. The page lives in the id, so nothing is stored.
+/// Handle ping dashboard interactions.
 pub async fn handle_component(
     ctx: &serenity::Context,
     services: &Services,
@@ -94,34 +93,52 @@ pub async fn handle_component(
     }
 
     if action == "close" {
-        if let Err(error) = component
-            .create_response(ctx.http(), CreateInteractionResponse::Acknowledge)
-            .await
-        {
-            if is_gone(&error) {
-                tracing::debug!(%error, user_id, "ping dashboard already closed");
-                return Ok(());
-            }
-            return Err(error.into());
-        }
-        if let Err(error) = ctx
-            .http
-            .delete_original_interaction_response(&component.token)
-            .await
-        {
-            if is_gone(&error) {
-                tracing::debug!(%error, user_id, "ping dashboard message is gone");
-                return Ok(());
-            }
-            return Err(error.into());
-        }
-        return Ok(());
+        return close_dashboard(ctx, component, user_id).await;
     }
 
-    let Some(requested_page) = requested_page else {
-        return Ok(());
-    };
+    match requested_page {
+        Some(page) => render_page(ctx, services, component, user_id, page, action).await,
+        None => Ok(()),
+    }
+}
 
+async fn close_dashboard(
+    ctx: &serenity::Context,
+    component: &ComponentInteraction,
+    user_id: u64,
+) -> Result<(), Error> {
+    if let Err(error) = component
+        .create_response(ctx.http(), CreateInteractionResponse::Acknowledge)
+        .await
+    {
+        if is_gone(&error) {
+            tracing::debug!(%error, user_id, "ping dashboard already closed");
+            return Ok(());
+        }
+        return Err(error.into());
+    }
+    if let Err(error) = ctx
+        .http
+        .delete_original_interaction_response(&component.token)
+        .await
+    {
+        if is_gone(&error) {
+            tracing::debug!(%error, user_id, "ping dashboard message is gone");
+            return Ok(());
+        }
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+async fn render_page(
+    ctx: &serenity::Context,
+    services: &Services,
+    component: &ComponentInteraction,
+    user_id: u64,
+    requested_page: usize,
+    action: &str,
+) -> Result<(), Error> {
     if action != "p" && action != "n" {
         return Ok(());
     }

@@ -15,6 +15,16 @@ use lumi_ui::Card;
 
 pub(super) const MAX_TARGETS: usize = 25;
 
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
 pub(super) async fn autocomplete_reason<'a>(
     _ctx: Context<'a>,
     partial: &'a str,
@@ -29,18 +39,18 @@ pub(super) async fn autocomplete_reason<'a>(
         "📧 Spam",
         "💬 Toxicity/Harassment",
     ];
-    let needle = partial.to_lowercase();
     let choices: Vec<serenity::AutocompleteChoice> = PRESETS
         .iter()
-        .filter(|reason| reason.to_lowercase().contains(&needle))
+        .filter(|reason| contains_ignore_ascii_case(reason, partial))
         .map(|reason| serenity::AutocompleteChoice::new(*reason, *reason))
         .collect();
 
     serenity::CreateAutocompleteResponse::new().set_choices(choices)
 }
 
-#[must_use]
 pub(super) fn parse_target_list(single: Option<UserId>, extra: Option<&str>) -> Vec<UserId> {
+    static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+
     let mut targets = Vec::new();
     if let Some(single) = single {
         targets.push(single);
@@ -49,7 +59,6 @@ pub(super) fn parse_target_list(single: Option<UserId>, extra: Option<&str>) -> 
         return targets;
     };
 
-    static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
     let Some(regex) = crate::regex::cached(&RE, crate::patterns::TARGET_PATTERN) else {
         return targets;
     };
@@ -92,23 +101,68 @@ pub(super) fn parse_duration(input: &str) -> Option<Duration> {
         .unwrap_or(input.len());
     let (number, unit) = input.split_at(split);
     let amount: u64 = number.parse().ok()?;
-    let seconds = match unit.trim().to_lowercase().as_str() {
-        "s" | "sec" | "secs" => amount,
-        "m" | "min" | "mins" => amount.checked_mul(60)?,
-        "h" | "hr" | "hrs" | "hour" | "hours" => amount.checked_mul(3_600)?,
-        "d" | "day" | "days" => amount.checked_mul(86_400)?,
-        "w" | "week" | "weeks" => amount.checked_mul(604_800)?,
-        _ => return None,
+    let unit = unit.trim();
+    let seconds = if unit.eq_ignore_ascii_case("s")
+        || unit.eq_ignore_ascii_case("sec")
+        || unit.eq_ignore_ascii_case("secs")
+    {
+        amount
+    } else if unit.eq_ignore_ascii_case("m")
+        || unit.eq_ignore_ascii_case("min")
+        || unit.eq_ignore_ascii_case("mins")
+    {
+        amount.checked_mul(60)?
+    } else if unit.eq_ignore_ascii_case("h")
+        || unit.eq_ignore_ascii_case("hr")
+        || unit.eq_ignore_ascii_case("hrs")
+        || unit.eq_ignore_ascii_case("hour")
+        || unit.eq_ignore_ascii_case("hours")
+    {
+        amount.checked_mul(3_600)?
+    } else if unit.eq_ignore_ascii_case("d")
+        || unit.eq_ignore_ascii_case("day")
+        || unit.eq_ignore_ascii_case("days")
+    {
+        amount.checked_mul(86_400)?
+    } else if unit.eq_ignore_ascii_case("w")
+        || unit.eq_ignore_ascii_case("week")
+        || unit.eq_ignore_ascii_case("weeks")
+    {
+        amount.checked_mul(604_800)?
+    } else {
+        return None;
     };
     Some(Duration::from_secs(seconds))
 }
 
-pub use cases::{case, cases, cases_delete, cases_modify, cases_view, note, reason};
-pub use channels::{lock, lock_disable, lock_enable, lockdown, lockdown_disable, lockdown_enable};
-pub use punish::{
-    ban, kick, mute, quarantine, quarantine_add, quarantine_remove, softban, unban, unmute, warn,
+use cases::{case, cases, note, reason};
+use channels::{lock, lockdown};
+use punish::{
+    ban, kick, mute, quarantine, softban, unban, unmute, warn,
 };
-pub use utility::{dm, sanitize, say};
+use utility::{dm, sanitize, say};
+
+pub fn commands() -> Vec<Command> {
+    vec![
+        warn(),
+        kick(),
+        ban(),
+        unban(),
+        mute(),
+        unmute(),
+        cases(),
+        case(),
+        reason(),
+        note(),
+        softban(),
+        lock(),
+        lockdown(),
+        quarantine(),
+        dm(),
+        say(),
+        sanitize(),
+    ]
+}
 
 #[cfg(test)]
 mod tests {
@@ -140,26 +194,4 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert_eq!(list[0], first);
     }
-}
-
-pub fn commands() -> Vec<Command> {
-    vec![
-        warn(),
-        kick(),
-        ban(),
-        unban(),
-        mute(),
-        unmute(),
-        cases(),
-        case(),
-        reason(),
-        note(),
-        softban(),
-        lock(),
-        lockdown(),
-        quarantine(),
-        dm(),
-        say(),
-        sanitize(),
-    ]
 }

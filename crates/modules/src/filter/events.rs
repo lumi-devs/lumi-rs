@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use poise::serenity_prelude as serenity;
 use serenity::all::{
     EditMember, GenericChannelId, Message, MessageUpdateEvent, Permissions, Timestamp,
@@ -41,7 +43,7 @@ async fn screen(ctx: &serenity::Context, services: &Services, message: &Message)
         return false;
     }
 
-    let mention_count = (message.mentions.len() + message.mention_roles.len()) as u64;
+    let mention_count = u64::from(message.mentions.len() + message.mention_roles.len());
     heat::check_mention_flood(ctx, services, message, mention_count, &rules).await;
 
     let verdict = enforce::evaluate(&rules, message.content.as_str(), mention_count);
@@ -68,14 +70,13 @@ async fn screen(ctx: &serenity::Context, services: &Services, message: &Message)
 
 /// Manage Messages holders and configured exempt roles bypass all rules.
 fn is_exempt(ctx: &serenity::Context, message: &Message, rules: &FilterRules) -> bool {
-    if let Some(member) = message.member.as_deref() {
-        if member
+    if let Some(member) = message.member.as_deref()
+        && member
             .roles
             .iter()
             .any(|role| rules.exempt_roles.contains(&role.get()))
-        {
-            return true;
-        }
+    {
+        return true;
     }
     let Some(guild_id) = message.guild_id else {
         return false;
@@ -116,11 +117,11 @@ async fn apply(
     let reason = verdict
         .reasons
         .first()
-        .map_or_else(|| "a rule".to_string(), |reason| reason.detail());
+        .map_or_else(|| "a rule".to_string(), enforce::Reason::detail);
     let action = verdict
         .reasons
         .first()
-        .map_or("unknown", |reason| reason.action());
+        .map_or("unknown", enforce::Reason::action);
 
     if let Err(error) = message
         .channel_id
@@ -149,25 +150,24 @@ async fn warn(
     let label = verdict
         .reasons
         .first()
-        .map_or("a rule", |reason| reason.label());
+        .map_or("a rule", enforce::Reason::label);
     let text = rules
         .warn_message
         .replace("{user}", &format!("<@{}>", message.author.id.get()))
-        .replace("{reason}", label)
-        .trim()
-        .to_string();
-    if text.is_empty() {
+        .replace("{reason}", label);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
         return;
     }
 
-    let card = Card::warning("Message Removed", text).into_reply();
+    let card = Card::warning("Message Removed", trimmed).into_reply();
     match message
         .channel_id
         .send_message(&ctx.http, card.message())
         .await
     {
         Ok(warning) => {
-            let http = ctx.http.clone();
+            let http = Arc::clone(&ctx.http);
             let channel = message.channel_id;
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;

@@ -8,7 +8,7 @@ use serenity::all::{
 
 use lumi_kernel::Services;
 use lumi_kernel::bot::Error;
-use lumi_kernel::downloader::AutoUpdateConfig;
+use lumi_kernel::downloader::{AutoUpdateConfig, RepoModuleInfo};
 use lumi_ui::panels::{action_row_of, back_button, pagination_row, setting_row, string_select};
 use lumi_ui::{Card, CardKind, CardOptions, CardReply, cut_text};
 
@@ -70,11 +70,13 @@ pub async fn dashboard_card(
             .style(ButtonStyle::Success),
     ]);
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec!["Hub".to_string(), "Addons".to_string()];
-    opts.thumbnail_url = guild.icon.clone();
-    opts.separator_above_action_rows = true;
-    opts.action_rows = vec![nav, tab_row(HubView::Addons)];
+    let opts = CardOptions {
+        breadcrumbs: vec!["Hub".to_string(), "Addons".to_string()],
+        thumbnail_url: guild.icon.clone(),
+        separator_above_action_rows: true,
+        action_rows: vec![nav, tab_row(HubView::Addons)],
+        ..Default::default()
+    };
 
     Ok(Card::lines("📦 Add-ons", body)
         .kind(CardKind::Primary)
@@ -132,16 +134,18 @@ async fn repos_card(services: &Services) -> Result<CardReply, Error> {
         Vec::new()
     };
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec![
-        "Hub".to_string(),
-        "Addons".to_string(),
-        "Repositories".to_string(),
-    ];
-    opts.separator_above_action_rows = true;
-    opts.sections = sections;
-    opts.action_rows = rows;
-    opts.footer = Some("Update pulls the repository's latest commit.".to_string());
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Addons".to_string(),
+            "Repositories".to_string(),
+        ],
+        separator_above_action_rows: true,
+        sections,
+        action_rows: rows,
+        footer: Some("Update pulls the repository's latest commit.".to_string()),
+        ..Default::default()
+    };
 
     Ok(Card::lines("📦 Configure Repositories", body)
         .kind(CardKind::Primary)
@@ -176,7 +180,6 @@ async fn installed_card(services: &Services) -> Result<CardReply, Error> {
     }
 
     let mut rows: Vec<CreateActionRow<'static>> = Vec::new();
-    // why: at most 3 toggle rows so toggle + back + tabs stay within Discord's 5-row limit.
     let toggles: Vec<_> = installed.iter().take(15).collect();
     for chunk in toggles.chunks(5) {
         let buttons = chunk
@@ -199,16 +202,18 @@ async fn installed_card(services: &Services) -> Result<CardReply, Error> {
         Vec::new()
     };
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec![
-        "Hub".to_string(),
-        "Addons".to_string(),
-        "Installed".to_string(),
-    ];
-    opts.separator_above_action_rows = true;
-    opts.sections = sections;
-    opts.action_rows = rows;
-    opts.footer = Some("Toggling a module applies instantly.".to_string());
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Addons".to_string(),
+            "Installed".to_string(),
+        ],
+        separator_above_action_rows: true,
+        sections,
+        action_rows: rows,
+        footer: Some("Toggling a module applies instantly.".to_string()),
+        ..Default::default()
+    };
 
     Ok(Card::lines("📥 Configure Addons", body)
         .kind(CardKind::Primary)
@@ -255,24 +260,93 @@ async fn autoupdate_card(services: &Services) -> Result<CardReply, Error> {
         format!("**Interval:** every {} minutes", cfg.interval_minutes),
     ];
 
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec![
-        "Hub".to_string(),
-        "Addons".to_string(),
-        "Auto-update".to_string(),
-    ];
-    opts.separator_above_action_rows = true;
-    opts.action_rows = vec![
-        action_row_of(vec![toggle]),
-        interval,
-        back_button(cid(&["tab", "addons"])),
-        tab_row(HubView::Addons),
-    ];
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Addons".to_string(),
+            "Auto-update".to_string(),
+        ],
+        separator_above_action_rows: true,
+        action_rows: vec![
+            action_row_of(vec![toggle]),
+            interval,
+            back_button(cid(&["tab", "addons"])),
+            tab_row(HubView::Addons),
+        ],
+        ..Default::default()
+    };
 
     Ok(Card::lines("⏱ Auto-Update Settings", body)
         .kind(CardKind::Primary)
         .options(opts)
         .into_reply())
+}
+
+/// Body lines and install/uninstall options for one page of modules.
+fn repo_module_block(
+    shown: &[RepoModuleInfo],
+    installed: &HashSet<String>,
+    repo_name: &str,
+) -> (Vec<String>, Vec<(String, String)>) {
+    let mut body = Vec::new();
+    let mut select_options = Vec::new();
+    for module in shown {
+        let is_installed = installed.contains(&module.name);
+        let suffix = if is_installed { " ✅ installed" } else { "" };
+        body.push(format!(
+            "🧩 **{}** `v{}`{}",
+            module.name, module.version, suffix
+        ));
+        let desc = module.short.as_deref().or(module.description.as_deref());
+        if let Some(desc) = desc.filter(|d| !d.is_empty()) {
+            body.push(format!("-# {}", cut_text(desc, 90)));
+        }
+        let act = if is_installed { "uninstall" } else { "install" };
+        select_options.push((
+            format!("{act}: {}", module.name),
+            format!("{act}:{repo_name}:{}", module.name),
+        ));
+    }
+    (body, select_options)
+}
+
+/// Select, info, back, and pager rows for one page of modules.
+fn repo_module_rows(
+    repo_name: &str,
+    shown: &[RepoModuleInfo],
+    select_options: Vec<(String, String)>,
+    safe_page: usize,
+    total_pages: usize,
+) -> Vec<CreateActionRow<'static>> {
+    let mut rows: Vec<CreateActionRow<'static>> = Vec::new();
+    if !select_options.is_empty() {
+        rows.push(string_select(
+            cid(&["addon", "mod_action"]),
+            "Install or uninstall a module…",
+            select_options,
+        ));
+        let info: Vec<CreateButton<'static>> = shown
+            .iter()
+            .take(5)
+            .map(|m| {
+                CreateButton::new(cid(&["addon", "modinfo", repo_name, m.name.as_str()]))
+                    .label(m.name.clone())
+                    .emoji('📄')
+                    .style(ButtonStyle::Secondary)
+            })
+            .collect();
+        rows.push(action_row_of(info));
+    }
+    rows.push(back_button(cid(&["addon", "installed"])));
+    if let Some(pager) = pagination_row(
+        &format!("lumi:addon:browsepage:{repo_name}:dir"),
+        safe_page,
+        total_pages,
+    ) {
+        rows.push(pager);
+    }
+    rows.push(tab_row(HubView::Addons));
+    rows
 }
 
 /// One page of a repository's modules, with install/uninstall select and info buttons.
@@ -304,71 +378,23 @@ async fn repo_modules_card(
     let end = start.saturating_add(PER_PAGE).min(modules.len());
     let shown = &modules[start..end];
 
-    let mut body = Vec::new();
-    let mut select_options = Vec::new();
-    for module in shown {
-        let is_installed = installed.contains(&module.name);
-        let suffix = if is_installed { " ✅ installed" } else { "" };
-        body.push(format!(
-            "🧩 **{}** `v{}`{}",
-            module.name, module.version, suffix
-        ));
-        let desc = module
-            .short
-            .clone()
-            .or_else(|| module.description.clone())
-            .unwrap_or_default();
-        if !desc.is_empty() {
-            body.push(format!("-# {}", cut_text(&desc, 90)));
-        }
-        let act = if is_installed { "uninstall" } else { "install" };
-        select_options.push((
-            format!("{act}: {}", module.name),
-            format!("{act}:{repo_name}:{}", module.name),
-        ));
-    }
+    let (mut body, select_options) = repo_module_block(shown, &installed, repo_name);
     if modules.is_empty() {
         body.push("-# *No modules found in this repository.*".to_string());
     }
+    let rows = repo_module_rows(repo_name, shown, select_options, safe_page, total_pages);
 
-    let mut rows: Vec<CreateActionRow<'static>> = Vec::new();
-    if !select_options.is_empty() {
-        rows.push(string_select(
-            cid(&["addon", "mod_action"]),
-            "Install or uninstall a module…",
-            select_options,
-        ));
-        let info: Vec<CreateButton<'static>> = shown
-            .iter()
-            .take(5)
-            .map(|m| {
-                CreateButton::new(cid(&["addon", "modinfo", repo_name, m.name.as_str()]))
-                    .label(m.name.clone())
-                    .emoji('📄')
-                    .style(ButtonStyle::Secondary)
-            })
-            .collect();
-        rows.push(action_row_of(info));
-    }
-    rows.push(back_button(cid(&["addon", "installed"])));
-    if let Some(pager) = pagination_row(
-        &format!("lumi:addon:browsepage:{repo_name}:dir"),
-        safe_page,
-        total_pages,
-    ) {
-        rows.push(pager);
-    }
-    rows.push(tab_row(HubView::Addons));
-
-    let mut opts = CardOptions::default();
-    opts.breadcrumbs = vec![
-        "Hub".to_string(),
-        "Addons".to_string(),
-        "Modules".to_string(),
-        repo_name.to_string(),
-    ];
-    opts.separator_above_action_rows = true;
-    opts.action_rows = rows;
+    let opts = CardOptions {
+        breadcrumbs: vec![
+            "Hub".to_string(),
+            "Addons".to_string(),
+            "Modules".to_string(),
+            repo_name.to_string(),
+        ],
+        separator_above_action_rows: true,
+        action_rows: rows,
+        ..Default::default()
+    };
 
     Ok(Card::lines(format!("⚙ Modules in {repo_name}"), body)
         .kind(CardKind::Primary)
@@ -394,7 +420,7 @@ async fn module_info_card(
 
     let lines = [
         format!("### 📦 __{}__ (v{})", module.name, module.version),
-        module.description.clone().map_or_else(
+        module.description.as_deref().map_or_else(
             || "*No description provided.*".to_string(),
             |d| format!("*{d}*"),
         ),
@@ -409,9 +435,10 @@ async fn module_info_card(
         ),
         String::new(),
         "### 🛡 __Data & Privacy Statement__".to_string(),
-        module.end_user_data_statement.clone().unwrap_or_else(|| {
-            "*This module has not specified an end-user data statement.*".to_string()
-        }),
+        module.end_user_data_statement.as_deref().map_or_else(
+            || "*This module has not specified an end-user data statement.*".to_string(),
+            ToString::to_string,
+        ),
     ];
 
     Ok(
@@ -435,9 +462,11 @@ fn update_confirm_card(repo_name: &str, changelog: Option<&str>) -> CardReply {
         .label("Skip")
         .style(ButtonStyle::Secondary);
 
-    let mut opts = CardOptions::default();
-    opts.separator_above_action_rows = true;
-    opts.action_rows = vec![action_row_of(vec![confirm, skip]), tab_row(HubView::Addons)];
+    let opts = CardOptions {
+        separator_above_action_rows: true,
+        action_rows: vec![action_row_of(vec![confirm, skip]), tab_row(HubView::Addons)],
+        ..Default::default()
+    };
 
     Card::new(format!("📦 Update available for {repo_name}"), body)
         .kind(CardKind::Warning)
@@ -479,6 +508,7 @@ async fn update_all(services: &Services) -> Result<HubOutcome, Error> {
     Ok(HubOutcome::Ephemeral(reply))
 }
 
+/// Route add-on dashboard interactions.
 pub async fn dispatch(
     services: &Services,
     _guild: &GuildCtx,
@@ -486,7 +516,6 @@ pub async fn dispatch(
     data: &serenity::ComponentInteractionData,
     user_id: u64,
 ) -> Result<HubOutcome, Error> {
-    // why: mod.rs only enforces `admin.*` for buttons, so owner-gate management here.
     if !services.cfg.is_owner(user_id) {
         return Ok(HubOutcome::Ephemeral(
             Card::error("Access Denied", "Only Bot Owners can manage add-ons.").into_reply(),
@@ -495,10 +524,45 @@ pub async fn dispatch(
 
     match (id.head().unwrap_or_default(), id.get(1)) {
         ("update_all", _) => update_all(services).await,
-        ("addon", Some("repos")) => Ok(HubOutcome::Update(repos_card(services).await?)),
-        ("addon", Some("installed")) => Ok(HubOutcome::Update(installed_card(services).await?)),
-        ("addon", Some("autoupdate")) => Ok(HubOutcome::Update(autoupdate_card(services).await?)),
-        ("addon", Some("autoupdate_toggle")) => {
+        (
+            "addon",
+            Some(
+                "repos"
+                | "installed"
+                | "autoupdate"
+                | "autoupdate_toggle"
+                | "autoupdate_interval"
+                | "toggle",
+            ),
+        ) => dispatch_settings(services, id, data).await,
+        (
+            "addon",
+            Some(
+                "update_repo"
+                | "update_repo_confirm"
+                | "update_repo_skip"
+                | "browsepage"
+                | "repo_pick",
+            ),
+        ) => dispatch_updates(services, id, data).await,
+        ("addon", Some("modact" | "modinfo" | "mod_action")) => {
+            dispatch_modules(services, id, data).await
+        }
+        ("addon", Some("add_repo" | "rm_repo" | "install" | "uninstall")) => Ok(dispatch_modal(id)),
+        _ => Ok(HubOutcome::Done),
+    }
+}
+
+async fn dispatch_settings(
+    services: &Services,
+    id: &HubId,
+    data: &serenity::ComponentInteractionData,
+) -> Result<HubOutcome, Error> {
+    match id.get(1) {
+        Some("repos") => Ok(HubOutcome::Update(repos_card(services).await?)),
+        Some("installed") => Ok(HubOutcome::Update(installed_card(services).await?)),
+        Some("autoupdate") => Ok(HubOutcome::Update(autoupdate_card(services).await?)),
+        Some("autoupdate_toggle") => {
             let cfg = services.downloader.get_auto_update_config().await?;
             services
                 .downloader
@@ -509,7 +573,7 @@ pub async fn dispatch(
                 .await?;
             Ok(HubOutcome::Update(autoupdate_card(services).await?))
         }
-        ("addon", Some("autoupdate_interval")) => {
+        Some("autoupdate_interval") => {
             if let Some(minutes) = select_value(data).and_then(|v| v.parse::<u64>().ok())
                 && minutes > 0
             {
@@ -524,7 +588,7 @@ pub async fn dispatch(
             }
             Ok(HubOutcome::Update(autoupdate_card(services).await?))
         }
-        ("addon", Some("toggle")) => {
+        Some("toggle") => {
             let module = id.tail(2);
             if module.is_empty() {
                 return Ok(HubOutcome::Done);
@@ -537,7 +601,17 @@ pub async fn dispatch(
             services.downloader.toggle_module(&module, !current).await?;
             Ok(HubOutcome::Update(installed_card(services).await?))
         }
-        ("addon", Some("update_repo")) => {
+        _ => Ok(HubOutcome::Done),
+    }
+}
+
+async fn dispatch_updates(
+    services: &Services,
+    id: &HubId,
+    data: &serenity::ComponentInteractionData,
+) -> Result<HubOutcome, Error> {
+    match id.get(1) {
+        Some("update_repo") => {
             let repo = id.tail(2);
             if repo.is_empty() {
                 return Ok(HubOutcome::Done);
@@ -562,7 +636,7 @@ pub async fn dispatch(
                 check.changelog.as_deref(),
             )))
         }
-        ("addon", Some("update_repo_confirm")) => {
+        Some("update_repo_confirm") => {
             let repo = id.tail(2);
             if repo.is_empty() {
                 return Ok(HubOutcome::Done);
@@ -596,18 +670,37 @@ pub async fn dispatch(
             };
             Ok(HubOutcome::Ephemeral(reply))
         }
-        ("addon", Some("update_repo_skip")) => Ok(HubOutcome::Update(repos_card(services).await?)),
-        ("addon", Some("browsepage")) => {
-            let repo = id.get(2).unwrap_or_default().to_string();
+        Some("update_repo_skip") => Ok(HubOutcome::Update(repos_card(services).await?)),
+        Some("browsepage") => {
+            let repo = id.get(2).unwrap_or_default();
             let page = id.get(4).and_then(|p| p.parse::<usize>().ok()).unwrap_or(0);
             if repo.is_empty() {
                 return Ok(HubOutcome::Done);
             }
             Ok(HubOutcome::Update(
-                repo_modules_card(services, &repo, page).await?,
+                repo_modules_card(services, repo, page).await?,
             ))
         }
-        ("addon", Some("modact")) => {
+        Some("repo_pick") => {
+            let repo = select_value(data).unwrap_or_default();
+            if repo.is_empty() {
+                return Ok(HubOutcome::Done);
+            }
+            Ok(HubOutcome::Update(
+                repo_modules_card(services, &repo, 0).await?,
+            ))
+        }
+        _ => Ok(HubOutcome::Done),
+    }
+}
+
+async fn dispatch_modules(
+    services: &Services,
+    id: &HubId,
+    data: &serenity::ComponentInteractionData,
+) -> Result<HubOutcome, Error> {
+    match id.get(1) {
+        Some("modact") => {
             let act = id.get(2).unwrap_or_default();
             let repo = id.get(3).unwrap_or_default();
             let module = id.tail(4);
@@ -623,26 +716,17 @@ pub async fn dispatch(
                 repo_modules_card(services, repo, 0).await?,
             ))
         }
-        ("addon", Some("modinfo")) => {
-            let repo = id.get(2).unwrap_or_default().to_string();
+        Some("modinfo") => {
+            let repo = id.get(2).unwrap_or_default();
             let module = id.tail(3);
             if repo.is_empty() || module.is_empty() {
                 return Ok(HubOutcome::Done);
             }
             Ok(HubOutcome::Ephemeral(
-                module_info_card(services, &repo, &module).await?,
+                module_info_card(services, repo, &module).await?,
             ))
         }
-        ("addon", Some("repo_pick")) => {
-            let repo = select_value(data).unwrap_or_default();
-            if repo.is_empty() {
-                return Ok(HubOutcome::Done);
-            }
-            Ok(HubOutcome::Update(
-                repo_modules_card(services, &repo, 0).await?,
-            ))
-        }
-        ("addon", Some("mod_action")) => {
+        Some("mod_action") => {
             let value = select_value(data).unwrap_or_default();
             let Some((act, rest)) = value.split_once(':') else {
                 return Ok(HubOutcome::Done);
@@ -662,11 +746,17 @@ pub async fn dispatch(
                 repo_modules_card(services, repo, 0).await?,
             ))
         }
-        ("addon", Some("add_repo")) => Ok(HubOutcome::Modal(add_repo_modal())),
-        ("addon", Some("rm_repo")) => Ok(HubOutcome::Modal(rm_repo_modal())),
-        ("addon", Some("install")) => Ok(HubOutcome::Modal(install_modal())),
-        ("addon", Some("uninstall")) => Ok(HubOutcome::Modal(uninstall_modal())),
         _ => Ok(HubOutcome::Done),
+    }
+}
+
+fn dispatch_modal(id: &HubId) -> HubOutcome {
+    match id.get(1) {
+        Some("add_repo") => HubOutcome::Modal(add_repo_modal()),
+        Some("rm_repo") => HubOutcome::Modal(rm_repo_modal()),
+        Some("install") => HubOutcome::Modal(install_modal()),
+        Some("uninstall") => HubOutcome::Modal(uninstall_modal()),
+        _ => HubOutcome::Done,
     }
 }
 
@@ -692,6 +782,7 @@ async fn apply_module_action(
     }
 }
 
+/// Handle a submitted add-on management modal.
 pub async fn handle_modal(
     services: &Services,
     _guild: &GuildCtx,
@@ -701,7 +792,7 @@ pub async fn handle_modal(
     let outcome: Result<(String, String), Error> = match action {
         "add_repo" => {
             let url = read_input(&modal.data.components, "url").unwrap_or_default();
-            let url = url.trim().to_string();
+            let url = url.trim();
             if url.is_empty() {
                 return Ok(HubOutcome::Ephemeral(
                     Card::error("Addon Error", "A repository URL is required.").into_reply(),
@@ -711,7 +802,7 @@ pub async fn handle_modal(
             let branch = read_input(&modal.data.components, "branch").unwrap_or_default();
             services
                 .downloader
-                .add_repo(&url, optional(&name), optional(&branch))
+                .add_repo(url, optional(&name), optional(&branch))
                 .await
                 .map(|repo| {
                     (
@@ -722,13 +813,11 @@ pub async fn handle_modal(
                 .map_err(Into::into)
         }
         "rm_repo" => {
-            let name = read_input(&modal.data.components, "name")
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+            let name = read_input(&modal.data.components, "name").unwrap_or_default();
+            let name = name.trim();
             services
                 .downloader
-                .remove_repo(&name)
+                .remove_repo(name)
                 .await
                 .map(|_| {
                     (
@@ -739,17 +828,13 @@ pub async fn handle_modal(
                 .map_err(Into::into)
         }
         "install" => {
-            let repo = read_input(&modal.data.components, "repo")
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            let module = read_input(&modal.data.components, "module")
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+            let repo = read_input(&modal.data.components, "repo").unwrap_or_default();
+            let repo = repo.trim();
+            let module = read_input(&modal.data.components, "module").unwrap_or_default();
+            let module = module.trim();
             services
                 .downloader
-                .install_module(&repo, &module)
+                .install_module(repo, module)
                 .await
                 .map(|_| {
                     (
@@ -760,13 +845,11 @@ pub async fn handle_modal(
                 .map_err(Into::into)
         }
         "uninstall" => {
-            let module = read_input(&modal.data.components, "module")
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+            let module = read_input(&modal.data.components, "module").unwrap_or_default();
+            let module = module.trim();
             services
                 .downloader
-                .uninstall_module(&module)
+                .uninstall_module(module)
                 .await
                 .map(|found| {
                     (
@@ -849,11 +932,10 @@ fn text_input(
 }
 
 fn select_value(data: &serenity::ComponentInteractionData) -> Option<String> {
-    match &data.kind {
-        serenity::all::ComponentInteractionDataKind::StringSelect { values } => {
-            values.first().cloned()
-        }
-        _ => None,
+    if let serenity::all::ComponentInteractionDataKind::StringSelect { values } = &data.kind {
+        values.first().cloned()
+    } else {
+        None
     }
 }
 

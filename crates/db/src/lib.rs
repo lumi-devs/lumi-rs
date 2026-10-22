@@ -1,5 +1,10 @@
+//! Database layer for Lumi.
+
+/// Entity models.
 pub mod entities;
+/// Strongly typed snowflake identifiers.
 pub mod ids;
+/// Schema migrations.
 pub mod migrations;
 
 use std::collections::HashMap;
@@ -9,8 +14,8 @@ use sea_orm::entity::prelude::{ChronoUtc, DateTimeWithTimeZone};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
-    DatabaseBackend as DbBackend, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QueryResult,
-    Set, Statement, TransactionTrait,
+    DatabaseBackend as DbBackend, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QueryResult, Set, Statement, TransactionTrait,
 };
 use sea_orm_migration::MigratorTrait;
 
@@ -21,6 +26,7 @@ use crate::entities::{permit, permit_assignment};
 use crate::ids::{GuildId, SnowflakeId};
 use crate::migrations::Migrator;
 
+/// Database operation result.
 pub type Result<T> = std::result::Result<T, sea_orm::DbErr>;
 
 /// Read a numeric env var, warning and falling back to `default` when it does
@@ -28,7 +34,7 @@ pub type Result<T> = std::result::Result<T, sea_orm::DbErr>;
 fn env_number<T: std::str::FromStr>(name: &str, default: T) -> T {
     match std::env::var(name) {
         Ok(raw) => raw.trim().parse().unwrap_or_else(|_| {
-            eprintln!("warning: invalid {name}={raw:?}; using the default");
+            tracing::warn!("invalid {name}={raw:?}; using the default");
             default
         }),
         Err(_) => default,
@@ -44,7 +50,10 @@ fn options(url: &str) -> ConnectOptions {
     let min_connections = env_number("DATABASE_MIN_CONNECTIONS", 2);
     let max_connections = env_number("DATABASE_MAX_CONNECTIONS", 20).max(min_connections);
     let acquire_timeout_ms = if let Ok(secs) = std::env::var("DATABASE_ACQUIRE_TIMEOUT_SECS") {
-        secs.trim().parse::<u64>().unwrap_or(5).saturating_mul(1_000)
+        secs.trim()
+            .parse::<u64>()
+            .unwrap_or(5)
+            .saturating_mul(1_000)
     } else {
         env_number("DATABASE_ACQUIRE_TIMEOUT_MS", 5_000)
     };
@@ -69,6 +78,7 @@ fn options(url: &str) -> ConnectOptions {
     options
 }
 
+/// Open the primary connection pool.
 pub async fn connect(url: &str) -> Result<DatabaseConnection> {
     Database::connect(options(url)).await
 }
@@ -78,6 +88,7 @@ pub async fn connect_read(url: &str) -> Result<DatabaseConnection> {
     Database::connect(options(url)).await
 }
 
+/// Apply every pending migration.
 pub async fn migrate(db: &DatabaseConnection) -> Result<()> {
     Migrator::up(db, None).await?;
     Ok(())
@@ -174,6 +185,7 @@ pub async fn reset_prefix(db: &DatabaseConnection, guild_id: u64) -> Result<()> 
     Ok(())
 }
 
+/// Count the modules enabled in a guild.
 pub async fn count_enabled_modules(db: &DatabaseConnection, guild_id: u64) -> Result<u64> {
     entities::guild_module_state::Entity::find()
         .filter(entities::guild_module_state::Column::GuildId.eq(GuildId::from(guild_id)))
@@ -216,30 +228,38 @@ fn counter(row: &QueryResult, column: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// Every permit in a guild, in display order.
 pub async fn list_permits(
     db: &DatabaseConnection,
     guild_id: u64,
-) -> Result<Vec<entities::permit::Model>> {
-    entities::permit::Entity::find()
-        .filter(entities::permit::Column::GuildId.eq(GuildId::from(guild_id)))
-        .order_by_asc(entities::permit::Column::Position)
+) -> Result<Vec<permit::Model>> {
+    permit::Entity::find()
+        .filter(permit::Column::GuildId.eq(GuildId::from(guild_id)))
+        .order_by_asc(permit::Column::Position)
         .all(db)
         .await
 }
 
+/// Delete one permit; returns the rows removed.
 pub async fn delete_permit(db: &DatabaseConnection, id: i32) -> Result<u64> {
-    let result = entities::permit::Entity::delete_by_id(id).exec(db).await?;
+    let result = permit::Entity::delete_by_id(id).exec(db).await?;
     Ok(result.rows_affected)
 }
 
 /// A permit assignment joined with its permit's display fields.
 #[derive(Clone, Debug)]
 pub struct AssignmentRow {
+    /// Permit identifier.
     pub permit_id: i32,
+    /// Permit name.
     pub permit_name: String,
+    /// Permit polarity kind.
     pub kind: PermitKind,
+    /// Whether the permit is builtin.
     pub builtin: bool,
+    /// Assignment target type.
     pub target_type: PermitTargetType,
+    /// Target snowflake identifier.
     pub target_id: SnowflakeId,
 }
 
@@ -279,6 +299,7 @@ pub async fn list_assignments(
     Ok(rows)
 }
 
+/// Read one permit belonging to a guild.
 pub async fn get_permit(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -322,6 +343,7 @@ pub async fn assign_permit(
     Ok(())
 }
 
+/// Remove a permit binding from a target.
 pub async fn unassign_permit(
     db: &DatabaseConnection,
     guild_id: u64,
@@ -339,6 +361,7 @@ pub async fn unassign_permit(
     Ok(())
 }
 
+/// Permits of one kind in a guild, in display order.
 pub async fn list_permits_for_kind(
     db: &DatabaseConnection,
     guild_id: u64,

@@ -1,4 +1,4 @@
-//! Components V2 card builders, ported from lumi's `src/lib/ui/Cards.ts`.
+//! Components V2 card builders.
 //! Every reply is a V2 `Container`; there are no embeds.
 
 use serenity::all::{
@@ -15,76 +15,76 @@ use crate::panels::clamp_action_rows;
 /// Discord's hard limit for a single text display.
 pub const TEXT_DISPLAY_LIMIT: usize = 4000;
 
+/// Card style kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CardKind {
     /// `primary` — no accent bar (blank by default).
     #[default]
     Primary,
+    /// Information card.
     Info,
+    /// Success card.
     Success,
+    /// Warning card.
     Warning,
+    /// Error card.
     Error,
+    /// Gold accent card.
     Gold,
+    /// Purple accent card.
     Purple,
 }
 
 impl CardKind {
     /// Accent colour, or `None` for `Primary` (matches `resolveCardColor`).
-    #[must_use]
     pub const fn accent(self) -> Option<Colour> {
         match self {
-            CardKind::Primary => None,
-            CardKind::Info => Some(Colour::new(0x004c_6ef5)),
-            CardKind::Success => Some(Colour::new(0x0012_b886)),
-            CardKind::Warning => Some(Colour::new(0x00f5_9f00)),
-            CardKind::Error => Some(Colour::new(0x00fa_5252)),
-            CardKind::Gold => Some(Colour::new(0x00ff_d43b)),
-            CardKind::Purple => Some(Colour::new(0x0097_75fa)),
+            Self::Primary => None,
+            Self::Info => Some(Colour::new(0x004c_6ef5)),
+            Self::Success => Some(Colour::new(0x0012_b886)),
+            Self::Warning => Some(Colour::new(0x00f5_9f00)),
+            Self::Error => Some(Colour::new(0x00fa_5252)),
+            Self::Gold => Some(Colour::new(0x00ff_d43b)),
+            Self::Purple => Some(Colour::new(0x0097_75fa)),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+/// Optional settings for a card.
+#[derive(Clone, Debug, Default)]
 pub struct CardOptions {
+    /// Card subtitle.
     pub subtitle: Option<String>,
+    /// Breadcrumb hierarchy.
     pub breadcrumbs: Vec<String>,
+    /// Status badge status and optional label.
     pub status_badge: Option<(String, Option<String>)>,
+    /// Card footer text.
     pub footer: Option<String>,
+    /// Thumbnail image URL.
     pub thumbnail_url: Option<String>,
-    pub divider: bool,
+    /// Whether to suppress the title.
     pub hide_title: bool,
+    /// Whether to suppress the accent colour.
     pub no_accent: bool,
+    /// Header image URLs.
     pub header_images: Vec<String>,
+    /// Whether to place a separator above action rows.
     pub separator_above_action_rows: bool,
+    /// Additional card sections.
     pub sections: Vec<CreateSection<'static>>,
+    /// Action row components.
     pub action_rows: Vec<CreateActionRow<'static>>,
+    /// Media gallery component.
     pub media_gallery: Option<CreateMediaGallery<'static>>,
-}
-
-impl Default for CardOptions {
-    fn default() -> Self {
-        Self {
-            subtitle: None,
-            breadcrumbs: Vec::new(),
-            status_badge: None,
-            footer: None,
-            thumbnail_url: None,
-            divider: true,
-            hide_title: false,
-            no_accent: false,
-            header_images: Vec::new(),
-            separator_above_action_rows: false,
-            sections: Vec::new(),
-            action_rows: Vec::new(),
-            media_gallery: None,
-        }
-    }
 }
 
 /// A built card: the V2 components plus whether it should be ephemeral.
 #[derive(Clone, Debug)]
 pub struct CardReply {
+    /// Components belonging to the reply.
     pub components: Vec<CreateComponent<'static>>,
+    /// Whether the reply is ephemeral.
     pub ephemeral: bool,
 }
 
@@ -115,20 +115,28 @@ impl CardReply {
     }
 }
 
+/// Components V2 card builder.
 #[derive(Clone, Debug)]
 pub struct Card {
+    /// Card title text.
     pub title: String,
+    /// Card body lines.
     pub body: Vec<String>,
+    /// Accent colour override.
     pub accent: Option<Colour>,
+    /// Optional card settings.
     pub options: CardOptions,
+    /// Whether the card is ephemeral.
     pub ephemeral: bool,
 }
 
 impl Card {
+    /// Create a new card with title and single-line body.
     pub fn new(title: impl Into<String>, body: impl Into<String>) -> Self {
-        Card::lines(title, vec![body.into()])
+        Self::lines(title, vec![body.into()])
     }
 
+    /// Create a new card with title and multi-line body.
     pub fn lines(title: impl Into<String>, body: Vec<String>) -> Self {
         Self {
             title: title.into(),
@@ -139,48 +147,56 @@ impl Card {
         }
     }
 
+    /// Create an info card.
     pub fn info(title: impl Into<String>, body: impl Into<String>) -> Self {
-        Card::new(title, body).kind(CardKind::Info)
+        Self::new(title, body).kind(CardKind::Info)
     }
 
+    /// Create a success card.
     pub fn success(title: impl Into<String>, body: impl Into<String>) -> Self {
-        Card::new(title, body).kind(CardKind::Success)
+        Self::new(title, body).kind(CardKind::Success)
     }
 
+    /// Create an error card.
     pub fn error(title: impl Into<String>, body: impl Into<String>) -> Self {
-        Card::new(title, body).kind(CardKind::Error)
+        Self::new(title, body).kind(CardKind::Error)
     }
 
+    /// Create a warning card.
     pub fn warning(title: impl Into<String>, body: impl Into<String>) -> Self {
-        Card::new(title, body).kind(CardKind::Warning)
+        Self::new(title, body).kind(CardKind::Warning)
     }
 
+    /// Set the card style kind.
     #[must_use]
     pub const fn kind(mut self, kind: CardKind) -> Self {
         self.accent = kind.accent();
         self
     }
 
+    /// Set an explicit accent colour.
     #[must_use]
     pub const fn accent(mut self, colour: Option<Colour>) -> Self {
         self.accent = colour;
         self
     }
 
+    /// Set optional card settings.
     #[must_use]
     pub fn options(mut self, options: CardOptions) -> Self {
         self.options = options;
         self
     }
 
+    /// Mark the card as ephemeral.
     #[must_use]
     pub const fn ephemeral(mut self) -> Self {
         self.ephemeral = true;
         self
     }
 
-    #[must_use]
-    pub fn into_reply(&self) -> CardReply {
+    /// Build the card into a reply container.
+    pub fn into_reply(self) -> CardReply {
         CardReply {
             components: vec![CreateComponent::Container(self.build_container())],
             ephemeral: self.ephemeral,
@@ -207,57 +223,14 @@ impl Card {
             if let Some(subtitle) = &opts.subtitle {
                 children.push(text(format_subtitle(subtitle, None)));
             }
-            children.push(separator(opts.divider));
+            children.push(separator(true));
         }
 
         for section in &opts.sections {
             children.push(CreateContainerComponent::Section(section.clone()));
         }
 
-        let thumb_url = if opts.sections.is_empty() {
-            opts.thumbnail_url.as_ref()
-        } else {
-            None
-        };
-
-        if let Some(url) = thumb_url {
-            let non_empty: Vec<&String> = self.body.iter().filter(|p| !p.is_empty()).collect();
-            let first = non_empty
-                .first()
-                .map_or_else(|| self.title.clone(), |p| (*p).clone());
-            let section = CreateSection::new(
-                vec![CreateSectionComponent::TextDisplay(CreateTextDisplay::new(
-                    first,
-                ))],
-                CreateSectionAccessory::Thumbnail(CreateThumbnail::new(
-                    CreateUnfurledMediaItem::new(url.clone()),
-                )),
-            );
-            children.push(CreateContainerComponent::Section(section));
-            let rest: Vec<&str> = non_empty.iter().skip(1).map(|s| s.as_str()).collect();
-            if !rest.is_empty() {
-                children.push(separator(true));
-                children.push(text(rest.join("\n")));
-            }
-        } else {
-            let non_empty: Vec<&String> = self.body.iter().filter(|p| !p.is_empty()).collect();
-            let chunk_size = if non_empty.len() > 10 {
-                (non_empty.len() + 9) / 10
-            } else {
-                1
-            };
-            for (i, chunk) in non_empty.chunks(chunk_size).enumerate() {
-                if i > 0 {
-                    children.push(separator(true));
-                }
-                let combined = chunk
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                children.push(text(combined));
-            }
-        }
+        children.extend(body_components(opts, &self.title, &self.body));
 
         let images: Vec<String> = opts
             .header_images
@@ -285,7 +258,6 @@ impl Card {
             children.push(text(format!("-# {footer}")));
         }
 
-        // Central action-row clamp, mirroring TS `buildSafeActionRows`.
         let action_rows = clamp_action_rows(opts.action_rows.clone());
         if opts.separator_above_action_rows && !action_rows.is_empty() {
             children.push(CreateContainerComponent::Separator(CreateSeparator::new()));
@@ -304,6 +276,50 @@ impl Card {
     }
 }
 
+/// Body text, with a thumbnail section when the card has no explicit sections.
+fn body_components(
+    opts: &CardOptions,
+    title: &str,
+    body: &[String],
+) -> Vec<CreateContainerComponent<'static>> {
+    let mut children = Vec::new();
+    let non_empty: Vec<&str> = body.iter().map(String::as_str).filter(|p| !p.is_empty()).collect();
+    let thumb_url = opts
+        .thumbnail_url
+        .as_ref()
+        .filter(|_| opts.sections.is_empty());
+
+    if let Some(url) = thumb_url {
+        let first = non_empty.first().copied().unwrap_or(title);
+        let section = CreateSection::new(
+            vec![CreateSectionComponent::TextDisplay(CreateTextDisplay::new(
+                first.to_string(),
+            ))],
+            CreateSectionAccessory::Thumbnail(CreateThumbnail::new(CreateUnfurledMediaItem::new(
+                url.clone(),
+            ))),
+        );
+        children.push(CreateContainerComponent::Section(section));
+        if non_empty.len() > 1 {
+            children.push(separator(true));
+            children.push(text(non_empty[1..].join("\n")));
+        }
+    } else {
+        let chunk_size = if non_empty.len() > 10 {
+            non_empty.len().div_ceil(10)
+        } else {
+            1
+        };
+        for (i, chunk) in non_empty.chunks(chunk_size).enumerate() {
+            if i > 0 {
+                children.push(separator(true));
+            }
+            children.push(text(chunk.join("\n")));
+        }
+    }
+    children
+}
+
 fn text(content: impl Into<String>) -> CreateContainerComponent<'static> {
     CreateContainerComponent::TextDisplay(CreateTextDisplay::new(content.into()))
 }
@@ -318,19 +334,24 @@ fn separator(divider: bool) -> CreateContainerComponent<'static> {
 
 /// Keep as many lines as fit in `budget`, ending with a `-# ...and N more` note.
 pub fn fit_lines(lines: &[String], budget: usize) -> String {
-    let mut kept: Vec<String> = Vec::new();
-    let mut used = 0usize;
+    let mut kept: Vec<&str> = Vec::new();
+    let mut notice_storage = String::new();
+    let mut used = 0_usize;
 
     for (i, line) in lines.iter().enumerate() {
-        let notice = format!("-# ...and {} more item(s).", lines.len() - i);
+        let remaining = lines.len() - i;
+        let digits = usize::try_from(remaining.checked_ilog10().unwrap_or(0)).unwrap_or(0);
+        let notice_len = 25 + digits + 1;
         let len = line.chars().count();
         let cost = if kept.is_empty() { len } else { len + 1 };
 
-        if used + cost > budget.saturating_sub(notice.chars().count() + 1) {
-            kept.push(notice);
+        if used + cost > budget.saturating_sub(notice_len + 1) {
+            use std::fmt::Write;
+            let _ = write!(notice_storage, "-# ...and {remaining} more item(s).");
+            kept.push(&notice_storage);
             break;
         }
-        kept.push(line.clone());
+        kept.push(line.as_str());
         used += cost;
     }
 
@@ -339,21 +360,28 @@ pub fn fit_lines(lines: &[String], budget: usize) -> String {
 
 /// Truncate to `max` chars, appending `…` when cut. Char-based, so never splits
 /// a multi-byte codepoint.
-#[must_use]
 pub fn cut_text(text: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
     }
-    if text.chars().count() <= max {
-        return text.to_string();
+    let mut indices = text.char_indices();
+    let cut_point = indices.nth(max.saturating_sub(1));
+    match cut_point {
+        None => text.to_string(),
+        Some((byte_idx, _)) => {
+            if indices.next().is_none() {
+                text.to_string()
+            } else {
+                let mut truncated = String::with_capacity(byte_idx + '\u{2026}'.len_utf8());
+                truncated.push_str(&text[..byte_idx]);
+                truncated.push('\u{2026}');
+                truncated
+            }
+        }
     }
-    let mut truncated: String = text.chars().take(max.saturating_sub(1)).collect();
-    truncated.push('\u{2026}');
-    truncated
 }
 
 /// Bulleted list card: max 25 visible items, each truncated to 200 chars.
-#[must_use]
 pub fn make_list_card(title: &str, items: &[String], options: CardOptions) -> CardReply {
     let body = if items.is_empty() {
         vec!["-# *No items to display.*".to_string()]

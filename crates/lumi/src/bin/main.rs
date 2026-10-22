@@ -1,3 +1,13 @@
+//! Lumi main binary entrypoint.
+
+use lumi_db as _;
+use lumi_modules as _;
+use lumi_ui as _;
+use metrics as _;
+use serde_json as _;
+use sysinfo as _;
+use ::serenity as _;
+
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -28,7 +38,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    drop(rustls::crypto::ring::default_provider().install_default());
     init_tracing();
     lumi_api::init_metrics();
 
@@ -78,7 +88,7 @@ async fn main() -> Result<()> {
             shutdown_tx.send_replace(true);
 
             let bg_drain = async {
-                let _ = tokio::join!(api_handle, worker_handle);
+                drop(tokio::join!(api_handle, worker_handle));
             };
             if tokio::time::timeout(lumi::runtime::SHUTDOWN_DRAIN_TIMEOUT, bg_drain)
                 .await
@@ -101,7 +111,7 @@ async fn start_api(services: Data, mut shutdown_rx: watch::Receiver<bool>) -> Re
 
     let (shutdown_tx, shutdown_signal) = tokio::sync::oneshot::channel::<()>();
     let server_fut = lumi_api::serve_with_shutdown(addr, services, async move {
-        let _ = shutdown_signal.await;
+        drop(shutdown_signal.await);
     });
     tokio::pin!(server_fut);
 
@@ -109,8 +119,8 @@ async fn start_api(services: Data, mut shutdown_rx: watch::Receiver<bool>) -> Re
         res = &mut server_fut => {
             res?;
         }
-        _ = async {
-            let _ = shutdown_rx.wait_for(|s| *s).await;
+        () = async {
+            drop(shutdown_rx.wait_for(|s| *s).await);
         } => {
             tracing::info!("HTTP API server received shutdown signal, draining connections");
             let _ = shutdown_tx.send(());
@@ -162,8 +172,8 @@ async fn start_worker(services: Data, mut shutdown_rx: watch::Receiver<bool>) ->
                     }
                 });
             }
-            _ = async {
-                let _ = shutdown_rx.wait_for(|lost| *lost).await;
+            () = async {
+                drop(shutdown_rx.wait_for(|lost| *lost).await);
             } => {
                 tracing::info!("worker received shutdown signal");
                 break;
@@ -174,55 +184,78 @@ async fn start_worker(services: Data, mut shutdown_rx: watch::Receiver<bool>) ->
     Ok(())
 }
 
+type ShardLease = (
+    Arc<lumi_kernel::Cache>,
+    ShardRange,
+    String,
+    lumi_kernel::coordinator::LeaseHeartbeat,
+);
+
+/// Lease this node's shard slice, returning the lease and the range it covers.
+async fn acquire_lease(services: &Data) -> Result<(Option<ShardLease>, Option<ShardRange>)> {
+    if !services.cfg.shard_coordinator || services.cfg.shard_range.is_some() {
+        return Ok((None, None));
+    }
+    let total = services
+        .cfg
+        .shard_count
+        .ok_or_else(|| anyhow!("SHARD_COORDINATOR requires SHARDS (the fleet total)"))?;
+    let node_id =
+        std::env::var("HOSTNAME").unwrap_or_else(|_| format!("node-{}", std::process::id()));
+    let Some(range) = lumi_kernel::coordinator::lease_shard_range(
+        &services.cache,
+        total,
+        services.cfg.max_shards_per_node,
+        &node_id,
+    )
+    .await?
+    else {
+        return Err(anyhow!(
+            "no unleased shard slots available in fleet of {total} shards"
+        ));
+    };
+
+    tracing::info!(
+        node = %node_id,
+        start = range.start,
+        end = range.end,
+        total,
+        "leased shard range from coordinator"
+    );
+    let heartbeat = lumi_kernel::coordinator::spawn_lease_heartbeat(
+        Arc::clone(&services.cache),
+        range,
+        node_id.clone(),
+    );
+    Ok((
+        Some((Arc::clone(&services.cache), range, node_id, heartbeat)),
+        Some(range),
+    ))
+}
+
+async fn release_lease(lease: Option<&ShardLease>, fenced: bool) -> Result<()> {
+    let Some((cache, range, node_id, heartbeat)) = lease else {
+        return Ok(());
+    };
+    heartbeat.abort();
+    if fenced {
+        return Ok(());
+    }
+    lumi_kernel::coordinator::release_shard_range(cache, *range, node_id).await?;
+    tracing::info!(
+        start = range.start,
+        end = range.end,
+        "released shard leases"
+    );
+    Ok(())
+}
+
 async fn start_gateway(
     services: Data,
     mut shutdown_rx: watch::Receiver<bool>,
     shutdown_tx: watch::Sender<bool>,
 ) -> Result<()> {
-    let mut lease: Option<(
-        Arc<lumi_kernel::Cache>,
-        ShardRange,
-        String,
-        lumi_kernel::coordinator::LeaseHeartbeat,
-    )> = None;
-
-    let dynamic_range = if services.cfg.shard_coordinator && services.cfg.shard_range.is_none() {
-        let total = services
-            .cfg
-            .shard_count
-            .ok_or_else(|| anyhow!("SHARD_COORDINATOR requires SHARDS (the fleet total)"))?;
-        let node_id =
-            std::env::var("HOSTNAME").unwrap_or_else(|_| format!("node-{}", std::process::id()));
-        let leased = lumi_kernel::coordinator::lease_shard_range(
-            &services.cache,
-            total,
-            services.cfg.max_shards_per_node,
-            &node_id,
-        )
-        .await?;
-        if let Some(range) = leased {
-            tracing::info!(
-                node = %node_id,
-                start = range.start,
-                end = range.end,
-                total,
-                "leased shard range from coordinator"
-            );
-            let heartbeat = lumi_kernel::coordinator::spawn_lease_heartbeat(
-                Arc::clone(&services.cache),
-                range,
-                node_id.clone(),
-            );
-            lease = Some((Arc::clone(&services.cache), range, node_id, heartbeat));
-            Some(range)
-        } else {
-            return Err(anyhow!(
-                "no unleased shard slots available in fleet of {total} shards"
-            ));
-        }
-    } else {
-        None
-    };
+    let (lease, dynamic_range) = acquire_lease(&services).await?;
 
     let shard_range = services.cfg.shard_range.or(dynamic_range);
     let mut client = lumi::client::build(Arc::clone(&services)).await?;
@@ -237,14 +270,11 @@ async fn start_gateway(
 
     tokio::select! {
         result = &mut run => {
-            if let Some((cache, range, node_id, heartbeat)) = &lease {
-                heartbeat.abort();
-                let _ = lumi_kernel::coordinator::release_shard_range(cache, *range, node_id).await;
-            }
+            drop(release_lease(lease.as_ref(), false).await);
             return result;
         }
-        _ = async {
-            let _ = shutdown_rx.wait_for(|lost| *lost).await;
+        () = async {
+            drop(shutdown_rx.wait_for(|lost| *lost).await);
         } => {
             tracing::info!("shutdown signal received, canceling shard manager");
         }
@@ -279,30 +309,25 @@ async fn start_gateway(
 
     tracing::info!("awaiting clean disconnection of gateway shards");
     let disconnect_drain = async {
-        let _ = (&mut run).await;
+        drop((&mut run).await);
         while !runners.iter().all(|r| r.tx.is_closed()) {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     };
-    match tokio::time::timeout(lumi::runtime::SHUTDOWN_DRAIN_TIMEOUT, disconnect_drain).await {
-        Ok(()) => tracing::info!("gateway shards cleanly disconnected"),
-        Err(_) => tracing::warn!(
+    if tokio::time::timeout(lumi::runtime::SHUTDOWN_DRAIN_TIMEOUT, disconnect_drain)
+        .await
+        .is_ok()
+    {
+        tracing::info!("gateway shards cleanly disconnected");
+    } else {
+        tracing::warn!(
             timeout_secs = lumi::runtime::SHUTDOWN_DRAIN_TIMEOUT.as_secs(),
             "gateway shard disconnect drain deadline exceeded"
-        ),
+        );
     }
 
-    if let Some((cache, range, node_id, heartbeat)) = &lease {
-        heartbeat.abort();
-        if !lease_fenced {
-            if let Err(error) =
-                lumi_kernel::coordinator::release_shard_range(cache, *range, node_id).await
-            {
-                tracing::warn!(%error, "failed to release shard leases");
-            } else {
-                tracing::info!(start = range.start, end = range.end, "released shard leases");
-            }
-        }
+    if let Err(error) = release_lease(lease.as_ref(), lease_fenced).await {
+        tracing::warn!(%error, "failed to release shard leases");
     }
 
     if lease_fenced {
@@ -320,11 +345,19 @@ async fn start_shards(
 ) -> Result<()> {
     match (range, total) {
         (Some(range), Some(total)) => {
-            tracing::info!(start = range.start, end = range.end, total, "starting shard range");
+            tracing::info!(
+                start = range.start,
+                end = range.end,
+                total,
+                "starting shard range"
+            );
             client.start_shard_range(range.start_range(), total).await?;
         }
         (None, Some(total)) => {
-            tracing::info!(total, "starting serenity client across configured shard count");
+            tracing::info!(
+                total,
+                "starting serenity client across configured shard count"
+            );
             client.start_shards(total).await?;
         }
         _ => {

@@ -22,7 +22,7 @@ const MAX_USER_LIMIT: i32 = 99;
 /// Discord's hard limit for channel names.
 const MAX_CHANNEL_NAME: usize = 100;
 
-/// TempVC entry point. `,tempvc` (prefix) shows the panel directly.
+/// `TempVC` entry point. `,tempvc` (prefix) shows the panel directly.
 #[poise::command(
     slash_command,
     prefix_command,
@@ -141,7 +141,7 @@ fn may_manage(
 }
 
 /// Owner or staff may operate a channel's controls.
-fn may_control(owner_id: u64, actor: UserId, is_staff: bool) -> bool {
+const fn may_control(owner_id: u64, actor: UserId, is_staff: bool) -> bool {
     actor.get() == owner_id || is_staff
 }
 
@@ -153,7 +153,7 @@ fn owner_connected(
     channel_id: u64,
     owner_id: u64,
 ) -> bool {
-    ctx.cache.guild(guild_id).map_or(true, |guild| {
+    ctx.cache.guild(guild_id).is_none_or(|guild| {
         guild
             .voice_states
             .get(&UserId::new(owner_id))
@@ -334,6 +334,167 @@ async fn refresh_panel(
     Ok(reply)
 }
 
+/// Claim an abandoned channel for the caller.
+async fn claim_channel(
+    ctx: &serenity::Context,
+    services: &Services,
+    interaction: &ComponentInteraction,
+    guild_id: GuildId,
+    channel_id: u64,
+    owner_id: u64,
+) -> Result<(), Error> {
+    let caller = interaction.user.id;
+    let connected = ctx.cache.guild(guild_id).is_some_and(|guild| {
+        guild
+            .voice_states
+            .get(&caller)
+            .is_some_and(|state| state.channel_id == Some(ChannelId::new(channel_id)))
+    });
+    if !connected {
+        return respond(
+            ctx,
+            interaction,
+            error_card("You must be connected to this voice channel to claim ownership."),
+            true,
+        )
+        .await;
+    }
+    if owner_connected(ctx, guild_id, channel_id, owner_id) {
+        return respond(
+            ctx,
+            interaction,
+            error_card("The current owner is still in the channel, so it cannot be claimed."),
+            true,
+        )
+        .await;
+    }
+    store::set_owner(&services.db, guild_id.get(), channel_id, caller.get()).await?;
+    respond(
+        ctx,
+        interaction,
+        Card::success(
+            "\u{1f451} Ownership Claimed",
+            "You now own this channel and its controls.",
+        )
+        .into_reply(),
+        true,
+    )
+    .await
+}
+
+/// Lock, unlock, hide or unhide a channel for `@everyone`.
+async fn toggle_permissions(
+    ctx: &serenity::Context,
+    services: &Services,
+    interaction: &ComponentInteraction,
+    guild_id: GuildId,
+    channel_id: u64,
+    action: &str,
+) -> Result<(), Error> {
+    let channel = ChannelId::new(channel_id);
+    let everyone = PermissionOverwriteType::Role(guild_id.everyone_role());
+    let locking = action.starts_with("lock");
+    let enabling = matches!(action, "lock" | "hide");
+    let overwrite = PermissionOverwrite {
+        allow: Permissions::empty(),
+        deny: if locking {
+            Permissions::CONNECT
+        } else {
+            Permissions::VIEW_CHANNEL
+        },
+        kind: everyone,
+    };
+    let gating = if enabling {
+        channel
+            .create_permission(&ctx.http, overwrite, Some("TempVC"))
+            .await
+    } else {
+        channel
+            .delete_permission(&ctx.http, everyone, Some("TempVC"))
+            .await
+    };
+    if let Err(error) = gating {
+        tracing::warn!(%error, guild_id = guild_id.get(), channel_id, action, "tempvc permission toggle failed");
+        return respond(
+            ctx,
+            interaction,
+            error_card("I could not update the channel permissions. Check my permissions."),
+            true,
+        )
+        .await;
+    }
+    if enabling {
+        let grant = if locking {
+            Permissions::CONNECT
+        } else {
+            Permissions::VIEW_CHANNEL
+        };
+        for member in channel_members(ctx, guild_id, channel) {
+            if let Err(error) = channel
+                .create_permission(
+                    &ctx.http,
+                    PermissionOverwrite {
+                        allow: grant,
+                        deny: Permissions::empty(),
+                        kind: PermissionOverwriteType::Member(member),
+                    },
+                    Some("TempVC keep access"),
+                )
+                .await
+            {
+                tracing::warn!(%error, channel_id, member = member.get(), "tempvc member overwrite failed");
+            }
+        }
+    }
+    if locking {
+        store::set_locked(&services.db, guild_id.get(), channel_id, enabling).await?;
+    } else {
+        store::set_hidden(&services.db, guild_id.get(), channel_id, enabling).await?;
+    }
+    let card = refresh_panel(ctx, services, guild_id.get(), channel_id).await?;
+    respond(ctx, interaction, card, true).await
+}
+
+/// Delete a temp channel, tolerating one that is already gone.
+async fn delete_channel(
+    ctx: &serenity::Context,
+    services: &Services,
+    interaction: &ComponentInteraction,
+    guild_id: GuildId,
+    channel_id: u64,
+) -> Result<(), Error> {
+    match ctx
+        .http
+        .delete_channel(ChannelId::new(channel_id).into(), Some("TempVC: deleted"))
+        .await
+    {
+        Ok(_) => {}
+        Err(error) if super::channel_missing(&error) => {}
+        Err(error) => {
+            tracing::warn!(%error, channel_id, "tempvc channel delete failed");
+            return respond(
+                ctx,
+                interaction,
+                error_card("I could not delete the channel. Check my permissions."),
+                true,
+            )
+            .await;
+        }
+    }
+    store::delete_record(&services.db, guild_id.get(), channel_id).await?;
+    respond(
+        ctx,
+        interaction,
+        Card::success(
+            "\u{1f5d1}\u{fe0f} Channel Deleted",
+            "Your temporary channel was removed.",
+        )
+        .into_reply(),
+        true,
+    )
+    .await
+}
+
 /// The panel's own actions, keyed by the sequence text picked from its menu.
 async fn panel_action(
     ctx: &serenity::Context,
@@ -355,40 +516,13 @@ async fn panel_action(
 
     let caller = interaction.user.id;
     if action == "claim" {
-        let connected = ctx.cache.guild(guild_id).is_some_and(|guild| {
-            guild
-                .voice_states
-                .get(&caller)
-                .is_some_and(|state| state.channel_id == Some(ChannelId::new(channel_id)))
-        });
-        if !connected {
-            return respond(
-                ctx,
-                interaction,
-                error_card("You must be connected to this voice channel to claim ownership."),
-                true,
-            )
-            .await;
-        }
-        if owner_connected(ctx, guild_id, channel_id, record.owner_id.get()) {
-            return respond(
-                ctx,
-                interaction,
-                error_card("The current owner is still in the channel, so it cannot be claimed."),
-                true,
-            )
-            .await;
-        }
-        store::set_owner(&services.db, guild_id.get(), channel_id, caller.get()).await?;
-        return respond(
+        return claim_channel(
             ctx,
+            services,
             interaction,
-            Card::success(
-                "\u{1f451} Ownership Claimed",
-                "You now own this channel and its controls.",
-            )
-            .into_reply(),
-            true,
+            guild_id,
+            channel_id,
+            record.owner_id.get(),
         )
         .await;
     }
@@ -407,108 +541,16 @@ async fn panel_action(
         .await;
     }
 
-    let channel = ChannelId::new(channel_id);
-    let everyone = PermissionOverwriteType::Role(guild_id.everyone_role());
-
     match action {
         "back" => {
             let card = refresh_panel(ctx, services, guild_id.get(), channel_id).await?;
             respond(ctx, interaction, card, true).await
         }
-        "name" => {
-            let current = ctx
-                .cache
-                .guild(guild_id)
-                .and_then(|guild| guild.channels.get(&channel).cloned())
-                .map_or(String::new(), |c| c.base.name.into_string());
-            show_modal(
-                ctx,
-                interaction,
-                input_modal(
-                    views::rename_modal_id(channel_id),
-                    "Rename Voice Channel",
-                    "New channel name",
-                    &current,
-                    MAX_CHANNEL_NAME,
-                ),
-            )
-            .await
-        }
-        "limit" => {
-            show_modal(
-                ctx,
-                interaction,
-                input_modal(
-                    views::limit_modal_id(channel_id),
-                    "Set User Limit",
-                    "User limit (0-99, 0 = unlimited)",
-                    &channel_limit(ctx, guild_id.get(), channel_id).to_string(),
-                    2,
-                ),
-            )
-            .await
+        "name" | "limit" => {
+            prompt_channel_field(ctx, interaction, guild_id, channel_id, action).await
         }
         "lock" | "unlock" | "hide" | "unhide" => {
-            let locking = action.starts_with("lock");
-            let enabling = matches!(action, "lock" | "hide");
-            let overwrite = PermissionOverwrite {
-                allow: Permissions::empty(),
-                deny: if locking {
-                    Permissions::CONNECT
-                } else {
-                    Permissions::VIEW_CHANNEL
-                },
-                kind: everyone,
-            };
-            let gating = if enabling {
-                channel
-                    .create_permission(&ctx.http, overwrite, Some("TempVC"))
-                    .await
-            } else {
-                channel
-                    .delete_permission(&ctx.http, everyone, Some("TempVC"))
-                    .await
-            };
-            if let Err(error) = gating {
-                tracing::warn!(%error, guild_id = guild_id.get(), channel_id, action, "tempvc permission toggle failed");
-                return respond(
-                    ctx,
-                    interaction,
-                    error_card("I could not update the channel permissions. Check my permissions."),
-                    true,
-                )
-                .await;
-            }
-            if enabling {
-                let grant = if locking {
-                    Permissions::CONNECT
-                } else {
-                    Permissions::VIEW_CHANNEL
-                };
-                for member in channel_members(ctx, guild_id, channel) {
-                    if let Err(error) = channel
-                        .create_permission(
-                            &ctx.http,
-                            PermissionOverwrite {
-                                allow: grant,
-                                deny: Permissions::empty(),
-                                kind: PermissionOverwriteType::Member(member),
-                            },
-                            Some("TempVC keep access"),
-                        )
-                        .await
-                    {
-                        tracing::warn!(%error, channel_id, member = member.get(), "tempvc member overwrite failed");
-                    }
-                }
-            }
-            if locking {
-                store::set_locked(&services.db, guild_id.get(), channel_id, enabling).await?;
-            } else {
-                store::set_hidden(&services.db, guild_id.get(), channel_id, enabling).await?;
-            }
-            let card = refresh_panel(ctx, services, guild_id.get(), channel_id).await?;
-            respond(ctx, interaction, card, true).await
+            toggle_permissions(ctx, services, interaction, guild_id, channel_id, action).await
         }
         "kick" | "trust" | "untrust" | "block" | "unblock" | "transfer" => {
             respond(
@@ -528,38 +570,7 @@ async fn panel_action(
             )
             .await
         }
-        "delok" => {
-            match ctx
-                .http
-                .delete_channel(channel.into(), Some("TempVC: deleted"))
-                .await
-            {
-                Ok(_) => {}
-                Err(error) if super::channel_missing(&error) => {}
-                Err(error) => {
-                    tracing::warn!(%error, channel_id, "tempvc channel delete failed");
-                    return respond(
-                        ctx,
-                        interaction,
-                        error_card("I could not delete the channel. Check my permissions."),
-                        true,
-                    )
-                    .await;
-                }
-            }
-            store::delete_record(&services.db, guild_id.get(), channel_id).await?;
-            respond(
-                ctx,
-                interaction,
-                Card::success(
-                    "\u{1f5d1}\u{fe0f} Channel Deleted",
-                    "Your temporary channel was removed.",
-                )
-                .into_reply(),
-                true,
-            )
-            .await
-        }
+        "delok" => delete_channel(ctx, services, interaction, guild_id, channel_id).await,
         other => {
             tracing::debug!(action = other, "unhandled tempvc panel action");
             Ok(())
@@ -567,7 +578,45 @@ async fn panel_action(
     }
 }
 
-fn back_button(channel_id: u64) -> serenity::all::CreateButton<'static> {
+/// Ask for a new name or user limit via a modal.
+async fn prompt_channel_field(
+    ctx: &serenity::Context,
+    interaction: &ComponentInteraction,
+    guild_id: GuildId,
+    channel_id: u64,
+    action: &str,
+) -> Result<(), Error> {
+    let (custom_id, title, label, value, max) = if action == "name" {
+        let current = ctx
+            .cache
+            .guild(guild_id)
+            .and_then(|guild| guild.channels.get(&ChannelId::new(channel_id)).cloned())
+            .map_or(String::new(), |c| c.base.name.into_string());
+        (
+            views::rename_modal_id(channel_id),
+            "Rename Voice Channel",
+            "New channel name",
+            current,
+            MAX_CHANNEL_NAME,
+        )
+    } else {
+        (
+            views::limit_modal_id(channel_id),
+            "Set User Limit",
+            "User limit (0-99, 0 = unlimited)",
+            channel_limit(ctx, guild_id.get(), channel_id).to_string(),
+            2,
+        )
+    };
+    show_modal(
+        ctx,
+        interaction,
+        input_modal(custom_id, title, label, &value, max),
+    )
+    .await
+}
+
+fn back_button(channel_id: u64) -> CreateButton<'static> {
     CreateButton::new(views::back_id(channel_id))
         .label("\u{2190} Back to Panel")
         .style(ButtonStyle::Secondary)
@@ -683,6 +732,7 @@ async fn handle_admin(
     }
 }
 
+/// Handle a `tempvc:` component interaction.
 pub async fn handle_component(
     ctx: &serenity::Context,
     services: &Services,
@@ -796,7 +846,7 @@ async fn handle_pick(
         .await;
     }
     if action == "kick" {
-        let mut kicked = 0usize;
+        let mut kicked = 0_usize;
         for user in &users {
             if guild_id.disconnect_member(&ctx.http, *user).await.is_ok() {
                 kicked += 1;
@@ -835,7 +885,7 @@ async fn apply_access(
         Permissions::empty()
     };
     let removing = matches!(action, "untrust" | "unblock");
-    let mut done = 0usize;
+    let mut done = 0_usize;
 
     for kind in users
         .iter()
@@ -873,6 +923,7 @@ async fn apply_access(
     respond(ctx, interaction, card, true).await
 }
 
+/// Handle a `tempvc:` modal submission.
 pub async fn handle_modal(
     ctx: &serenity::Context,
     services: &Services,
@@ -889,103 +940,137 @@ pub async fn handle_modal(
 
     match parts.as_slice() {
         ["tempvc", "namem", _] => {
-            if !may_edit_panel(ctx, services, guild_id, channel_id, modal.user.id).await? {
-                return respond_modal(
-                    ctx,
-                    modal,
-                    error_card("Only the channel owner or staff can use these controls."),
-                )
-                .await;
-            }
-            let name = truncate_chars(value.trim(), MAX_CHANNEL_NAME);
-            if name.is_empty() {
-                return respond_modal(ctx, modal, error_card("Give the channel a name.")).await;
-            }
-            ChannelId::new(channel_id)
-                .edit(&ctx.http, EditChannel::new().name(name.clone()))
-                .await?;
-            respond_modal(
-                ctx,
-                modal,
-                with_back(
-                    Card::success("Channel Renamed", format!("Now named **{name}**.")),
-                    channel_id,
-                ),
-            )
-            .await
+            rename_channel_modal(ctx, services, modal, guild_id, channel_id, &value).await
         }
         ["tempvc", "limitm", _] => {
-            if !may_edit_panel(ctx, services, guild_id, channel_id, modal.user.id).await? {
-                return respond_modal(
-                    ctx,
-                    modal,
-                    error_card("Only the channel owner or staff can use these controls."),
-                )
-                .await;
-            }
-            let Ok(limit) = value.parse::<i32>() else {
-                return respond_modal(ctx, modal, error_card("Enter 0-99 (0 = unlimited).")).await;
-            };
-            let limit = limit.clamp(0, MAX_USER_LIMIT);
-            if let Some(limit) = u16::try_from(limit)
-                .ok()
-                .and_then(|limited| serenity::nonmax::NonMaxU16::try_from(limited).ok())
-            {
-                ChannelId::new(channel_id)
-                    .edit(&ctx.http, EditChannel::new().user_limit(limit))
-                    .await?;
-            }
-            respond_modal(
-                ctx,
-                modal,
-                with_back(
-                    Card::success(
-                        "User Limit Updated",
-                        if limit == 0 {
-                            "The channel is unlimited again.".to_string()
-                        } else {
-                            format!("Limited to **{limit}** members.")
-                        },
-                    ),
-                    channel_id,
-                ),
-            )
-            .await
+            limit_channel_modal(ctx, services, modal, guild_id, channel_id, &value).await
         }
         ["tempvc", "admin", "namem", _] => {
-            if !may_manage(ctx, services, guild_id, modal.user.id) {
-                return respond_modal(ctx, modal, error_card("Only staff can manage generators."))
-                    .await;
-            }
-            let name = truncate_chars(value.trim(), MAX_CHANNEL_NAME);
-            if name.is_empty() {
-                return respond_modal(ctx, modal, error_card("Give the template some text.")).await;
-            }
-            store::update_generator(
-                &services.db,
-                guild_id.get(),
-                channel_id,
-                Some(name.clone()),
-                None,
-            )
-            .await?;
-            respond_generator(ctx, services, modal, guild_id.get(), channel_id).await
+            admin_name_modal(ctx, services, modal, guild_id, channel_id, &value).await
         }
         ["tempvc", "admin", "limitm", _] => {
-            if !may_manage(ctx, services, guild_id, modal.user.id) {
-                return respond_modal(ctx, modal, error_card("Only staff can manage generators."))
-                    .await;
-            }
-            let Ok(limit) = value.parse::<i32>() else {
-                return respond_modal(ctx, modal, error_card("Enter 0-99 (0 = unlimited).")).await;
-            };
-            let limit = limit.clamp(0, MAX_USER_LIMIT);
-            store::update_generator(&services.db, guild_id.get(), channel_id, None, Some(limit))
-                .await?;
-            respond_generator(ctx, services, modal, guild_id.get(), channel_id).await
+            admin_limit_modal(ctx, services, modal, guild_id, channel_id, &value).await
         }
         _ => Ok(()),
     }
+}
+
+async fn rename_channel_modal(
+    ctx: &serenity::Context,
+    services: &Services,
+    modal: &ModalInteraction,
+    guild_id: GuildId,
+    channel_id: u64,
+    value: &str,
+) -> Result<(), Error> {
+    if !may_edit_panel(ctx, services, guild_id, channel_id, modal.user.id).await? {
+        return respond_modal(
+            ctx,
+            modal,
+            error_card("Only the channel owner or staff can use these controls."),
+        )
+        .await;
+    }
+    let name = truncate_chars(value.trim(), MAX_CHANNEL_NAME);
+    if name.is_empty() {
+        return respond_modal(ctx, modal, error_card("Give the channel a name.")).await;
+    }
+    ChannelId::new(channel_id)
+        .edit(&ctx.http, EditChannel::new().name(name.clone()))
+        .await?;
+    respond_modal(
+        ctx,
+        modal,
+        with_back(
+            Card::success("Channel Renamed", format!("Now named **{name}**.")),
+            channel_id,
+        ),
+    )
+    .await
+}
+
+async fn limit_channel_modal(
+    ctx: &serenity::Context,
+    services: &Services,
+    modal: &ModalInteraction,
+    guild_id: GuildId,
+    channel_id: u64,
+    value: &str,
+) -> Result<(), Error> {
+    if !may_edit_panel(ctx, services, guild_id, channel_id, modal.user.id).await? {
+        return respond_modal(
+            ctx,
+            modal,
+            error_card("Only the channel owner or staff can use these controls."),
+        )
+        .await;
+    }
+    let Ok(limit) = value.parse::<i32>() else {
+        return respond_modal(ctx, modal, error_card("Enter 0-99 (0 = unlimited).")).await;
+    };
+    let limit = limit.clamp(0, MAX_USER_LIMIT);
+    if let Some(limit) = u16::try_from(limit)
+        .ok()
+        .and_then(|v| serenity::nonmax::NonMaxU16::try_from(v).ok())
+    {
+        ChannelId::new(channel_id)
+            .edit(&ctx.http, EditChannel::new().user_limit(limit))
+            .await?;
+    }
+    respond_modal(
+        ctx,
+        modal,
+        with_back(
+            Card::success(
+                "User Limit Updated",
+                if limit == 0 {
+                    "The channel is unlimited again.".to_string()
+                } else {
+                    format!("Limited to **{limit}** members.")
+                },
+            ),
+            channel_id,
+        ),
+    )
+    .await
+}
+
+async fn admin_name_modal(
+    ctx: &serenity::Context,
+    services: &Services,
+    modal: &ModalInteraction,
+    guild_id: GuildId,
+    channel_id: u64,
+    value: &str,
+) -> Result<(), Error> {
+    if !may_manage(ctx, services, guild_id, modal.user.id) {
+        return respond_modal(ctx, modal, error_card("Only staff can manage generators.")).await;
+    }
+    let name = truncate_chars(value.trim(), MAX_CHANNEL_NAME);
+    if name.is_empty() {
+        return respond_modal(ctx, modal, error_card("Give the template some text.")).await;
+    }
+    store::update_generator(&services.db, guild_id.get(), channel_id, Some(name), None).await?;
+    respond_generator(ctx, services, modal, guild_id.get(), channel_id).await
+}
+
+async fn admin_limit_modal(
+    ctx: &serenity::Context,
+    services: &Services,
+    modal: &ModalInteraction,
+    guild_id: GuildId,
+    channel_id: u64,
+    value: &str,
+) -> Result<(), Error> {
+    if !may_manage(ctx, services, guild_id, modal.user.id) {
+        return respond_modal(ctx, modal, error_card("Only staff can manage generators.")).await;
+    }
+    let Ok(limit) = value.parse::<i32>() else {
+        return respond_modal(ctx, modal, error_card("Enter 0-99 (0 = unlimited).")).await;
+    };
+    let limit = limit.clamp(0, MAX_USER_LIMIT);
+    store::update_generator(&services.db, guild_id.get(), channel_id, None, Some(limit)).await?;
+    respond_generator(ctx, services, modal, guild_id.get(), channel_id).await
 }
 
 async fn respond_generator(
@@ -1001,11 +1086,12 @@ async fn respond_generator(
         .find(|g| g.channel_id == channel_id)
         .map_or_else(
             || error_card("That generator no longer exists."),
-            |generator| views::generator_card(generator),
+            views::generator_card,
         );
     respond_modal(ctx, modal, reply).await
 }
 
+#[must_use]
 pub fn commands() -> Vec<Command> {
     vec![tempvc()]
 }
@@ -1033,7 +1119,7 @@ mod tests {
         let admin = &cmd.subcommands[1];
         assert_eq!(
             admin.default_member_permissions,
-            serenity::Permissions::MANAGE_CHANNELS
+            Permissions::MANAGE_CHANNELS
         );
     }
 

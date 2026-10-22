@@ -1,9 +1,11 @@
+use std::fmt::Write;
+
 use poise::serenity_prelude as serenity;
 use serenity::all::{
-    ButtonStyle, ChannelType, ComponentInteraction, CreateButton, CreateInteractionResponse,
-    CreateInteractionResponseMessage, CreateMediaGallery, CreateMediaGalleryItem,
-    CreateUnfurledMediaItem, EditMember, GetMessages, Message, MessageFlags, MessageId,
-    Permissions, User, UserId,
+    ButtonStyle, ChannelType, Colour, ComponentInteraction, CreateButton,
+    CreateInteractionResponse, CreateInteractionResponseMessage, CreateMediaGallery,
+    CreateMediaGalleryItem, CreateUnfurledMediaItem, EditMember, GetMessages, Message,
+    MessageFlags, MessageId, Permissions, RoleId, User, UserId,
 };
 
 use lumi_kernel::bot::{Command, Context, Error};
@@ -24,30 +26,30 @@ pub enum MediaType {
 impl MediaType {
     const fn label(self) -> &'static str {
         match self {
-            MediaType::Avatar => "Avatar",
-            MediaType::Banner => "Banner",
+            Self::Avatar => "Avatar",
+            Self::Banner => "Banner",
         }
     }
 
     const fn key(self) -> &'static str {
         match self {
-            MediaType::Avatar => "avatar",
-            MediaType::Banner => "banner",
+            Self::Avatar => "avatar",
+            Self::Banner => "banner",
         }
     }
 
     fn parse(s: &str) -> Option<Self> {
         match s {
-            "avatar" => Some(MediaType::Avatar),
-            "banner" => Some(MediaType::Banner),
+            "avatar" => Some(Self::Avatar),
+            "banner" => Some(Self::Banner),
             _ => None,
         }
     }
 
     fn url(self, user: &User) -> Option<String> {
         match self {
-            MediaType::Avatar => user.avatar_url(),
-            MediaType::Banner => user.banner_url(),
+            Self::Avatar => user.avatar_url(),
+            Self::Banner => user.banner_url(),
         }
     }
 }
@@ -61,20 +63,22 @@ fn gallery(url: String) -> CreateMediaGallery<'static> {
 fn build_media_card(user: &User, kind: MediaType, show_media: bool, ephemeral: bool) -> Card {
     let url = kind.url(user);
     let mut buttons = Vec::new();
-    let mut opts = CardOptions::default();
-    opts.thumbnail_url = url.clone();
+    let mut opts = CardOptions {
+        thumbnail_url: url.clone(),
+        ..CardOptions::default()
+    };
 
-    if let Some(u) = &url {
-        if show_media {
-            opts.media_gallery = Some(gallery(u.clone()));
-            buttons.push(CreateButton::new_link(u.clone()).label(format!("Open {}", kind.label())));
-        } else {
-            buttons.push(
-                CreateButton::new(format!("media:view:{}:{}", kind.key(), user.id))
-                    .style(ButtonStyle::Primary)
-                    .label(format!("View {}", kind.label())),
-            );
-        }
+    if let Some(u) = &url
+        && show_media
+    {
+        opts.media_gallery = Some(gallery(u.clone()));
+        buttons.push(CreateButton::new_link(u.clone()).label(format!("Open {}", kind.label())));
+    } else if url.is_some() {
+        buttons.push(
+            CreateButton::new(format!("media:view:{}:{}", kind.key(), user.id))
+                .style(ButtonStyle::Primary)
+                .label(format!("View {}", kind.label())),
+        );
     }
     if !buttons.is_empty() {
         opts.action_rows = vec![action_row_of(buttons)];
@@ -185,6 +189,97 @@ pub async fn handle_component(
     Ok(())
 }
 
+struct MemberInfo {
+    joined_at: Option<serenity::Timestamp>,
+    nick: Option<String>,
+    premium_since: Option<serenity::Timestamp>,
+    role_ids: Vec<RoleId>,
+    key_perms: String,
+    accent_color: Option<Colour>,
+}
+
+fn key_permissions(permissions: Permissions) -> String {
+    if permissions.contains(Permissions::ADMINISTRATOR) {
+        return "Administrator".to_string();
+    }
+    let mut list = Vec::new();
+    for (permission, label) in [
+        (Permissions::MANAGE_GUILD, "Manage Server"),
+        (Permissions::MANAGE_ROLES, "Manage Roles"),
+        (Permissions::MANAGE_CHANNELS, "Manage Channels"),
+        (Permissions::BAN_MEMBERS, "Ban Members"),
+        (Permissions::KICK_MEMBERS, "Kick Members"),
+        (Permissions::MANAGE_MESSAGES, "Manage Messages"),
+        (Permissions::MENTION_EVERYONE, "Mention Everyone"),
+    ] {
+        if permissions.contains(permission) {
+            list.push(label);
+        }
+    }
+    if list.is_empty() {
+        "None".to_string()
+    } else {
+        list.join(", ")
+    }
+}
+
+fn member_info(guild: &serenity::Guild, target_id: UserId) -> MemberInfo {
+    let Some(member) = guild.members.get(&target_id) else {
+        return MemberInfo {
+            joined_at: None,
+            nick: None,
+            premium_since: None,
+            role_ids: Vec::new(),
+            key_perms: "None".to_string(),
+            accent_color: None,
+        };
+    };
+    let mut sorted_roles: Vec<_> = member
+        .roles
+        .iter()
+        .filter(|r| r.get() != guild.id.get())
+        .filter_map(|r| {
+            guild
+                .roles
+                .get(r)
+                .map(|role| (role.position, role.id, role.colour))
+        })
+        .collect();
+    sorted_roles.sort_by_key(|r| std::cmp::Reverse(r.0));
+    let accent_color = sorted_roles.iter().find(|r| r.2.0 != 0).map(|r| r.2);
+    MemberInfo {
+        joined_at: member.joined_at,
+        nick: member.nick.as_deref().map(ToString::to_string),
+        premium_since: member.premium_since,
+        role_ids: sorted_roles.into_iter().map(|r| r.1).collect(),
+        key_perms: key_permissions(guild.member_permissions(member)),
+        accent_color,
+    }
+}
+
+fn roles_summary(role_ids: &[RoleId]) -> Option<String> {
+    if role_ids.is_empty() {
+        return None;
+    }
+    let mut roles_str = String::new();
+    let mut shown = 0;
+    for id in role_ids {
+        let mention = format!("<@&{id}>");
+        if roles_str.len() + mention.len() > 600 {
+            break;
+        }
+        if !roles_str.is_empty() {
+            roles_str.push(' ');
+        }
+        roles_str.push_str(&mention);
+        shown += 1;
+    }
+    if shown < role_ids.len() {
+        let _ = write!(roles_str, " ...+{} more", role_ids.len() - shown);
+    }
+    Some(format!("**Roles** ({}): {roles_str}", role_ids.len()))
+}
+
 /// Fetch and inspect user profile and membership information.
 #[poise::command(slash_command, prefix_command, guild_only)]
 pub async fn whois(
@@ -194,147 +289,61 @@ pub async fn whois(
     ctx.defer().await?;
     let target_id = user.unwrap_or_else(|| ctx.author().id);
     let target_user = target_id.to_user(ctx.http()).await?;
-
-    let (joined_at, nick, premium_since, role_ids, key_perms_str, accent_color) = {
+    let info = {
         let guild = ctx.guild().ok_or_else(|| anyhow::anyhow!("guild only"))?;
-        let member_opt = guild.members.get(&target_id);
-
-        if let Some(member) = member_opt {
-            let joined_at = member.joined_at;
-            let nick = member.nick.clone();
-            let premium_since = member.premium_since;
-
-            let mut sorted_roles: Vec<_> = member
-                .roles
-                .iter()
-                .filter(|r| r.get() != guild.id.get())
-                .filter_map(|r| {
-                    guild
-                        .roles
-                        .get(r)
-                        .map(|role| (role.position, role.id, role.colour))
-                })
-                .collect();
-            sorted_roles.sort_by_key(|r| std::cmp::Reverse(r.0));
-
-            let accent_color = sorted_roles.iter().find(|r| r.2.0 != 0).map(|r| r.2);
-            let role_ids: Vec<_> = sorted_roles.into_iter().map(|r| r.1).collect();
-
-            let permissions = guild.member_permissions(member);
-            let key_perms_str = if permissions.contains(Permissions::ADMINISTRATOR) {
-                "Administrator".to_string()
-            } else {
-                let mut list = Vec::new();
-                if permissions.contains(Permissions::MANAGE_GUILD) {
-                    list.push("Manage Server");
-                }
-                if permissions.contains(Permissions::MANAGE_ROLES) {
-                    list.push("Manage Roles");
-                }
-                if permissions.contains(Permissions::MANAGE_CHANNELS) {
-                    list.push("Manage Channels");
-                }
-                if permissions.contains(Permissions::BAN_MEMBERS) {
-                    list.push("Ban Members");
-                }
-                if permissions.contains(Permissions::KICK_MEMBERS) {
-                    list.push("Kick Members");
-                }
-                if permissions.contains(Permissions::MANAGE_MESSAGES) {
-                    list.push("Manage Messages");
-                }
-                if permissions.contains(Permissions::MENTION_EVERYONE) {
-                    list.push("Mention Everyone");
-                }
-                if list.is_empty() {
-                    "None".to_string()
-                } else {
-                    list.join(", ")
-                }
-            };
-            (
-                joined_at,
-                nick,
-                premium_since,
-                role_ids,
-                key_perms_str,
-                accent_color,
-            )
-        } else {
-            (None, None, None, Vec::new(), "None".to_string(), None)
-        }
+        member_info(&guild, target_id)
     };
 
-    let mut lines = Vec::new();
-    lines.push(format!("**Account**: <@{target_id}> (`{target_id}`)"));
-    lines.push(format!(
-        "**Created**: <t:{}:F> (<t:{}:R>)",
-        target_id.created_at().timestamp(),
-        target_id.created_at().timestamp()
-    ));
-
-    if let Some(joined) = joined_at {
+    let mut lines = vec![
+        format!("**Account**: <@{target_id}> (`{target_id}`)"),
+        format!(
+            "**Created**: <t:{}:F> (<t:{}:R>)",
+            target_id.created_at().timestamp(),
+            target_id.created_at().timestamp()
+        ),
+    ];
+    if let Some(joined) = info.joined_at {
         lines.push(format!(
             "**Joined Server**: <t:{}:F> (<t:{}:R>)",
             joined.timestamp(),
             joined.timestamp()
         ));
     }
-    if let Some(ref n) = nick {
+    if let Some(n) = &info.nick {
         lines.push(format!("**Nickname**: `{n}`"));
     }
-    if let Some(ps) = premium_since {
+    if let Some(ps) = info.premium_since {
         lines.push(format!(
             "💎 **Server Booster** since: <t:{}:R>",
             ps.timestamp()
         ));
     }
-
-    if !role_ids.is_empty() {
-        let role_mentions: Vec<String> = role_ids.iter().map(|id| format!("<@&{id}>")).collect();
-        let mut roles_str = String::new();
-        let mut shown = 0;
-        for r in &role_mentions {
-            if roles_str.len() + r.len() > 600 {
-                break;
-            }
-            if !roles_str.is_empty() {
-                roles_str.push(' ');
-            }
-            roles_str.push_str(r);
-            shown += 1;
-        }
-        if shown < role_ids.len() {
-            roles_str.push_str(&format!(" ...+{} more", role_ids.len() - shown));
-        }
-        lines.push(format!("**Roles** ({}): {roles_str}", role_ids.len()));
+    if let Some(roles) = roles_summary(&info.role_ids) {
+        lines.push(roles);
     }
+    lines.push(format!("**Key Permissions**: {}", info.key_perms));
 
-    lines.push(format!("**Key Permissions**: {key_perms_str}"));
-
-    let mut buttons = vec![
+    let avatar_url = target_user.face();
+    let buttons = vec![
         CreateButton::new_link(format!("discord://-/users/{target_id}"))
             .label("Profile")
             .emoji('👤'),
-    ];
-
-    let avatar_url = target_user.face();
-    buttons.push(
         CreateButton::new_link(avatar_url.clone())
             .label("Avatar")
             .emoji('🖼'),
-    );
-
-    let mut opts = CardOptions::default();
-    opts.thumbnail_url = Some(avatar_url);
-    opts.action_rows = vec![action_row_of(buttons)];
+    ];
+    let opts = CardOptions {
+        thumbnail_url: Some(avatar_url),
+        action_rows: vec![action_row_of(buttons)],
+        ..CardOptions::default()
+    };
 
     let bot_tag = if target_user.bot() { " [BOT]" } else { "" };
     let title = format!("👤 User Information — {}{bot_tag}", target_user.name);
 
     let mut card = Card::lines(title, lines).kind(CardKind::Info).options(opts);
 
-    if let Some(color) = accent_color {
+    if let Some(color) = info.accent_color {
         card = card.accent(Some(color));
     }
 
@@ -389,14 +398,22 @@ pub async fn serverinfo(ctx: Context<'_>) -> Result<(), Error> {
     };
 
     let mut buttons = Vec::new();
-    let mut opts = CardOptions::default();
-    if let Some(icon) = icon {
-        opts.thumbnail_url = Some(icon.clone());
-        buttons.push(CreateButton::new_link(icon).label("Server Icon").emoji('🖼'));
-    }
-    if !buttons.is_empty() {
-        opts.action_rows = vec![action_row_of(buttons)];
-    }
+    let thumbnail_url = icon.inspect(|icon| {
+        buttons.push(
+            CreateButton::new_link(icon.clone())
+                .label("Server Icon")
+                .emoji('🖼'),
+        );
+    });
+    let opts = CardOptions {
+        thumbnail_url,
+        action_rows: if buttons.is_empty() {
+            Vec::new()
+        } else {
+            vec![action_row_of(buttons)]
+        },
+        ..CardOptions::default()
+    };
 
     let card = Card::lines(title, lines)
         .kind(CardKind::Primary)
@@ -427,10 +444,7 @@ pub async fn nick(
         .filter(|s| !s.is_empty())
         .map(|s| truncate_chars(s, 32));
 
-    let builder = match &new_nick {
-        Some(n) => EditMember::new().nickname(n.as_str()),
-        None => EditMember::new().nickname(""),
-    };
+    let builder = EditMember::new().nickname(new_nick.as_deref().unwrap_or(""));
     guild_id.edit_member(ctx.http(), member, builder).await?;
 
     let card = match new_nick {
@@ -501,14 +515,19 @@ fn parse_duration_secs(input: &str) -> Option<i64> {
     if num <= 0 {
         return None;
     }
-    let unit = input[idx..].to_lowercase();
-    match unit.as_str() {
-        "s" | "sec" => Some(num),
-        "m" | "min" => num.checked_mul(60),
-        "h" | "hr" => num.checked_mul(3_600),
-        "d" | "day" => num.checked_mul(86_400),
-        "w" | "week" => num.checked_mul(604_800),
-        _ => None,
+    let unit = &input[idx..];
+    if unit.eq_ignore_ascii_case("s") || unit.eq_ignore_ascii_case("sec") {
+        Some(num)
+    } else if unit.eq_ignore_ascii_case("m") || unit.eq_ignore_ascii_case("min") {
+        num.checked_mul(60)
+    } else if unit.eq_ignore_ascii_case("h") || unit.eq_ignore_ascii_case("hr") {
+        num.checked_mul(3_600)
+    } else if unit.eq_ignore_ascii_case("d") || unit.eq_ignore_ascii_case("day") {
+        num.checked_mul(86_400)
+    } else if unit.eq_ignore_ascii_case("w") || unit.eq_ignore_ascii_case("week") {
+        num.checked_mul(604_800)
+    } else {
+        None
     }
 }
 
@@ -621,6 +640,7 @@ async fn autocomplete_duration<'a>(
     const PRESETS: &[&str] = &[
         "5m", "10m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "7d", "14d",
     ];
+    tokio::task::yield_now().await;
     let choices: Vec<serenity::AutocompleteChoice> = PRESETS
         .iter()
         .filter(|p| p.starts_with(partial))
@@ -630,6 +650,34 @@ async fn autocomplete_duration<'a>(
     serenity::CreateAutocompleteResponse::new().set_choices(choices)
 }
 
+#[must_use]
 pub fn commands() -> Vec<Command> {
     vec![avatar(), whois(), serverinfo(), banner(), nick(), purge()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_duration_secs() {
+        assert_eq!(parse_duration_secs("30s"), Some(30));
+        assert_eq!(parse_duration_secs("10m"), Some(600));
+        assert_eq!(parse_duration_secs("2h"), Some(7200));
+        assert_eq!(parse_duration_secs("1d"), Some(86400));
+        assert_eq!(parse_duration_secs("1w"), Some(604_800));
+        assert_eq!(parse_duration_secs("0m"), None);
+        assert_eq!(parse_duration_secs("invalid"), None);
+    }
+
+    #[test]
+    fn test_media_type() {
+        assert_eq!(MediaType::parse("avatar"), Some(MediaType::Avatar));
+        assert_eq!(MediaType::parse("banner"), Some(MediaType::Banner));
+        assert_eq!(MediaType::parse("other"), None);
+        assert_eq!(MediaType::Avatar.label(), "Avatar");
+        assert_eq!(MediaType::Banner.label(), "Banner");
+        assert_eq!(MediaType::Avatar.key(), "avatar");
+        assert_eq!(MediaType::Banner.key(), "banner");
+    }
 }

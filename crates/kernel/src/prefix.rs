@@ -13,12 +13,14 @@ use crate::{Cache, Result};
 /// Prefix entries expire well after a dashboard edit; writes invalidate them.
 const PREFIX_TTL: Duration = Duration::from_secs(600);
 
+/// Redis key prefix for cached guild command prefixes.
 pub const PREFIX_NAMESPACE: &str = "lumi:guild:prefix:";
 
 fn key(guild_id: u64) -> String {
     format!("{PREFIX_NAMESPACE}{guild_id}")
 }
 
+/// Resolve a guild's command prefix, adding the global default on miss.
 pub async fn get(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> Result<String> {
     let key = key(guild_id);
     // Concurrent cold misses share one database read (and one global fallback).
@@ -39,6 +41,7 @@ pub async fn get(cache: &Cache, db: &DatabaseConnection, guild_id: u64) -> Resul
     }
 }
 
+/// Drop a cached prefix after the guild's prefix was edited.
 pub async fn invalidate(cache: &Cache, guild_id: u64) -> Result<()> {
     if let Err(err) = cache.invalidate(&key(guild_id)).await {
         tracing::warn!(error = %err, guild_id, "prefix cache invalidation failed");
