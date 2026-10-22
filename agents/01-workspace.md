@@ -43,5 +43,5 @@ db helpers if needed). Cyclic deps will fail to compile — keep the direction.
 
 ## Version
 
-All crates inherit `version.workspace = true` (currently `0.1.0`). Never set a
+All crates inherit `version.workspace = true` (currently `0.2.0`). Never set a
 per-crate version; bump the workspace version only.

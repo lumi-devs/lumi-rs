@@ -63,7 +63,7 @@
       packages = forEachSystem (pkgs: {
         default = pkgs.rustPlatform.buildRustPackage {
           pname = "lumi";
-          version = "0.1.0";
+          version = "0.2.0";
           src = ./.;
           useFetchCargoVendor = true;
           cargoHash = "";

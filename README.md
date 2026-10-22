@@ -25,8 +25,8 @@ See `agents/` for the full architecture notes.
 nix develop                                    # toolchain + services
 docker compose -f docker/docker-compose.yml up -d   # postgres, pgbouncer, redis
 cp .env.example .env                           # fill in BOT_TOKEN
-cargo run -p lumi -- migrate                   # or: cargo run -p xtask -- migrate
-cargo run -p lumi
+cargo run -p xtask -- migrate                  # run database schema migrations
+cargo run -p lumi                              # or: cargo run -p lumi -- all
 ```
 
 ## Configuration
